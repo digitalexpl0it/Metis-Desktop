@@ -5,6 +5,20 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-08-08]
+
+### Added
+
+- **Phase 18 D — Soft X11 isolation** — Settings → Gaming toggle for
+  `xwayland_mode` (shared / isolated); gaming-class launches use a lazy-spawned
+  second XWayland independent of GPU/battery; `xwayland_policy` patterns in
+  `config.json`.
+
+### Security
+
+- **Phase 18 D** — policy-driven two-bucket XWayland soft isolation (not a
+  sandbox). SECURITY residual #4 updated accordingly.
+
 ## [2026-08-07]
 
 ### Added

@@ -28,9 +28,15 @@ Details: [User Guide — Session IPC trust model](docs/USER_GUIDE.md#session-ipc
 
 - Native Wayland clients are not keylogged or buffer-scraped by X11 clients.
 - Default: one shared XWayland (`config.json` → `"xwayland_mode": "shared"`). Classic X11↔X11 risks remain among X11 apps.
-- Opt-in: `"xwayland_mode": "isolated"` — second gaming/Proton XWayland bucket (experimental).
+- Opt-in: `"xwayland_mode": "isolated"` (Settings → Gaming) — **soft** two-bucket
+  policy (Phase 18 D): Metis-spawned gaming-class launches get a separate
+  `DISPLAY` (lazy-spawned). Routing is independent of GPU/battery offload.
+  Residual risk: X11↔X11 **inside** each bucket; same-UID processes can still
+  open either X socket; clipboard may bridge via the Wayland seat. Flatpak X11
+  is not a separate enforceable domain.
 - Abstract X11 socket default-off (`"xwayland_abstract_socket": false`).
-- Metis does **not** claim XSECURITY or true per-app XWayland sandboxes yet.
+- Metis does **not** claim XSECURITY or true per-app / per-sandbox XWayland
+  isolation.
 
 Details: [User Guide — Window management](docs/USER_GUIDE.md#5-window-management).
 
@@ -83,7 +89,7 @@ Tracked as **[Phase 18](metis-os-workspace/TODO.md#phase-18--security-polish-ipc
 1. ~~Sanitize gaming config path/env edges (`extra_steam_paths`, launcher exports).~~ **Done** (Phase 18 A).
 2. ~~IPC sliding-window rate limits (same-UID spam / DoS); optional token TTL docs.~~ **Done** (Phase 18 B — spawn-scoped tokens documented; no wall-clock TTL).
 3. ~~Widget pack JSON schema validation at startup (fail closed).~~ **Done** (Phase 18 C — serde-strict + layout/helper gate; author doc `docs/WIDGET_PACK_SCHEMA.md`).
-4. True per-app / per-sandbox rootless XWayland (beyond the two-bucket prototype).
+4. ~~True per-app / per-sandbox rootless XWayland (beyond the two-bucket prototype).~~ **Done as soft policy** (Phase 18 D — class-based lazy gaming bucket + Settings; not an enforceable sandbox).
 5. Default-on colour management after a wayland-rs **server/sys** fix (no local
    ObjectData UAF workaround in-tree).
 6. GLES `MultiRenderer` compositor stretch (ScreenCast dmabuf already shipped).

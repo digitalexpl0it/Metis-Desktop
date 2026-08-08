@@ -1586,12 +1586,14 @@ re-doing ScreenCast dmabuf (already shipped).
 
 ### D. Per-sandbox rootless XWayland (P1 / stretch)
 
-- [ ] Evolve Phase 15 §E two-bucket `xwayland_mode: isolated` toward a
-      **dynamic per-sandbox / per-untrusted-class** rootless XWayland launcher
-      (Flatpak X11, Steam/Proton, etc.)
-- [ ] Launch policy in Settings / `config.json`; document residual X11↔X11 risk
-      inside each bucket
-- [ ] Do **not** claim full isolation until the design is enforceable
+- [x] Evolve Phase 15 §E two-bucket toward **policy-driven soft classes**
+      (gaming vs desktop): lazy gaming XWayland, DISPLAY routing decoupled from
+      GPU offload; Flatpak Steam/Lutris/Heroic ids map to gaming bucket (not a
+      Flatpak sandbox)
+- [x] Launch policy in Settings → Gaming + `config.json` (`xwayland_mode`,
+      `xwayland_policy`); document residual X11↔X11 / same-UID risk
+- [x] Do **not** claim full isolation — SECURITY residual #4 marked done as soft
+      policy only
 
 ### E. Display / upstream (track only)
 

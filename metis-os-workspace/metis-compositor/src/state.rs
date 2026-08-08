@@ -45,6 +45,13 @@ use crate::events::EventBus;
 use crate::focus::KeyboardFocusTarget;
 use crate::windows::WindowRegistry;
 
+/// Queued compositor launch waiting on the gaming XWayland bucket (Phase 18 D).
+#[derive(Debug, Clone)]
+pub(crate) struct PendingGamingLaunch {
+    pub argv: Vec<String>,
+    pub extra_env: Vec<(String, String)>,
+}
+
 /// Legacy default for bar-adjacent padding; live maximize/snap gaps come from
 /// [`MetisState::configured_window_gap`] / `bar.json` `window_gap_px`.
 #[allow(dead_code)]
@@ -159,6 +166,10 @@ pub struct MetisState {
     pub xdisplay_gaming: Option<u32>,
     /// XwmId of the gaming bucket (for `xwm_state` routing).
     pub xwm_gaming_id: Option<smithay::xwayland::xwm::XwmId>,
+    /// Gaming XWayland spawn in flight (Phase 18 D lazy bucket).
+    pub(crate) xwayland_gaming_spawn_pending: bool,
+    /// Launches waiting for the gaming XWayland to become ready.
+    pub(crate) pending_gaming_launches: Vec<PendingGamingLaunch>,
     /// Pre-fullscreen geometry for mapped X11 windows (keyed by X11 window id).
     pub(crate) x11_fullscreen_restore: std::collections::HashMap<u32, Rectangle<i32, Logical>>,
     /// Per-output set of window ids currently in true-fullscreen (Wayland + X11);
@@ -703,18 +714,25 @@ fn apply_spawned_client_env(
     client_gpu: Option<&ClientGpuHint>,
     dgpu_offload: Option<&DgpuOffload>,
     prefer_dgpu: bool,
+    use_gaming_xwayland: bool,
 ) {
     cmd.env("WAYLAND_DISPLAY", socket);
     cmd.env("METIS_SESSION", "1");
-    // Isolated mode: only true games/Proton use the gaming XWayland bucket.
-    // Browsers may still get dGPU offload without moving onto that X11 server.
-    let display = if prefer_dgpu && command_prefers_dgpu(program) {
+    // Phase 18 D: gaming X11 class is independent of GPU offload / battery.
+    // Browsers may still get dGPU without moving onto the gaming X server.
+    let display = if use_gaming_xwayland {
         xdisplay_gaming.or(xdisplay)
     } else {
         xdisplay
     };
     match display {
         Some(n) => {
+            tracing::debug!(
+                program,
+                display = n,
+                gaming_x11 = use_gaming_xwayland,
+                "spawn DISPLAY"
+            );
             cmd.env("DISPLAY", format!(":{n}"));
         }
         None => {
@@ -908,6 +926,8 @@ impl MetisState {
             xdisplay: None,
             xdisplay_gaming: None,
             xwm_gaming_id: None,
+            xwayland_gaming_spawn_pending: false,
+            pending_gaming_launches: Vec::new(),
             x11_fullscreen_restore: std::collections::HashMap::new(),
             output_fullscreen_windows: std::collections::HashMap::new(),
             fs_offset_warned: std::collections::HashSet::new(),
@@ -2210,6 +2230,29 @@ impl MetisState {
         }
 
         let program_joined = argv.join(" ");
+        let app_cfg = metis_config::load_app_config();
+        let use_gaming_xwayland = app_cfg.xwayland_mode == metis_config::XwaylandMode::Isolated
+            && metis_config::command_uses_gaming_xwayland(
+                &program_joined,
+                &app_cfg.xwayland_policy,
+            );
+
+        if use_gaming_xwayland && self.xdisplay_gaming.is_none() {
+            tracing::info!(
+                program = %program_joined,
+                "spawn: queueing until gaming XWayland is ready"
+            );
+            self.pending_gaming_launches.push(PendingGamingLaunch {
+                argv: argv.clone(),
+                extra_env: extra_env
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+            });
+            self.ensure_gaming_xwayland();
+            return;
+        }
+
         let mut cmd = std::process::Command::new(&argv[0]);
         cmd.args(&argv[1..]);
         for (k, v) in extra_env {
@@ -2226,6 +2269,13 @@ impl MetisState {
                 "spawn: steering launch onto discrete GPU (PRIME offload)"
             );
         }
+        if use_gaming_xwayland {
+            tracing::info!(
+                program = %program_joined,
+                display = ?self.xdisplay_gaming,
+                "spawn: gaming XWayland class"
+            );
+        }
         apply_spawned_client_env(
             &mut cmd,
             &program_joined,
@@ -2235,6 +2285,7 @@ impl MetisState {
             self.client_gpu.as_ref(),
             self.dgpu_offload.as_ref(),
             prefer_dgpu,
+            use_gaming_xwayland,
         );
         cmd.env("XCURSOR_THEME", &self.client_cursor_theme);
         cmd.env("XCURSOR_SIZE", &self.client_cursor_size);
@@ -2262,6 +2313,34 @@ impl MetisState {
                 tracing::warn!(program = %program_joined, %err, "failed to spawn client")
             }
         }
+    }
+
+    pub(crate) fn flush_pending_gaming_launches(&mut self) {
+        let pending = std::mem::take(&mut self.pending_gaming_launches);
+        if pending.is_empty() {
+            return;
+        }
+        tracing::info!(
+            count = pending.len(),
+            "flushing launches queued for gaming XWayland"
+        );
+        for launch in pending {
+            let extra: Vec<(&str, &str)> = launch
+                .extra_env
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            self.spawn_client_argv_with_env(&launch.argv, &extra);
+        }
+    }
+
+    pub(crate) fn drop_pending_gaming_launches(&mut self, reason: &str) {
+        let n = self.pending_gaming_launches.len();
+        if n == 0 {
+            return;
+        }
+        tracing::warn!(count = n, %reason, "dropping launches queued for gaming XWayland");
+        self.pending_gaming_launches.clear();
     }
 
     pub fn kill_spawned_clients(&mut self) {

@@ -45,28 +45,43 @@ impl MetisState {
     /// manager. Best-effort: if `Xwayland` is missing or fails to start we log a
     /// warning and continue with a Wayland-only session.
     ///
-    /// With `config.json` `"xwayland_mode": "isolated"`, also starts a second
-    /// gaming bucket so Steam/Proton can use a separate `DISPLAY` (Phase 15 §E).
+    /// Starts the primary XWayland server. With `"xwayland_mode": "isolated"`,
+    /// the gaming bucket is **lazy-spawned** on first gaming-class launch
+    /// (Phase 18 D) — not at session start.
     pub fn start_xwayland(&mut self, loop_handle: LoopHandle<'static, MetisState>) {
-        use metis_config::XwaylandMode;
-
         let cfg = metis_config::load_app_config();
         let open_abstract = cfg.xwayland_abstract_socket;
-        let isolated = cfg.xwayland_mode == XwaylandMode::Isolated;
         tracing::info!(
             open_abstract_socket = open_abstract,
             ?cfg.xwayland_mode,
             "starting XWayland"
         );
-
-        self.spawn_one_xwayland(loop_handle.clone(), open_abstract, false);
-        if isolated {
-            tracing::info!("xwayland_mode=isolated — starting gaming XWayland bucket");
-            self.spawn_one_xwayland(loop_handle, open_abstract, true);
+        if cfg.xwayland_mode == metis_config::XwaylandMode::Isolated {
+            tracing::info!(
+                "xwayland_mode=isolated — gaming XWayland will start on first gaming launch"
+            );
         }
+
+        self.spawn_one_xwayland(loop_handle, open_abstract, false);
     }
 
-    fn spawn_one_xwayland(
+    /// Ensure the gaming XWayland bucket exists (isolated mode only). Idempotent.
+    pub(crate) fn ensure_gaming_xwayland(&mut self) {
+        use metis_config::XwaylandMode;
+
+        if self.xdisplay_gaming.is_some() || self.xwayland_gaming_spawn_pending {
+            return;
+        }
+        let cfg = metis_config::load_app_config();
+        if cfg.xwayland_mode != XwaylandMode::Isolated {
+            return;
+        }
+        self.xwayland_gaming_spawn_pending = true;
+        tracing::info!("lazy-starting gaming XWayland bucket");
+        self.spawn_one_xwayland(self.loop_handle.clone(), cfg.xwayland_abstract_socket, true);
+    }
+
+    pub(crate) fn spawn_one_xwayland(
         &mut self,
         loop_handle: LoopHandle<'static, MetisState>,
         open_abstract: bool,
@@ -108,10 +123,12 @@ impl MetisState {
                             state.xwm_gaming_id = Some(id);
                             state.xwm_gaming = Some(wm);
                             state.xdisplay_gaming = Some(display_number);
+                            state.xwayland_gaming_spawn_pending = false;
                             tracing::info!(
                                 display = display_number,
                                 "gaming XWayland ready (isolated bucket)"
                             );
+                            state.flush_pending_gaming_launches();
                         } else {
                             state.xwm = Some(wm);
                             state.xdisplay = Some(display_number);
@@ -127,11 +144,19 @@ impl MetisState {
                     }
                     Err(err) => {
                         tracing::error!(%err, gaming_bucket, "failed to start the X11 window manager");
+                        if gaming_bucket {
+                            state.xwayland_gaming_spawn_pending = false;
+                            state.drop_pending_gaming_launches("X11 WM failed");
+                        }
                     }
                 }
             }
             XWaylandEvent::Error => {
                 tracing::warn!(gaming_bucket, "XWayland crashed during startup");
+                if gaming_bucket {
+                    state.xwayland_gaming_spawn_pending = false;
+                    state.drop_pending_gaming_launches("XWayland startup error");
+                }
             }
         });
 

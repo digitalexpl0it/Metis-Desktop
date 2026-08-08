@@ -6,7 +6,10 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use gtk::prelude::*;
-use metis_config::{load_gaming_config, save_gaming_config, GamingConfig, GraphicsMode};
+use metis_config::{
+    load_app_config, load_gaming_config, save_app_config, save_gaming_config, GamingConfig,
+    GraphicsMode, XwaylandMode,
+};
 use metis_gaming::health::{auto_fix_item, run_health_check, HealthCheck, HealthSeverity};
 
 use crate::gaming::{GamingSnapshot, InputDevice, SteamInstall};
@@ -38,6 +41,7 @@ struct Sections {
     auto_perf: gtk::Switch,
     auto_gamemode: gtk::Switch,
     flatpak_gpu: gtk::Switch,
+    xwayland_isolated: gtk::Switch,
     health_list: gtk::Box,
     gamepad_list: gtk::Box,
     touch_list: gtk::Box,
@@ -94,6 +98,28 @@ pub fn build() -> gtk::Widget {
     flatpak_gpu.set_active(cfg.flatpak_gpu_env);
     flatpak_gpu.set_halign(gtk::Align::End);
     mode_body.append(&ui::row(&tr("Flatpak GPU offload env"), &flatpak_gpu));
+
+    let app_cfg = load_app_config();
+    let xwayland_isolated = gtk::Switch::new();
+    xwayland_isolated.set_active(app_cfg.xwayland_mode == XwaylandMode::Isolated);
+    xwayland_isolated.set_halign(gtk::Align::End);
+    xwayland_isolated.set_tooltip_text(Some(&tr(
+        "Soft isolation: Steam/Proton and similar Metis launches get a separate XWayland. \
+         Not a sandbox — restart the Metis session after changing. Same-UID apps can still \
+         open either display.",
+    )));
+    mode_body.append(&ui::row(
+        &tr("Isolated X11 (gaming bucket)"),
+        &xwayland_isolated,
+    ));
+    let x11_hint = gtk::Label::new(Some(&tr(
+        "Restart the Metis session to apply X11 isolation changes. Soft bucketing only — \
+         not a security sandbox.",
+    )));
+    x11_hint.set_wrap(true);
+    x11_hint.set_xalign(0.0);
+    x11_hint.add_css_class("metis-settings-hint");
+    mode_body.append(&x11_hint);
 
     let status_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     status_box.add_css_class("metis-settings-gaming-status");
@@ -167,6 +193,7 @@ pub fn build() -> gtk::Widget {
         auto_perf,
         auto_gamemode,
         flatpak_gpu,
+        xwayland_isolated,
         health_list,
         gamepad_list,
         touch_list,
@@ -238,6 +265,24 @@ pub fn build() -> gtk::Widget {
             c.flatpak_gpu_env = v;
         },
     );
+
+    {
+        let seeding = sections.seeding.clone();
+        sections.xwayland_isolated.connect_active_notify(move |sw| {
+            if *seeding.borrow() {
+                return;
+            }
+            let mut cfg = load_app_config();
+            cfg.xwayland_mode = if sw.is_active() {
+                XwaylandMode::Isolated
+            } else {
+                XwaylandMode::Shared
+            };
+            if let Err(err) = save_app_config(&cfg) {
+                tracing::warn!(%err, "failed to save xwayland_mode");
+            }
+        });
+    }
 
     let (tx, rx) = mpsc::channel::<GamingSnapshot>();
     let (ui_tx, ui_rx) = mpsc::channel::<GamingUiEvent>();

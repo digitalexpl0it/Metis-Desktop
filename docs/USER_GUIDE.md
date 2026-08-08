@@ -539,12 +539,21 @@ surface-sniffed by X11/XWayland apps — rootless XWayland does not see Wayland
 input or buffers. By default all X11 clients share **one** XWayland server
 (`config.json` → `"xwayland_mode": "shared"`), so a malicious X11 app can still
 attack other X11 apps (classic X11↔X11). Metis does **not** claim XSECURITY
-sandboxes. Opt-in `"xwayland_mode": "isolated"` starts a second XWayland for
-gaming/Proton launches (separate `DISPLAY`) so Steam/games do not share an X
-server with random desktop X11 apps — still experimental; measure RAM before
-relying on it. By default Metis also starts XWayland **without** the abstract
-Unix socket (`"xwayland_abstract_socket": false`); set it to `true` if a legacy
-local client needs `@/tmp/.X11-unix/...`.
+sandboxes.
+
+**Isolated X11 (soft bucketing).** Settings → Gaming → **Isolated X11 (gaming
+bucket)** (or `"xwayland_mode": "isolated"`) steers Metis-spawned gaming-class
+launches (Steam, Proton, Lutris, Heroic, Wine, Flatpak Steam ids, …) onto a
+**second** XWayland `DISPLAY`. That server is **lazy-started** on the first such
+launch (not at login). Gaming X11 class is independent of GPU/battery offload, so
+Steam still gets the gaming bucket on battery. Optional
+`config.json` → `xwayland_policy.extra_gaming_patterns` appends match substrings.
+This only applies to compositor `Launch` / Metis-spawned clients; it is **not** a
+sandbox — same-UID processes can open either X socket, and residual X11↔X11 risk
+remains **inside** each bucket. Restart the Metis session after changing the
+toggle. By default Metis also starts XWayland **without** the abstract Unix
+socket (`"xwayland_abstract_socket": false`); set it to `true` if a legacy local
+client needs `@/tmp/.X11-unix/...`.
 
 - **Move** — drag the titlebar.
 - **Close / minimize / maximize** — the three titlebar buttons (× / − / +).

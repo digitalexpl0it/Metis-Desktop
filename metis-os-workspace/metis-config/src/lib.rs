@@ -32,6 +32,7 @@ pub mod viewer;
 pub mod wallpaper;
 pub mod weather;
 pub mod widget_ext;
+pub mod xwayland_policy;
 
 use serde::{Deserialize, Serialize};
 
@@ -61,11 +62,15 @@ pub struct AppConfig {
     /// one shared X11 server remains either way unless `xwayland_mode` is isolated.
     #[serde(default = "default_false")]
     pub xwayland_abstract_socket: bool,
-    /// X11 isolation mode (Phase 15 §E). `shared` (default) = one XWayland for all
-    /// X11 clients. `isolated` = opt-in second XWayland for gaming/Proton launches
-    /// so Steam/games do not share an X server with random X11 apps.
+    /// X11 isolation mode (Phase 15 §E / 18 D). `shared` (default) = one XWayland
+    /// for all X11 clients. `isolated` = soft second bucket for gaming-class
+    /// launches (lazy-spawned). Not a sandbox — same-UID can still open either
+    /// display.
     #[serde(default)]
     pub xwayland_mode: XwaylandMode,
+    /// Which launches use the gaming XWayland bucket when isolated (Phase 18 D).
+    #[serde(default)]
+    pub xwayland_policy: xwayland_policy::XwaylandPolicy,
 }
 
 /// How many XWayland servers Metis runs (Phase 15 §E).
@@ -100,8 +105,14 @@ impl Default for AppConfig {
             graphics_profile: graphics::GraphicsProfile::default(),
             xwayland_abstract_socket: default_false(),
             xwayland_mode: XwaylandMode::default(),
+            xwayland_policy: xwayland_policy::XwaylandPolicy::default(),
         }
     }
+}
+
+fn sanitize_app_config(mut cfg: AppConfig) -> AppConfig {
+    cfg.xwayland_policy = cfg.xwayland_policy.sanitize();
+    cfg
 }
 
 pub fn config_dir() -> std::path::PathBuf {
@@ -151,7 +162,7 @@ pub fn load_app_config() -> AppConfig {
     if path.exists() {
         if let Ok(text) = std::fs::read_to_string(&path) {
             if let Ok(cfg) = serde_json::from_str(&text) {
-                return cfg;
+                return sanitize_app_config(cfg);
             }
         }
     }
@@ -161,7 +172,8 @@ pub fn load_app_config() -> AppConfig {
 pub fn save_app_config(config: &AppConfig) -> std::io::Result<()> {
     ensure_config_dirs()?;
     let path = app_config_path();
-    let json = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
+    let config = sanitize_app_config(config.clone());
+    let json = serde_json::to_string_pretty(&config).map_err(std::io::Error::other)?;
     // Atomic replace so a partial write cannot leave a corrupt file.
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| {
@@ -518,4 +530,7 @@ pub use widget_ext::{
     WIDGET_EXT_API, WIDGET_EXT_HELPER_MAX_STDOUT, WIDGET_EXT_HELPER_TIMEOUT_SECS,
     WIDGET_EXT_MAX_COPY, WIDGET_EXT_MAX_DEPTH, WIDGET_EXT_MAX_JSON_BYTES, WIDGET_EXT_MAX_NODES,
     WIDGET_EXT_MAX_STRING,
+};
+pub use xwayland_policy::{
+    command_uses_gaming_xwayland, XwaylandPolicy, DEFAULT_GAMING_XWAYLAND_PATTERNS,
 };
