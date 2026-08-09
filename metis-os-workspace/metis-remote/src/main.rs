@@ -7,7 +7,7 @@ use metis_remote::{
     firewall_apply_as_root, firewall_clear, firewall_clear_as_root, firewall_rustdesk_apply,
     firewall_rustdesk_apply_as_root, firewall_rustdesk_clear, firewall_rustdesk_clear_as_root,
     firewall_rustdesk_status, firewall_status, pause, privileged_exe, resume, rustdesk_disable,
-    rustdesk_enable, rustdesk_status, set_lan_only, set_password, status,
+    rustdesk_enable, rustdesk_status, set_lan_only, set_password, status, ubuntu_drivers_install,
 };
 use zeroize::Zeroize;
 
@@ -158,6 +158,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 .ok_or_else(|| "usage: metis-remote pk-add-input-group <username>".to_string())?;
             add_input_group(&user)
         }
+        Some("pk-ubuntu-drivers-install") => ubuntu_drivers_install(),
         // Dev helper: show which binary pkexec would use.
         Some("pk-exe") => {
             println!("{}", privileged_exe().display());
@@ -191,6 +192,8 @@ fn print_help() {
   rustdesk status     Print RustDesk install/running JSON
   rustdesk enable     Start RustDesk + optional LAN firewall (GRD stays default host)
   rustdesk disable    Clear RustDesk backend preference ([--kill] stops process)
+  pk-apt-install …    Polkit: install allowlisted apt packages
+  pk-ubuntu-drivers-install  Polkit: ubuntu-drivers install (NVIDIA consent path)
 
 Never put the RDP password on the shell command line — pipe it to stdin."
     );

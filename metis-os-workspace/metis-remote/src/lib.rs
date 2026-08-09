@@ -14,7 +14,8 @@ pub use gnome_rdp::{
 };
 pub use host::{hostname, lan_addresses};
 pub use pkhelpers::{
-    add_input_group, apt_install, privileged_exe, validate_username, APT_ALLOWLIST,
+    add_input_group, apt_install, privileged_exe, ubuntu_drivers_install, validate_username,
+    APT_ALLOWLIST,
 };
 pub use rustdesk::RustDeskStatus;
 

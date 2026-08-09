@@ -927,17 +927,29 @@ fn build_gaming() -> gtk::Widget {
     } else {
         metis_i18n::tr("optional — install gamemode")
     };
-    let vulkan_status = if metis_gaming::i386_vulkan_likely_missing() {
-        metis_i18n::tr("may be missing (install mesa-vulkan-drivers:i386)")
+    let vulkan_status = if metis_gaming::i386_vulkan_likely_missing()
+        || metis_gaming::mesa_vulkan_amd64_missing()
+    {
+        metis_i18n::tr("needs Fix in Settings → Gaming")
     } else {
         metis_i18n::tr("looks OK")
     };
+    let nvidia_status = if metis_gaming::nvidia_gpu_present() {
+        if metis_gaming::detect::nvidia_driver_loaded() {
+            metis_i18n::tr("driver loaded")
+        } else {
+            metis_i18n::tr("driver missing — use Settings → Gaming (consent install)")
+        }
+    } else {
+        metis_i18n::tr("not detected")
+    };
     let summary = gtk::Label::new(Some(&format!(
-        "{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}",
         metis_i18n::tr("Hybrid GPU: %1").replace("%1", &hybrid_status),
         metis_i18n::tr("Steam: %1").replace("%1", &steam),
         metis_i18n::tr("GameMode: %1").replace("%1", &gamemode_status),
-        metis_i18n::tr("32-bit Vulkan: %1").replace("%1", &vulkan_status),
+        metis_i18n::tr("Vulkan: %1").replace("%1", &vulkan_status),
+        metis_i18n::tr("NVIDIA: %1").replace("%1", &nvidia_status),
     )));
     summary.add_css_class("metis-onboarding-subtitle");
     summary.set_xalign(0.0);
@@ -958,8 +970,9 @@ fn build_gaming() -> gtk::Widget {
     col.append(&optimize);
 
     let hint = gtk::Label::new(Some(&metis_i18n::tr(
-        "Checking this widens Flatpak sandboxes for those apps (device, network, \
-         Wayland/Pulse). You can review or rerun anytime from Settings → Gaming.",
+        "Metis routes games onto the discrete GPU automatically — leave Steam Launch Options \
+         empty for GPU. Drivers and packages are never installed silently; use Settings → Gaming \
+         → Run gaming setup or Fix for Steam, Vulkan, controllers, and NVIDIA (consent).",
     )));
     hint.add_css_class("metis-onboarding-hint");
     hint.set_xalign(0.0);

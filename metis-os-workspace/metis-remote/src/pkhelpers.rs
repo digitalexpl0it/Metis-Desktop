@@ -13,9 +13,11 @@ pub const APT_ALLOWLIST: &[&str] = &[
     "cups",
     "system-config-printer",
     "gnome-keyring",
+    "mesa-vulkan-drivers",
     "mesa-vulkan-drivers:i386",
     "pipewire-audio",
     "steam-installer",
+    "steam-devices",
     "nftables",
     "policykit-1-gnome",
     "mate-polkit",
@@ -69,6 +71,59 @@ pub fn apt_install(packages: &[String]) -> Result<(), String> {
     }
 }
 
+/// Guided NVIDIA install: fixed `ubuntu-drivers install` argv only (no free-form shell).
+/// Best-effort matching `libnvidia-gl-<series>:i386` when a series can be detected.
+pub fn ubuntu_drivers_install() -> Result<(), String> {
+    require_root()?;
+    let ubuntu_drivers = if Path::new("/usr/bin/ubuntu-drivers").is_file() {
+        "/usr/bin/ubuntu-drivers"
+    } else {
+        "ubuntu-drivers"
+    };
+    let status = Command::new(ubuntu_drivers)
+        .arg("install")
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .status()
+        .map_err(|e| format!("ubuntu-drivers failed: {e}"))?;
+    if !status.success() {
+        return Err(format!("ubuntu-drivers install exited with {status}"));
+    }
+    // Best-effort i386 GL for Proton; series detection may fail until reboot.
+    if let Some(series) = detect_nvidia_series_digits() {
+        let pkg = format!("libnvidia-gl-{series}:i386");
+        let _ = Command::new("apt-get")
+            .args(["install", "-y", "--", &pkg])
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .status();
+    } else {
+        tracing::warn!(
+            "could not detect NVIDIA driver series for i386 GL — install libnvidia-gl-*:i386 after reboot if Proton needs it"
+        );
+    }
+    Ok(())
+}
+
+fn detect_nvidia_series_digits() -> Option<String> {
+    let output = Command::new("dpkg-query")
+        .args(["-W", "-f=${Package}\n", "nvidia-driver-*"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let pkg = line.trim();
+        if let Some(rest) = pkg.strip_prefix("nvidia-driver-") {
+            let series: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !series.is_empty() && series.len() <= 4 {
+                return Some(series);
+            }
+        }
+    }
+    None
+}
+
 /// Validate a Unix username (no path separators / control chars).
 pub fn validate_username(user: &str) -> Result<(), String> {
     if user.is_empty() || user.len() > 64 {
@@ -105,4 +160,22 @@ pub fn privileged_exe() -> std::path::PathBuf {
         return Path::new(INSTALLED).to_path_buf();
     }
     std::env::current_exe().unwrap_or_else(|_| Path::new("metis-remote").to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allowlist_includes_gaming_packages() {
+        assert!(APT_ALLOWLIST.contains(&"mesa-vulkan-drivers"));
+        assert!(APT_ALLOWLIST.contains(&"mesa-vulkan-drivers:i386"));
+        assert!(APT_ALLOWLIST.contains(&"steam-devices"));
+    }
+
+    #[test]
+    fn rejects_unknown_package() {
+        assert!(!package_allowed("evil-package"));
+        assert!(!package_allowed("mesa-vulkan-drivers;rm -rf /"));
+    }
 }

@@ -693,15 +693,6 @@ impl DgpuOffload {
     }
 }
 
-/// Heuristic: does this launch look like a game or game launcher that should run
-/// on the discrete GPU? Covers Steam (and the games it spawns as children, which
-/// inherit its environment), Big Picture (`-gamepadui`), the common third-party
-/// launchers, and Proton/Wine. Web browsers are handled separately via
-/// [`metis_config::command_is_web_browser`] (dGPU for WebGL, not GameMode).
-fn command_prefers_dgpu(program: &str) -> bool {
-    metis_config::command_prefers_dgpu(program)
-}
-
 /// Environment shared by every client the compositor spawns (shell, settings,
 /// menu launches). GTK hardening avoids portal/a11y stalls in a bare session.
 #[allow(clippy::too_many_arguments)]
@@ -2229,6 +2220,10 @@ impl MetisState {
             }
         }
 
+        // Metis-owned Steam tweaks (MangoHud / Gamescope) — never Steam VDF writes.
+        let tweaks = metis_config::apply_steam_launch_tweaks(&argv, &self.gaming_config);
+        let argv = tweaks.argv;
+        let tweak_env = tweaks.env;
         let program_joined = argv.join(" ");
         let app_cfg = metis_config::load_app_config();
         let use_gaming_xwayland = app_cfg.xwayland_mode == metis_config::XwaylandMode::Isolated
@@ -2242,12 +2237,16 @@ impl MetisState {
                 program = %program_joined,
                 "spawn: queueing until gaming XWayland is ready"
             );
+            let mut queued_env: Vec<(String, String)> = extra_env
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            for (k, v) in tweak_env {
+                queued_env.push((k, v));
+            }
             self.pending_gaming_launches.push(PendingGamingLaunch {
                 argv: argv.clone(),
-                extra_env: extra_env
-                    .iter()
-                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-                    .collect(),
+                extra_env: queued_env,
             });
             self.ensure_gaming_xwayland();
             return;
@@ -2256,6 +2255,9 @@ impl MetisState {
         let mut cmd = std::process::Command::new(&argv[0]);
         cmd.args(&argv[1..]);
         for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        for (k, v) in &tweak_env {
             cmd.env(k, v);
         }
 

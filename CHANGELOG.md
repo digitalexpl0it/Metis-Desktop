@@ -9,6 +9,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Phase 19 — Gaming Setup UX** — guided Steam / Vulkan / controllers /
+  GameMode / GPU mode wizard; health rows for Mesa Vulkan (amd64), NVIDIA
+  (PCI + reboot banner), and `steam-devices`; consent-only
+  `pkexec metis-remote pk-ubuntu-drivers-install`; Settings UI for
+  `extra_steam_paths`; Metis-owned `mangohud_for_games` /
+  `gamescope_big_picture` toggles (spawn-time only, no Steam VDF writes).
 - **Phase 18 D — Soft X11 isolation** — Settings → Gaming toggle for
   `xwayland_mode` (shared / isolated); gaming-class launches use a lazy-spawned
   second XWayland independent of GPU/battery; `xwayland_policy` patterns in

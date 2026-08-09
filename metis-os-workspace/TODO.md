@@ -3,8 +3,8 @@
 **Current phase:** Phases **1–17** are complete for their shipped product bars
 (Phase 17 Task View / Super+Tab shipped).
 **Phase 18** (security / IPC / isolation polish) is open — see below.
-**Phase 19** (Gaming Setup UX — guided drivers + first-run polish) is planned
-after Phase 18 A–C priority work.
+**Phase 19** (Gaming Setup UX — guided drivers + first-run polish) shipped
+2026-08-08 — see Phase 19 below.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -1632,36 +1632,36 @@ out-kernelling CachyOS.
 
 ### A. Guided GPU drivers (P0)
 
-- [ ] **Detect** — NVIDIA (PCI + `/proc/driver/nvidia`), AMD/Intel Mesa, hybrid
+- [x] **Detect** — NVIDIA (PCI + `/proc/driver/nvidia`), AMD/Intel Mesa, hybrid
       vs single GPU; surface in Settings → Gaming health + setup wizard
-- [ ] **NVIDIA (opt-in)** — guided `ubuntu-drivers` install via pkexec (recommended
+- [x] **NVIDIA (opt-in)** — guided `ubuntu-drivers` install via pkexec (recommended
       package); matching **i386** GL/Vulkan libs for the installed series; hard
       **reboot required** banner; re-run health after reboot. No blind auto-fix
       today stays until this ships with explicit consent UI
-- [ ] **AMD / Intel** — ensure `mesa-vulkan-drivers` (+ `:i386`); no separate
+- [x] **AMD / Intel** — ensure `mesa-vulkan-drivers` (+ `:i386`); no separate
       “proprietary AMD gaming driver” path
-- [ ] **Refuse silent install** — never run driver install from session start;
+- [x] **Refuse silent install** — never run driver install from session start;
       require Settings / wizard confirmation
-- [ ] **Docs** — USER_GUIDE Gaming: what Metis installs vs what Steam/Proton own
+- [x] **Docs** — USER_GUIDE Gaming: what Metis installs vs what Steam/Proton own
 
 ### B. Gaming Setup wizard polish (P0)
 
-- [ ] **One-shot flow** — Steam (prefer native) → Vulkan/i386 → controllers /
+- [x] **One-shot flow** — Steam (prefer native) → Vulkan/i386 → controllers /
       `steam-devices` / input group → GameMode → GPU mode (Auto) → driver step
       when needed → “you’re ready”
-- [ ] **Health → Fix** — expand one-click fixes for safe packages; driver step
+- [x] **Health → Fix** — expand one-click fixes for safe packages; driver step
       uses the guided path from §A
-- [ ] **Copy** — state clearly that Launch Options stay empty for GPU; Metis
+- [x] **Copy** — state clearly that Launch Options stay empty for GPU; Metis
       session offload handles hybrid
 
 ### C. Metis-owned optional tweaks (P1)
 
-- [ ] **Wire `gamescope_profiles`** (or equivalent) from `gaming.json` when Metis
-      launches Steam/Big Picture — do not write Steam Properties
-- [ ] **Optional toggles** — suggest MangoHud / Gamescope for Big Picture as
-      Metis settings, applied via env/wrapper when Metis starts the client
-- [ ] **Settings UI** for `extra_steam_paths` (Flatpak only) — path picker using
-      Phase 18 A validation (optional; manual JSON already works)
+- [x] **Deferred per-app `gamescope_profiles`** — config retained; full per-Steam
+      appid UI left for a follow-up (Big Picture uses `gamescope_big_picture`)
+- [x] **Optional toggles** — `mangohud_for_games` / `gamescope_big_picture` in
+      Settings, applied via env/wrapper when Metis starts Steam / Big Picture
+- [x] **Settings UI** for `extra_steam_paths` (Flatpak only) — path picker using
+      Phase 18 A validation
 
 ### D. Explicitly deferred / rejected
 
@@ -1703,7 +1703,7 @@ recent hosts; no passwords).
 | `dashboard.json` | *(Phase 10)* Control Center: widget order, height, refresh, confirm-before-kill, process monitor |
 | `keybinds.json` | Desktop shortcuts (chord → action); Mod key for defaults; live `ReloadKeybinds` |
 | `locale.json` | *(Phase 8)* Session language override + formats-follow-language |
-| `gaming.json` | *(Phase 11)* Graphics mode, auto performance/GameMode, Flatpak GPU env |
+| `gaming.json` | *(Phase 11/19)* Graphics mode, auto performance/GameMode, Flatpak GPU env, library paths, Metis launch tweaks |
 | `gaming-flatpak.json` | *(Phase 11)* Record of applied Flatpak gaming overrides |
 | `screenshot.json` | *(Phase 12)* Native screenshot defaults: mode, pointer, delay, after-capture, save dir |
 | `input.json` | Mouse, touchpad, and keyboard settings (compositor live-reload) |

@@ -45,7 +45,10 @@ pub fn detect_hybrid_gpu(display_pci: Option<&str>) -> Option<HybridGpuInfo> {
         let device = read_hex(&dev.join("device"));
         let label = gpu_label(&dev, vendor.as_deref());
         match vendor.as_deref() {
-            Some("10de") if Path::new("/proc/driver/nvidia").exists() => {
+            // Report NVIDIA discrete even before the proprietary module loads so
+            // health / setup can surface a driver gap (offload env is only applied
+            // when the compositor actually detected a usable dGPU render path).
+            Some("10de") => {
                 return Some(HybridGpuInfo {
                     kind: GpuOffloadKind::Nvidia,
                     discrete_label: label,

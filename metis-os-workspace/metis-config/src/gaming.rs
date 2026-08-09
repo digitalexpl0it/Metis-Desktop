@@ -44,12 +44,21 @@ pub struct GamingConfig {
     #[serde(default = "default_true")]
     pub steam_prefer_native: bool,
     /// Optional per-title Gamescope launch args (Steam app id → flags).
+    /// Deferred: not yet wired to per-app launches (Phase 19 leaves empty).
     #[serde(default)]
     pub gamescope_profiles: Vec<GameScopeProfile>,
     /// Extra host directories granted to Flatpak Steam via `--filesystem`
     /// (canonical paths under `$HOME`, `/mnt`, `/media`, or `/run/media`).
     #[serde(default)]
     pub extra_steam_paths: Vec<String>,
+    /// When Metis launches Steam / Big Picture and `mangohud` is on PATH, set
+    /// `MANGOHUD=1` for that spawn only (never writes Steam Properties).
+    #[serde(default)]
+    pub mangohud_for_games: bool,
+    /// When Metis launches Big Picture and `gamescope` is on PATH, prefix
+    /// `gamescope --` for that spawn only.
+    #[serde(default)]
+    pub gamescope_big_picture: bool,
 }
 
 fn default_true() -> bool {
@@ -67,6 +76,8 @@ impl Default for GamingConfig {
             steam_prefer_native: true,
             gamescope_profiles: Vec::new(),
             extra_steam_paths: Vec::new(),
+            mangohud_for_games: false,
+            gamescope_big_picture: false,
         }
     }
 }

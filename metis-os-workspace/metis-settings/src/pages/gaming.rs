@@ -5,12 +5,16 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use gio::prelude::*;
 use gtk::prelude::*;
 use metis_config::{
-    load_app_config, load_gaming_config, save_app_config, save_gaming_config, GamingConfig,
-    GraphicsMode, XwaylandMode,
+    load_app_config, load_gaming_config, save_app_config, save_gaming_config,
+    validate_steam_library_path, GamingConfig, GraphicsMode, XwaylandMode,
 };
-use metis_gaming::health::{auto_fix_item, run_health_check, HealthCheck, HealthSeverity};
+use metis_gaming::health::{
+    auto_fix_item, install_nvidia_drivers, run_health_check, HealthCheck, HealthSeverity,
+};
+use metis_gaming::{nvidia_gpu_present, nvidia_reboot_required};
 
 use crate::gaming::{GamingSnapshot, InputDevice, SteamInstall};
 use crate::ui;
@@ -41,7 +45,11 @@ struct Sections {
     auto_perf: gtk::Switch,
     auto_gamemode: gtk::Switch,
     flatpak_gpu: gtk::Switch,
+    mangohud: gtk::Switch,
+    gamescope_bp: gtk::Switch,
     xwayland_isolated: gtk::Switch,
+    steam_paths_list: gtk::Box,
+    reboot_banner: gtk::Box,
     health_list: gtk::Box,
     gamepad_list: gtk::Box,
     touch_list: gtk::Box,
@@ -99,6 +107,27 @@ pub fn build() -> gtk::Widget {
     flatpak_gpu.set_halign(gtk::Align::End);
     mode_body.append(&ui::row(&tr("Flatpak GPU offload env"), &flatpak_gpu));
 
+    let mangohud = gtk::Switch::new();
+    mangohud.set_active(cfg.mangohud_for_games);
+    mangohud.set_halign(gtk::Align::End);
+    mangohud.set_tooltip_text(Some(&tr(
+        "When Metis launches Steam or Big Picture and mangohud is installed, set MANGOHUD=1. \
+         Does not edit Steam Launch Options.",
+    )));
+    mode_body.append(&ui::row(
+        &tr("MangoHud for Metis Steam launches"),
+        &mangohud,
+    ));
+
+    let gamescope_bp = gtk::Switch::new();
+    gamescope_bp.set_active(cfg.gamescope_big_picture);
+    gamescope_bp.set_halign(gtk::Align::End);
+    gamescope_bp.set_tooltip_text(Some(&tr(
+        "When Metis launches Big Picture and gamescope is installed, wrap with gamescope --. \
+         Does not edit Steam Properties.",
+    )));
+    mode_body.append(&ui::row(&tr("Gamescope for Big Picture"), &gamescope_bp));
+
     let app_cfg = load_app_config();
     let xwayland_isolated = gtk::Switch::new();
     xwayland_isolated.set_active(app_cfg.xwayland_mode == XwaylandMode::Isolated);
@@ -114,12 +143,28 @@ pub fn build() -> gtk::Widget {
     ));
     let x11_hint = gtk::Label::new(Some(&tr(
         "Restart the Metis session to apply X11 isolation changes. Soft bucketing only — \
-         not a security sandbox.",
+         not a security sandbox. Leave Steam Launch Options empty for GPU — Metis session \
+         offload handles hybrid routing.",
     )));
     x11_hint.set_wrap(true);
     x11_hint.set_xalign(0.0);
     x11_hint.add_css_class("metis-settings-hint");
     mode_body.append(&x11_hint);
+
+    let reboot_banner = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    reboot_banner.add_css_class("metis-settings-gaming-status");
+    reboot_banner.set_visible(nvidia_reboot_required());
+    let reboot_icon = gtk::Image::from_icon_name("system-reboot-symbolic");
+    reboot_icon.set_pixel_size(18);
+    let reboot_text = gtk::Label::new(Some(&tr(
+        "NVIDIA drivers were installed — reboot to load them before gaming.",
+    )));
+    reboot_text.set_xalign(0.0);
+    reboot_text.set_wrap(true);
+    reboot_text.set_hexpand(true);
+    reboot_banner.append(&reboot_icon);
+    reboot_banner.append(&reboot_text);
+    mode_body.append(&reboot_banner);
 
     let status_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     status_box.add_css_class("metis-settings-gaming-status");
@@ -150,12 +195,36 @@ pub fn build() -> gtk::Widget {
     let setup_btn = gtk::Button::with_label(&tr("Run gaming setup"));
     setup_btn.set_halign(gtk::Align::Start);
     setup_btn.set_tooltip_text(Some(&tr(
-        "Open the gaming setup wizard (Flatpak, GPU routing, launcher wrappers)",
+        "Guided setup: Steam, Vulkan, controllers, GameMode, GPU mode, drivers, Flatpak",
     )));
     actions.append(&setup_btn);
     mode_body.append(&actions);
 
     content.append(&mode_card);
+
+    let (paths_card, paths_body) =
+        ui::section_with_icon(&tr("Steam library paths"), "folder-symbolic");
+    let paths_hint = gtk::Label::new(Some(&tr(
+        "Extra host folders granted to Flatpak Steam (--filesystem). Paths must resolve under \
+         your home directory, /mnt, /media, or /run/media.",
+    )));
+    paths_hint.set_wrap(true);
+    paths_hint.set_xalign(0.0);
+    paths_hint.add_css_class("metis-settings-hint");
+    paths_body.append(&paths_hint);
+    let steam_paths_list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    steam_paths_list.add_css_class("metis-settings-list");
+    paths_body.append(&steam_paths_list);
+    let paths_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    paths_actions.set_margin_top(8);
+    let add_path_btn = gtk::Button::with_label(&tr("Add folder…"));
+    add_path_btn.add_css_class("metis-settings-secondary");
+    let optimize_paths_btn = gtk::Button::with_label(&tr("Optimize Flatpak Steam"));
+    optimize_paths_btn.add_css_class("suggested-action");
+    paths_actions.append(&add_path_btn);
+    paths_actions.append(&optimize_paths_btn);
+    paths_body.append(&paths_actions);
+    content.append(&paths_card);
 
     let (health_card, health_body) = ui::section(&tr("Health check"));
     let health_list = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -193,7 +262,11 @@ pub fn build() -> gtk::Widget {
         auto_perf,
         auto_gamemode,
         flatpak_gpu,
+        mangohud,
+        gamescope_bp,
         xwayland_isolated,
+        steam_paths_list,
+        reboot_banner,
         health_list,
         gamepad_list,
         touch_list,
@@ -205,6 +278,7 @@ pub fn build() -> gtk::Widget {
         seeding: seeding.clone(),
         last_health_sig: Rc::new(Cell::new(0)),
     });
+    refresh_steam_paths_list(&sections);
 
     let persist_cfg = {
         let seeding = sections.seeding.clone();
@@ -260,9 +334,25 @@ pub fn build() -> gtk::Widget {
     connect_switch_persist(
         &sections.flatpak_gpu,
         sections.seeding.clone(),
-        persist_cfg,
+        persist_cfg.clone(),
         |c, v| {
             c.flatpak_gpu_env = v;
+        },
+    );
+    connect_switch_persist(
+        &sections.mangohud,
+        sections.seeding.clone(),
+        persist_cfg.clone(),
+        |c, v| {
+            c.mangohud_for_games = v;
+        },
+    );
+    connect_switch_persist(
+        &sections.gamescope_bp,
+        sections.seeding.clone(),
+        persist_cfg,
+        |c, v| {
+            c.gamescope_big_picture = v;
         },
     );
 
@@ -317,6 +407,69 @@ pub fn build() -> gtk::Widget {
                 return;
             };
             show_gaming_setup_dialog(&parent, sections_s.clone(), ui_tx.clone());
+        });
+    }
+
+    {
+        let sections_paths = sections.clone();
+        add_path_btn.connect_clicked(move |btn| {
+            let Some(parent) = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok()) else {
+                return;
+            };
+            let dialog = gtk::FileDialog::builder()
+                .title(tr("Steam library folder"))
+                .modal(true)
+                .build();
+            let sections_paths = sections_paths.clone();
+            dialog.select_folder(
+                Some(&parent),
+                None::<&gio::Cancellable>,
+                move |result| {
+                    let Ok(folder) = result else {
+                        return;
+                    };
+                    let Some(path) = folder.path() else {
+                        return;
+                    };
+                    let raw = path.display().to_string();
+                    match validate_steam_library_path(&raw) {
+                        Some(canon) => {
+                            let mut cfg = load_gaming_config();
+                            let s = canon.to_string_lossy().into_owned();
+                            if !cfg.extra_steam_paths.contains(&s) {
+                                cfg.extra_steam_paths.push(s);
+                                if save_gaming_config(&cfg).is_ok() {
+                                    crate::runtime::reload_gaming_async();
+                                    refresh_steam_paths_list(&sections_paths);
+                                }
+                            }
+                        }
+                        None => {
+                            sections_paths.status_text.set_text(&tr(
+                                "That folder is not allowed — use a path under home, /mnt, /media, or /run/media.",
+                            ));
+                        }
+                    }
+                },
+            );
+        });
+    }
+    {
+        let ui_tx = ui_tx.clone();
+        optimize_paths_btn.connect_clicked(move |btn| {
+            let Some(parent) = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok()) else {
+                return;
+            };
+            let btn = btn.clone();
+            let ui_tx = ui_tx.clone();
+            show_optimize_confirm_dialog(&parent, move || {
+                let ui_tx = ui_tx.clone();
+                std::thread::spawn(move || {
+                    let summary = run_optimize_pass();
+                    let _ = ui_tx.send(GamingUiEvent::OptimizeDone { summary });
+                });
+            });
+            let _ = &btn;
         });
     }
 
@@ -495,7 +648,7 @@ fn run_optimize_pass() -> String {
 
 fn show_gaming_setup_dialog(
     parent: &gtk::Window,
-    _sections: Rc<Sections>,
+    sections: Rc<Sections>,
     ui_tx: mpsc::Sender<GamingUiEvent>,
 ) {
     if let Some(existing) = GAMING_SETUP_DIALOG.with(|d| d.borrow().clone()) {
@@ -509,8 +662,8 @@ fn show_gaming_setup_dialog(
         .modal(true)
         .decorated(false)
         .resizable(false)
-        .default_width(460)
-        .default_height(360)
+        .default_width(520)
+        .default_height(420)
         .build();
     win.add_css_class("metis-settings-window");
     win.add_css_class("metis-settings-password-dialog");
@@ -533,46 +686,40 @@ fn show_gaming_setup_dialog(
     header.append(&header_close);
     outer.append(&header);
 
-    let intro = gtk::Label::new(Some(&tr(
-        "Applies Flatpak device/socket overrides, hybrid GPU env vars for Steam/Lutris/Heroic, \
-         and writes the Flatpak Steam launcher wrapper. Safe to re-run after updates.",
+    let step_label = gtk::Label::new(None);
+    step_label.set_xalign(0.0);
+    step_label.add_css_class("metis-settings-value");
+    step_label.set_margin_bottom(8);
+    outer.append(&step_label);
+
+    let body = gtk::Label::new(None);
+    body.set_xalign(0.0);
+    body.set_wrap(true);
+    body.add_css_class("metis-settings-hint");
+    body.set_margin_bottom(10);
+    outer.append(&body);
+
+    let status = gtk::Label::new(Some(&tr(
+        "Leave Steam Launch Options empty for GPU — Metis session offload handles hybrid routing.",
     )));
-    intro.set_xalign(0.0);
-    intro.set_wrap(true);
-    intro.add_css_class("metis-settings-hint");
-    intro.set_margin_bottom(10);
-    outer.append(&intro);
-
-    let steps = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    for line in [
-        "1. Detect hybrid GPU and Steam install",
-        "2. Apply Flatpak gaming overrides (--device=all, network, Wayland/Pulse where needed)",
-        "3. Install ~/.local/share/metis/bin/launch-steam",
-        "4. Reload compositor gaming config",
-    ] {
-        let row = gtk::Label::new(Some(line));
-        row.set_xalign(0.0);
-        row.add_css_class("metis-settings-hint");
-        steps.append(&row);
-    }
-    outer.append(&steps);
-
-    let status = gtk::Label::new(Some(&tr("Click Start to run the optimizer.")));
     status.set_xalign(0.0);
     status.set_wrap(true);
     status.add_css_class("metis-settings-value");
-    status.set_margin_top(12);
+    status.set_margin_top(8);
     outer.append(&status);
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.set_halign(gtk::Align::End);
     actions.set_margin_top(16);
-    let close_btn = gtk::Button::with_label(&tr("Close"));
-    close_btn.add_css_class("metis-settings-secondary");
-    let start_btn = gtk::Button::with_label(&tr("Start setup"));
-    start_btn.add_css_class("suggested-action");
-    actions.append(&close_btn);
-    actions.append(&start_btn);
+    let back_btn = gtk::Button::with_label(&tr("Back"));
+    back_btn.add_css_class("metis-settings-secondary");
+    let skip_btn = gtk::Button::with_label(&tr("Skip"));
+    skip_btn.add_css_class("metis-settings-secondary");
+    let next_btn = gtk::Button::with_label(&tr("Next"));
+    next_btn.add_css_class("suggested-action");
+    actions.append(&back_btn);
+    actions.append(&skip_btn);
+    actions.append(&next_btn);
     outer.append(&actions);
 
     win.set_child(Some(&ui::dialog_sheet(&outer)));
@@ -586,71 +733,417 @@ fn show_gaming_setup_dialog(
         });
     }
 
-    let (status_tx, status_rx) = mpsc::channel::<String>();
-
-    let close_dialog = {
+    let close_dialog: Rc<dyn Fn()> = Rc::new({
         let win = win.clone();
         move || {
             GAMING_SETUP_DIALOG.with(|slot| *slot.borrow_mut() = None);
             win.close();
         }
-    };
-
+    });
     header_close.connect_clicked({
         let close_dialog = close_dialog.clone();
         move |_| close_dialog()
     });
-    close_btn.connect_clicked(move |_| close_dialog());
 
+    let step = Rc::new(Cell::new(0u32));
+    let busy = Rc::new(Cell::new(false));
+    let need_nvidia = nvidia_gpu_present() && !metis_gaming::detect::nvidia_driver_loaded();
+
+    let refresh_step: Rc<dyn Fn()> = Rc::new({
+        let step_label = step_label.clone();
+        let body = body.clone();
+        let next_btn = next_btn.clone();
+        let back_btn = back_btn.clone();
+        let skip_btn = skip_btn.clone();
+        let step = step.clone();
+        move || {
+            let i = step.get();
+            let last = wizard_finish_step(need_nvidia);
+            let (title, text, next_label) = wizard_step_copy(i, need_nvidia);
+            step_label.set_text(&title);
+            body.set_text(&text);
+            next_btn.set_label(&next_label);
+            back_btn.set_sensitive(i > 0);
+            skip_btn.set_visible(i < last);
+        }
+    });
+    refresh_step();
+
+    enum WizardMsg {
+        Status(String),
+        Advance,
+    }
+    let (wiz_tx, wiz_rx) = mpsc::channel::<WizardMsg>();
     {
         let status = status.clone();
-        let start_btn = start_btn.clone();
+        let busy = busy.clone();
+        let next_btn = next_btn.clone();
+        let skip_btn = skip_btn.clone();
+        let step = step.clone();
+        let refresh_step = refresh_step.clone();
+        let close_dialog = close_dialog.clone();
+        let sections = sections.clone();
+        let ui_tx = ui_tx.clone();
         glib::timeout_add_local(Duration::from_millis(100), move || {
-            while let Ok(msg) = status_rx.try_recv() {
-                status.set_text(&msg);
-                start_btn.set_sensitive(true);
+            while let Ok(msg) = wiz_rx.try_recv() {
+                match msg {
+                    WizardMsg::Status(text) => {
+                        status.set_text(&text);
+                        busy.set(false);
+                        next_btn.set_sensitive(true);
+                        skip_btn.set_sensitive(true);
+                    }
+                    WizardMsg::Advance => {
+                        let i = step.get();
+                        let last = wizard_finish_step(need_nvidia);
+                        if i >= last {
+                            let _ = metis_config::mark_gaming_setup_complete();
+                            metis_gaming::session::request_reload();
+                            sections.reboot_banner.set_visible(nvidia_reboot_required());
+                            spawn_health_check(ui_tx.clone());
+                            close_dialog();
+                        } else {
+                            step.set(i + 1);
+                            refresh_step();
+                        }
+                    }
+                }
             }
             glib::ControlFlow::Continue
         });
     }
 
-    start_btn.connect_clicked({
-        let status_tx = status_tx.clone();
-        let ui_tx = ui_tx.clone();
+    back_btn.connect_clicked({
+        let step = step.clone();
+        let refresh_step = refresh_step.clone();
+        let busy = busy.clone();
+        move |_| {
+            if busy.get() {
+                return;
+            }
+            let i = step.get();
+            if i > 0 {
+                step.set(i - 1);
+                refresh_step();
+            }
+        }
+    });
+
+    skip_btn.connect_clicked({
+        let wiz_tx = wiz_tx.clone();
+        let busy = busy.clone();
+        move |_| {
+            if busy.get() {
+                return;
+            }
+            let _ = wiz_tx.send(WizardMsg::Advance);
+        }
+    });
+
+    next_btn.connect_clicked({
+        let step = step.clone();
+        let busy = busy.clone();
+        let wiz_tx = wiz_tx.clone();
+        let parent = parent.clone();
+        let skip_btn = skip_btn.clone();
+        let status = status.clone();
         move |btn| {
+            if busy.get() {
+                return;
+            }
+            let i = step.get();
+            busy.set(true);
             btn.set_sensitive(false);
-            let _ = status_tx.send("Running Flatpak optimizer and GPU setup…".into());
-            let status_tx = status_tx.clone();
-            let ui_tx = ui_tx.clone();
-            std::thread::spawn(move || {
-                let flatpak = metis_gaming::optimize_flatpak_gaming();
-                let launcher = metis_gaming::ensure_steam_launcher();
-                let _ = metis_config::mark_gaming_setup_complete();
-                metis_gaming::session::request_reload();
-                let msg = match (&flatpak, &launcher) {
-                    (Ok(results), Ok(path)) if results.is_empty() => {
-                        format!(
-                            "Setup complete. Launcher wrapper: {}. No Flatpak Steam/Lutris/Heroic installs detected — that is normal if you use native packages instead.",
-                            path.display()
-                        )
-                    }
-                    (Ok(results), Ok(path)) => {
-                        let n = results.iter().filter(|r| r.applied).count();
-                        format!(
-                            "Setup complete — optimized {n} Flatpak app(s). Launcher: {}",
-                            path.display()
-                        )
-                    }
-                    (Err(err), _) => format!("Flatpak optimize failed: {err}"),
-                    (_, Err(err)) => format!("Setup partial — launcher write failed: {err}"),
-                };
-                let _ = status_tx.send(msg);
-                spawn_health_check(ui_tx);
-            });
+            skip_btn.set_sensitive(false);
+            let wiz_tx = wiz_tx.clone();
+            let skip_btn = skip_btn.clone();
+            match wizard_step_action(i, need_nvidia) {
+                WizardAction::Background(task) => {
+                    status.set_text(&tr("Working…"));
+                    std::thread::spawn(move || {
+                        let msg = task();
+                        let _ = wiz_tx.send(WizardMsg::Status(msg));
+                        let _ = wiz_tx.send(WizardMsg::Advance);
+                    });
+                }
+                WizardAction::NvidiaConsent => {
+                    busy.set(false);
+                    btn.set_sensitive(true);
+                    skip_btn.set_sensitive(true);
+                    show_nvidia_consent_dialog(&parent, {
+                        let wiz_tx = wiz_tx.clone();
+                        let busy = busy.clone();
+                        let btn = btn.clone();
+                        let skip_btn = skip_btn.clone();
+                        move || {
+                            busy.set(true);
+                            btn.set_sensitive(false);
+                            skip_btn.set_sensitive(false);
+                            let wiz_tx = wiz_tx.clone();
+                            std::thread::spawn(move || {
+                                let msg = match install_nvidia_drivers() {
+                                    Ok(m) => m,
+                                    Err(e) => e,
+                                };
+                                let _ = wiz_tx.send(WizardMsg::Status(msg));
+                                let _ = wiz_tx.send(WizardMsg::Advance);
+                            });
+                        }
+                    });
+                }
+            }
         }
     });
 
     win.present();
+}
+
+#[derive(Clone, Copy)]
+enum WizardAction {
+    Background(fn() -> String),
+    NvidiaConsent,
+}
+
+/// Index of the final Flatpak / finish step.
+fn wizard_finish_step(need_nvidia: bool) -> u32 {
+    if need_nvidia {
+        6
+    } else {
+        5
+    }
+}
+
+fn wizard_step_copy(step: u32, need_nvidia: bool) -> (String, String, String) {
+    match step {
+        0 => (
+            tr("Step 1 — Steam"),
+            tr(
+                "Install Steam if missing. Native steam-installer is preferred when \
+                 steam_prefer_native is on; otherwise Flatpak Steam.",
+            ),
+            tr("Install / check Steam"),
+        ),
+        1 => (
+            tr("Step 2 — Vulkan"),
+            tr(
+                "Install mesa-vulkan-drivers (64-bit) and mesa-vulkan-drivers:i386 for Proton. \
+                 Leave per-game Launch Options empty for GPU — Metis offloads hybrid sessions.",
+            ),
+            tr("Fix Vulkan"),
+        ),
+        2 => (
+            tr("Step 3 — Controllers"),
+            tr("Install steam-devices udev rules and add your user to the input group."),
+            tr("Fix controllers"),
+        ),
+        3 => (
+            tr("Step 4 — GameMode"),
+            tr("Install GameMode so Metis can register game sessions with gamemoded."),
+            tr("Install GameMode"),
+        ),
+        4 => (
+            tr("Step 5 — GPU mode"),
+            tr("Confirm graphics mode Auto (desktop on iGPU, games on discrete when present)."),
+            tr("Set Auto"),
+        ),
+        5 if need_nvidia => (
+            tr("Step 6 — NVIDIA drivers"),
+            tr(
+                "Install recommended proprietary drivers via ubuntu-drivers (admin password). \
+                 A reboot is required afterward. Never runs silently at login.",
+            ),
+            tr("Install drivers…"),
+        ),
+        s if s == wizard_finish_step(need_nvidia) => (
+            tr(if need_nvidia {
+                "Step 7 — You're ready"
+            } else {
+                "Step 6 — You're ready"
+            }),
+            tr(
+                "Apply Flatpak gaming overrides and launcher wrapper. You're ready to play — \
+                 GPU Launch Options stay empty; Metis session offload handles hybrid routing.",
+            ),
+            tr("Finish setup"),
+        ),
+        _ => (
+            tr("Gaming setup"),
+            tr("Follow the steps to finish gaming setup."),
+            tr("Next"),
+        ),
+    }
+}
+
+fn wizard_step_action(step: u32, need_nvidia: bool) -> WizardAction {
+    match step {
+        0 => WizardAction::Background(|| match auto_fix_item("steam") {
+            Ok(m) => m,
+            Err(e) => e,
+        }),
+        1 => WizardAction::Background(|| {
+            let mut notes = Vec::new();
+            match auto_fix_item("mesa_vulkan") {
+                Ok(m) => notes.push(m),
+                Err(e) => notes.push(e),
+            }
+            match auto_fix_item("vulkan_i386") {
+                Ok(m) => notes.push(m),
+                Err(e) => notes.push(e),
+            }
+            notes.join(" · ")
+        }),
+        2 => WizardAction::Background(|| {
+            let mut notes = Vec::new();
+            match auto_fix_item("steam_devices") {
+                Ok(m) => notes.push(m),
+                Err(e) => notes.push(e),
+            }
+            match auto_fix_item("input_group") {
+                Ok(m) => notes.push(m),
+                Err(e) => notes.push(e),
+            }
+            notes.join(" · ")
+        }),
+        3 => WizardAction::Background(|| match auto_fix_item("gamemode") {
+            Ok(m) => m,
+            Err(e) => e,
+        }),
+        4 => WizardAction::Background(|| {
+            let mut cfg = load_gaming_config();
+            cfg.graphics_mode = GraphicsMode::Auto;
+            match save_gaming_config(&cfg) {
+                Ok(()) => {
+                    metis_gaming::session::request_reload();
+                    "Graphics mode set to Auto".into()
+                }
+                Err(e) => format!("Could not save gaming.json: {e}"),
+            }
+        }),
+        5 if need_nvidia => WizardAction::NvidiaConsent,
+        s if s == wizard_finish_step(need_nvidia) => WizardAction::Background(|| {
+            let mut notes = Vec::new();
+            match metis_gaming::optimize_flatpak_gaming() {
+                Ok(results) if results.is_empty() => {
+                    notes.push("No Flatpak gaming apps to optimize".into());
+                }
+                Ok(results) => {
+                    notes.push(format!("Optimized {} Flatpak app(s)", results.len()));
+                }
+                Err(err) => notes.push(format!("Flatpak optimize failed: {err}")),
+            }
+            match metis_gaming::ensure_steam_launcher() {
+                Ok(path) => notes.push(format!("Launcher: {}", path.display())),
+                Err(err) => notes.push(format!("Launcher: {err}")),
+            }
+            notes.join(" · ")
+        }),
+        _ => WizardAction::Background(|| "Done".into()),
+    }
+}
+
+fn show_nvidia_consent_dialog(parent: &gtk::Window, on_confirm: impl Fn() + 'static) {
+    let title = tr("Install recommended NVIDIA drivers?");
+    let dialog = gtk::Window::builder()
+        .title(&title)
+        .modal(true)
+        .transient_for(parent)
+        .resizable(false)
+        .default_width(480)
+        .build();
+    dialog.add_css_class("metis-settings-window");
+
+    let root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(20)
+        .margin_bottom(20)
+        .margin_start(24)
+        .margin_end(24)
+        .build();
+
+    let heading = gtk::Label::new(Some(&title));
+    heading.set_xalign(0.0);
+    heading.add_css_class("metis-settings-section-title");
+    root.append(&heading);
+
+    let body = gtk::Label::new(Some(&tr(
+        "Metis will run ubuntu-drivers install (recommended package only) after you approve \
+         with your admin password. A reboot is required afterward. Matching 32-bit NVIDIA GL \
+         packages are installed best-effort when the driver series can be detected.",
+    )));
+    body.set_wrap(true);
+    body.set_xalign(0.0);
+    body.add_css_class("metis-settings-hint");
+    root.append(&body);
+
+    let btn_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::End)
+        .build();
+    let cancel = gtk::Button::with_label(&tr("Cancel"));
+    cancel.add_css_class("metis-settings-secondary");
+    let confirm = gtk::Button::with_label(&tr("Install drivers"));
+    confirm.add_css_class("suggested-action");
+    btn_row.append(&cancel);
+    btn_row.append(&confirm);
+    root.append(&btn_row);
+
+    dialog.set_child(Some(&ui::dialog_sheet(&root)));
+
+    cancel.connect_clicked({
+        let dialog = dialog.clone();
+        move |_| dialog.close()
+    });
+    confirm.connect_clicked({
+        let dialog = dialog.clone();
+        move |_| {
+            dialog.close();
+            on_confirm();
+        }
+    });
+
+    dialog.present();
+}
+
+fn refresh_steam_paths_list(sections: &Rc<Sections>) {
+    while let Some(child) = sections.steam_paths_list.first_child() {
+        sections.steam_paths_list.remove(&child);
+    }
+    let cfg = load_gaming_config();
+    if cfg.extra_steam_paths.is_empty() {
+        let empty = gtk::Label::new(Some(&tr("No extra library paths configured.")));
+        empty.set_xalign(0.0);
+        empty.add_css_class("metis-settings-hint");
+        sections.steam_paths_list.append(&empty);
+        return;
+    }
+    for path in cfg.extra_steam_paths {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.add_css_class("metis-settings-row");
+        let label = gtk::Label::new(Some(&path));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        row.append(&label);
+        let remove = gtk::Button::with_label(&tr("Remove"));
+        remove.add_css_class("metis-settings-secondary");
+        let path_rm = path.clone();
+        let sections_rm = Rc::clone(sections);
+        remove.connect_clicked(move |_| {
+            let mut cfg = load_gaming_config();
+            cfg.extra_steam_paths.retain(|p| p != &path_rm);
+            if save_gaming_config(&cfg).is_ok() {
+                crate::runtime::reload_gaming_async();
+                refresh_steam_paths_list(&sections_rm);
+                sections_rm.status_text.set_text(&tr(
+                    "Path removed — run Optimize Flatpak Steam to update overrides.",
+                ));
+            }
+        });
+        row.append(&remove);
+        sections.steam_paths_list.append(&row);
+    }
 }
 
 fn connect_switch_persist(
@@ -695,6 +1188,7 @@ fn apply_health_check(
     check: &HealthCheck,
     ui_tx: mpsc::Sender<GamingUiEvent>,
 ) {
+    sections.reboot_banner.set_visible(nvidia_reboot_required());
     let sig = health_signature(check);
     if sig == sections.last_health_sig.get() {
         update_health_summary(sections, check);
@@ -765,6 +1259,34 @@ fn apply_health_check(
                 }
             });
             actions.append(&fix);
+        } else if item.id == "nvidia_driver"
+            && matches!(item.severity, HealthSeverity::Error)
+            && !item.detail.contains("reboot")
+        {
+            let install = gtk::Button::with_label(&tr("Install…"));
+            install.set_tooltip_text(Some(&tr(
+                "Install recommended NVIDIA drivers (asks for confirmation and password)",
+            )));
+            let ui_tx = ui_tx.clone();
+            install.connect_clicked(move |btn| {
+                let Some(parent) = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok()) else {
+                    return;
+                };
+                let btn = btn.clone();
+                let ui_tx = ui_tx.clone();
+                show_nvidia_consent_dialog(&parent, move || {
+                    btn.set_sensitive(false);
+                    let ui_tx = ui_tx.clone();
+                    std::thread::spawn(move || {
+                        let summary = match install_nvidia_drivers() {
+                            Ok(msg) => msg,
+                            Err(err) => err,
+                        };
+                        let _ = ui_tx.send(GamingUiEvent::FixDone { summary });
+                    });
+                });
+            });
+            actions.append(&install);
         }
         if let Some(hint) = item.fix_hint.as_ref() {
             let copy = gtk::Button::with_label(&tr("Copy command"));

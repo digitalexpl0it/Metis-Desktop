@@ -82,4 +82,16 @@
     <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
     <annotate key="org.freedesktop.policykit.exec.argv1">pk-add-input-group</annotate>
   </action>
+
+  <action id="org.metis.software.ubuntu-drivers-install">
+    <description>Install recommended NVIDIA drivers via ubuntu-drivers</description>
+    <message>Authentication is required to install recommended GPU drivers</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-ubuntu-drivers-install</annotate>
+  </action>
 </policyconfig>

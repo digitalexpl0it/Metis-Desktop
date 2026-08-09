@@ -426,25 +426,35 @@ Flatpak setup in `~/.config/metis/gaming.json` instead of env-var recipes:
 - **Auto GameMode** — registers detected game PIDs with `gamemoded` when installed.
 - **Flatpak GPU env** — applies NVIDIA/Mesa offload vars to Steam, Lutris, and Heroic
   via idempotent `flatpak override` (state in `gaming-flatpak.json`).
-- **Extra Steam library mounts** — optional `extra_steam_paths` in `gaming.json`
-  (string array). Each path must exist as a directory and resolve under `$HOME`,
-  `/mnt`, `/media`, or `/run/media` (`~` expands via `$HOME` only). Invalid
-  entries are dropped on load; survivors are passed to Flatpak Steam as
-  `--filesystem`. No Settings UI yet — edit the JSON by hand, then run
-  **Optimize for gaming** or `metis-cmd optimize-gaming`.
-- **Optimize for gaming** — one-click health check + Flatpak fixes.
-- **First-run wizard** — optional Gaming step in onboarding; re-run from Settings.
+- **Extra Steam library mounts** — Settings → Gaming → **Steam library paths**
+  (or `extra_steam_paths` in `gaming.json`). Each path must exist as a directory
+  and resolve under `$HOME`, `/mnt`, `/media`, or `/run/media` (`~` expands via
+  `$HOME` only). Invalid entries are dropped on load; survivors are passed to
+  Flatpak Steam as `--filesystem`. After adding paths, run **Optimize Flatpak
+  Steam** (or **Optimize now**).
+- **MangoHud / Gamescope (Metis launches only)** — optional toggles in
+  `gaming.json` / Settings → Gaming. When Metis starts Steam or Big Picture and
+  the binary is on `PATH`, Metis sets `MANGOHUD=1` or prefixes `gamescope --`.
+  These never write Steam Properties or Launch Options.
+- **Optimize for gaming** — Flatpak overrides + input-group Fix.
+- **Run gaming setup** — stepped wizard: Steam → Vulkan → controllers →
+  GameMode → GPU mode Auto → NVIDIA consent (when needed) → Flatpak finish.
+- **First-run wizard** — optional Gaming step in onboarding; same messaging;
+  use Settings → Gaming Fix / setup for missing pieces (no silent driver install).
 
 Flatpak Steam launches through `~/.local/share/metis/bin/launch-steam` when the
 Flatpak is installed (Big Picture and menu entries use it automatically). Runtime
 reload: `metis-cmd reload-gaming`; optimize: `metis-cmd optimize-gaming`.
 
-**What Metis does not install automatically:** Steam, GPU drivers, 32-bit Vulkan
-(`mesa-vulkan-drivers:i386`), GameMode, or PipeWire. Settings → Gaming detects
-these gaps and shows install commands. Run **Optimize now** or **Run gaming setup**
-for Flatpak overrides and GPU routing only. If you use **native** Steam (not
-Flatpak), **Run gaming setup** may report that no Flatpak gaming apps were found —
-that is expected; the launcher wrapper and compositor GPU routing still apply.
+**What Metis installs (with your consent):** allowlisted apt packages via health
+**Fix** (Steam, Mesa Vulkan amd64/`i386`, `steam-devices`, GameMode, PipeWire,
+input group) and an explicit NVIDIA path (`ubuntu-drivers install` after a
+confirm dialog + admin password). A reboot banner appears until the NVIDIA
+module loads. Drivers are never installed at session start.
+
+**What Steam / Proton own:** game installs, Proton versions, Steam Input, and
+per-title Launch Options. Leave GPU Launch Options empty on hybrid laptops —
+Metis session offload already sets PRIME / `DRI_PRIME` when unset.
 
 **Controllers & Steam Input.** Games read `/dev/input/event*` directly (SDL,
 Proton, Steam Input) — Metis does **not** grab evdev devices, so gamepads,
@@ -469,7 +479,9 @@ Wayland idle-inhibit protocol and the `org.freedesktop.ScreenSaver` /
 screen will not blank and the machine will not auto-suspend mid-game. For
 sustained performance, pick a performance profile in *Settings → Power*.
 
-**Gaming polish (optional).** Add these as Steam launch-option prefixes per game:
+**Gaming polish (optional).** Prefer Metis Settings toggles for MangoHud /
+Gamescope on Metis-launched Steam / Big Picture. For a single title only, you
+can still add Steam launch-option prefixes:
 
 ```text
 gamemoderun %command%                         # sudo apt install gamemode
@@ -1188,7 +1200,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `startup.json` | Session startup apps: master enable + desktop ids (empty by default; Settings → Startup) |
 | `remote.json` | Desktop sharing: enabled, backend (`gnome_rdp` default / `rustdesk`), auto-start, LAN-only + firewall state |
 | `dashboard.json` | Control Center: enabled, widgets, height %, refresh, confirm-before-kill, process monitor |
-| `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, optional `extra_steam_paths` |
+| `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, `extra_steam_paths`, Metis MangoHud/Gamescope toggles |
 | `gaming-flatpak.json` | Record of applied Flatpak gaming overrides (managed by `metis-gaming`) |
 | `outputs.json` | Per-output scale, resolution/refresh, arrangement (`layout_x`/`layout_y`), `display_mode` / `mirror_source`, VRR / HDR toggles, night-light prefs |
 

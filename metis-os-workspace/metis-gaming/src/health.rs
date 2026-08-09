@@ -1,11 +1,14 @@
 //! Gaming health checks with optional auto-fix actions.
 
+use std::path::Path;
+
 use metis_config::load_gaming_config;
 
 use crate::detect::{
-    detect_steam, flatpak_has_app, gamemode_installed, hybrid_gpu_summary,
-    i386_vulkan_likely_missing, nvidia_driver_loaded, pipewire_or_pulse_available,
-    user_in_input_group, SteamInstall,
+    binary_in_path, detect_steam, flatpak_has_app, gamemode_installed, hybrid_gpu_summary,
+    i386_vulkan_likely_missing, mark_nvidia_reboot_required, mesa_vulkan_amd64_missing,
+    nvidia_driver_loaded, nvidia_gpu_present, nvidia_reboot_required, pipewire_or_pulse_available,
+    steam_devices_installed, user_in_input_group, SteamInstall,
 };
 use crate::flatpak::{flatpak_steam_needs_optimize, optimize_flatpak_gaming};
 
@@ -44,11 +47,13 @@ pub fn run_health_check() -> HealthCheck {
             label: "Steam".into(),
             severity: HealthSeverity::Info,
             detail: "Not detected".into(),
-            fix_hint: Some(
+            fix_hint: Some(if cfg.steam_prefer_native {
+                "sudo apt install -y steam-installer   # or Flatpak: flathub com.valvesoftware.Steam"
+                    .into()
+            } else {
                 "flatpak install -y flathub com.valvesoftware.Steam   # or: sudo apt install steam-installer"
-                    .into(),
-            ),
-            // Prefer Flatpak when available; otherwise apt steam-installer.
+                    .into()
+            }),
             auto_fixable: true,
         }),
     }
@@ -66,6 +71,19 @@ pub fn run_health_check() -> HealthCheck {
         });
     } else if flatpak_has_app("com.valvesoftware.Steam") {
         items.push(ok("flatpak_steam", "Flatpak Steam overrides", "Optimized"));
+    }
+
+    if mesa_vulkan_amd64_missing() {
+        items.push(HealthItem {
+            id: "mesa_vulkan",
+            label: "Mesa Vulkan (64-bit)".into(),
+            severity: HealthSeverity::Error,
+            detail: "mesa-vulkan-drivers not detected".into(),
+            fix_hint: Some("sudo apt install -y mesa-vulkan-drivers".into()),
+            auto_fixable: true,
+        });
+    } else {
+        items.push(ok("mesa_vulkan", "Mesa Vulkan (64-bit)", "OK"));
     }
 
     if i386_vulkan_likely_missing() {
@@ -94,6 +112,21 @@ pub fn run_health_check() -> HealthCheck {
         items.push(ok("gamemode", "GameMode", "Available"));
     }
 
+    if !steam_devices_installed()
+        && (binary_in_path("steam") || flatpak_has_app("com.valvesoftware.Steam"))
+    {
+        items.push(HealthItem {
+            id: "steam_devices",
+            label: "Controller udev rules".into(),
+            severity: HealthSeverity::Warn,
+            detail: "steam-devices package not detected".into(),
+            fix_hint: Some("sudo apt install -y steam-devices".into()),
+            auto_fixable: true,
+        });
+    } else if steam_devices_installed() {
+        items.push(ok("steam_devices", "Controller udev rules", "OK"));
+    }
+
     if !user_in_input_group() {
         items.push(HealthItem {
             id: "input_group",
@@ -107,24 +140,39 @@ pub fn run_health_check() -> HealthCheck {
         items.push(ok("input_group", "Input group", "OK"));
     }
 
-    if let Some(label) = hybrid_gpu_summary() {
-        if label.to_lowercase().contains("nvidia") && !nvidia_driver_loaded() {
+    if nvidia_gpu_present() {
+        if nvidia_driver_loaded() {
+            items.push(ok("nvidia_driver", "NVIDIA driver", "Loaded"));
+        } else if nvidia_reboot_required() {
+            items.push(HealthItem {
+                id: "nvidia_driver",
+                label: "NVIDIA driver".into(),
+                severity: HealthSeverity::Error,
+                detail: "Installed — reboot required before the driver loads".into(),
+                fix_hint: Some("reboot".into()),
+                auto_fixable: false,
+            });
+        } else {
             items.push(HealthItem {
                 id: "nvidia_driver",
                 label: "NVIDIA driver".into(),
                 severity: HealthSeverity::Error,
                 detail: "NVIDIA GPU without proprietary driver".into(),
-                // Interactive / reboot-heavy — copy only, no blind Fix.
+                // Consent-only Install path in Settings — never silent / session-start.
                 fix_hint: Some("sudo ubuntu-drivers install".into()),
                 auto_fixable: false,
             });
-        } else {
-            items.push(ok(
-                "hybrid_gpu",
-                "Hybrid GPU",
-                &format!("Discrete: {label}"),
-            ));
         }
+    }
+
+    if let Some(label) = hybrid_gpu_summary() {
+        items.push(ok(
+            "hybrid_gpu",
+            "Hybrid GPU",
+            &format!("Discrete: {label}"),
+        ));
+    } else if nvidia_gpu_present() {
+        items.push(ok("hybrid_gpu", "GPU layout", "Single NVIDIA GPU"));
     } else {
         items.push(ok("hybrid_gpu", "Hybrid GPU", "Single GPU"));
     }
@@ -157,11 +205,59 @@ pub fn auto_fix_item(id: &str) -> Result<String, String> {
         }
         "input_group" => add_user_to_input_group(),
         "gamemode" => pkexec_apt_install(&["gamemode"], "GameMode"),
+        "mesa_vulkan" => pkexec_apt_install(&["mesa-vulkan-drivers"], "Mesa Vulkan drivers"),
         "vulkan_i386" => pkexec_apt_install(&["mesa-vulkan-drivers:i386"], "32-bit Vulkan drivers"),
+        "steam_devices" => pkexec_apt_install(&["steam-devices"], "Steam controller udev rules"),
         "audio" => pkexec_apt_install(&["pipewire-audio"], "PipeWire audio"),
         "steam" => install_steam(),
+        "nvidia_driver" => {
+            Err("NVIDIA drivers require explicit consent — use Install in Settings → Gaming".into())
+        }
         other => Err(format!("no auto-fix for {other}")),
     }
+}
+
+/// Consent-gated NVIDIA install via Polkit (`ubuntu-drivers install` fixed argv).
+pub fn install_nvidia_drivers() -> Result<String, String> {
+    if !nvidia_gpu_present() {
+        return Ok("No NVIDIA GPU detected".into());
+    }
+    if nvidia_driver_loaded() {
+        return Ok("NVIDIA driver is already loaded".into());
+    }
+    if !binary_in_path("pkexec") {
+        return Err("pkexec not found — run: sudo ubuntu-drivers install  (then reboot)".into());
+    }
+    if !binary_in_path("ubuntu-drivers") && !Path::new("/usr/bin/ubuntu-drivers").exists() {
+        return Err("ubuntu-drivers not found — install ubuntu-drivers-common, then retry".into());
+    }
+    let bin = metis_remote_bin();
+    let output = std::process::Command::new("timeout")
+        .args(["--signal=TERM", "--kill-after=5s", "600s"])
+        .arg("pkexec")
+        .arg(&bin)
+        .arg("pk-ubuntu-drivers-install")
+        .output()
+        .map_err(|e| format!("failed to start timeout/pkexec: {e}"))?;
+    if output.status.success() {
+        mark_nvidia_reboot_required();
+        return Ok("NVIDIA drivers installed — reboot required before the driver loads".into());
+    }
+    let code = output.status.code();
+    if code == Some(124) || code == Some(137) {
+        return Err(
+            "Timed out waiting for admin approval or driver install. Retry from Settings → Gaming."
+                .into(),
+        );
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr.trim();
+    Err(if detail.is_empty() {
+        "Could not install NVIDIA drivers (auth cancelled?). Run: sudo ubuntu-drivers install"
+            .into()
+    } else {
+        format!("NVIDIA install failed: {detail}")
+    })
 }
 
 fn install_steam() -> Result<String, String> {
@@ -171,7 +267,16 @@ fn install_steam() -> Result<String, String> {
         }
         SteamInstall::None => {}
     }
-    if crate::detect::binary_in_path("flatpak") {
+    let prefer_native = load_gaming_config().steam_prefer_native;
+    if prefer_native {
+        match pkexec_apt_install(&["steam-installer"], "Steam") {
+            Ok(msg) => return Ok(msg),
+            Err(err) => {
+                tracing::warn!(%err, "native Steam install failed; trying Flatpak");
+            }
+        }
+    }
+    if binary_in_path("flatpak") {
         let status = std::process::Command::new("flatpak")
             .args(["install", "-y", "flathub", "com.valvesoftware.Steam"])
             .status()
@@ -180,16 +285,24 @@ fn install_steam() -> Result<String, String> {
             let _ = optimize_flatpak_gaming();
             return Ok("Installed Flatpak Steam (overrides applied when needed)".into());
         }
-        // Fall through to apt if Flatpak remotes aren't set up.
+        if prefer_native {
+            return Err(
+                "Could not install Steam via apt or Flatpak. Run: sudo apt install steam-installer"
+                    .into(),
+            );
+        }
     }
-    pkexec_apt_install(&["steam-installer"], "Steam")
+    if !prefer_native {
+        return pkexec_apt_install(&["steam-installer"], "Steam");
+    }
+    Err("Could not install Steam — install flatpak or run: sudo apt install steam-installer".into())
 }
 
 fn pkexec_apt_install(packages: &[&str], label: &str) -> Result<String, String> {
     if packages.is_empty() {
         return Ok(format!("{label}: nothing to install"));
     }
-    if !crate::detect::binary_in_path("pkexec") {
+    if !binary_in_path("pkexec") {
         return Err(format!(
             "pkexec not found — run: sudo apt install -y {}",
             packages.join(" ")
@@ -214,7 +327,7 @@ fn pkexec_apt_install(packages: &[&str], label: &str) -> Result<String, String> 
 
 fn metis_remote_bin() -> String {
     const INSTALLED: &str = "/usr/bin/metis-remote";
-    if std::path::Path::new(INSTALLED).is_file() {
+    if Path::new(INSTALLED).is_file() {
         return INSTALLED.into();
     }
     if let Ok(exe) = std::env::current_exe() {
@@ -236,7 +349,7 @@ fn add_user_to_input_group() -> Result<String, String> {
     if user_in_input_group() {
         return Ok("Already in the input group".into());
     }
-    if !crate::detect::binary_in_path("pkexec") {
+    if !binary_in_path("pkexec") {
         return Err("pkexec not found — run: sudo usermod -aG input $USER  (then log out)".into());
     }
     let bin = metis_remote_bin();
