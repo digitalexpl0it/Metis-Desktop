@@ -7,6 +7,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-08-08]
 
+### Fixed
+
+- **X11 borderless games off-screen** — game windows that grow large/undecorated
+  re-center or go fullscreen instead of clipping under the edge bar. Steam/Lutris
+  splash windows are excluded from that path (they animate size while loading).
+  Proton/`steam_app_*` defaults request fullscreen on map.
+
 ### Added
 
 - **Phase 19 — Gaming Setup UX** — guided Steam / Vulkan / controllers /

@@ -289,7 +289,14 @@ impl MetisState {
             let id = self.windows.id_for_window(window);
             let win_scale = self.window_output_scale(window, output_scale);
             let elem_loc = self.space.element_location(window).unwrap_or_default();
-            let geo_off = window.geometry().loc;
+            // X11 surfaces report size-only geometry (loc is typically 0). A stale
+            // non-zero client geometry inset shifts borderless games off-screen —
+            // ignore the offset for XWayland windows.
+            let geo_off = if window.x11_surface().is_some() {
+                Point::from((0, 0))
+            } else {
+                window.geometry().loc
+            };
             // One-shot diagnostic when a fullscreen window is not flush at its
             // output origin. The persistent culprit for games like Hytale is a
             // *client-reported* window geometry with a negative origin (a stale

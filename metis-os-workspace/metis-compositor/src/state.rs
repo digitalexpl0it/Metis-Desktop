@@ -109,6 +109,127 @@ fn title_looks_like_splash(title: &str) -> bool {
     t.contains("splash") || t.starts_with("frmce")
 }
 
+/// Near-monitor size that should become true fullscreen (flush to output origin).
+pub(crate) fn x11_borderless_fullscreen_intent(
+    output: Rectangle<i32, Logical>,
+    w: i32,
+    h: i32,
+    undecorated: bool,
+) -> bool {
+    if w <= 0 || h <= 0 || output.size.w <= 0 || output.size.h <= 0 {
+        return false;
+    }
+    if w >= output.size.w && h >= output.size.h {
+        return true;
+    }
+    let ow = output.size.w as f32;
+    let oh = output.size.h as f32;
+    let fw = w as f32 / ow;
+    let fh = h as f32 / oh;
+    if undecorated {
+        // Borderless games: ~85%+ of the panel, or one axis fills with the other
+        // still substantial (letterboxed / ultrawide).
+        (fw >= 0.85 && fh >= 0.85) || (fw >= 0.95 && fh >= 0.50) || (fh >= 0.95 && fw >= 0.50)
+    } else {
+        fw >= 0.97 && fh >= 0.97
+    }
+}
+
+/// Large enough undecorated surface that a stale top-left would clip off-screen
+/// when the client grows — re-center on the output (keep client size).
+pub(crate) fn x11_large_undecorated_float(output: Rectangle<i32, Logical>, w: i32, h: i32) -> bool {
+    if w <= 0 || h <= 0 || output.size.w <= 0 || output.size.h <= 0 {
+        return false;
+    }
+    let fw = w as f32 / output.size.w as f32;
+    let fh = h as f32 / output.size.h as f32;
+    fw >= 0.45 && fh >= 0.45
+}
+
+/// Steam / Lutris / Heroic splash & main windows — must NOT get game borderless
+/// auto-fullscreen or resize-loop re-centering (they animate size while loading).
+pub(crate) fn x11_is_game_launcher(app_id: Option<&str>) -> bool {
+    let Some(raw) = app_id.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let id = raw.to_ascii_lowercase();
+    // Actual games — never treat as the store/launcher.
+    if id.starts_with("steam_app_")
+        || id.contains(".exe")
+        || id.contains("proton")
+        || id == "hytaleclient"
+    {
+        return false;
+    }
+    id == "steam"
+        || id.starts_with("steam.")
+        || id.contains("steamwebhelper")
+        || id.contains("gamepadui")
+        || id.contains("lutris")
+        || id.contains("heroic")
+        || id.contains("bottles")
+        || id.contains("com.valvesoftware.steam")
+}
+
+#[cfg(test)]
+mod borderless_intent_tests {
+    use super::*;
+
+    fn output(w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new(Point::from((0, 0)), Size::from((w, h)))
+    }
+
+    #[test]
+    fn exact_monitor_size_matches() {
+        assert!(x11_borderless_fullscreen_intent(
+            output(1920, 1080),
+            1920,
+            1080,
+            false
+        ));
+    }
+
+    #[test]
+    fn undecorated_near_full_matches() {
+        assert!(x11_borderless_fullscreen_intent(
+            output(1920, 1080),
+            1728,
+            972,
+            true
+        ));
+    }
+
+    #[test]
+    fn undecorated_half_is_large_float() {
+        assert!(!x11_borderless_fullscreen_intent(
+            output(1920, 1080),
+            1280,
+            720,
+            true
+        ));
+        assert!(x11_large_undecorated_float(output(1920, 1080), 1280, 720));
+    }
+
+    #[test]
+    fn small_dialog_does_not_match() {
+        assert!(!x11_borderless_fullscreen_intent(
+            output(1920, 1080),
+            640,
+            480,
+            true
+        ));
+        assert!(!x11_large_undecorated_float(output(1920, 1080), 640, 480));
+    }
+
+    #[test]
+    fn steam_is_launcher_but_steam_app_is_not() {
+        assert!(x11_is_game_launcher(Some("steam")));
+        assert!(x11_is_game_launcher(Some("Steam")));
+        assert!(!x11_is_game_launcher(Some("steam_app_12345")));
+        assert!(!x11_is_game_launcher(Some("hl2.exe")));
+    }
+}
+
 /// Per-output desktop state. Each output (monitor) owns an independent set of
 /// virtual workspaces: its visible grid (`layout`), which workspace is showing
 /// (`active_workspace`), and the hidden workspaces' app tiles (`stashed_app_tiles`).
@@ -5348,10 +5469,22 @@ impl MetisState {
         let rect = if self.floating.contains(&id) {
             // Auto-hide (snapped/maximized) windows map flush under the bar; only
             // ordinary floating windows reserve the titlebar strip above the body.
+            // Borderless / near-fullscreen game floats stay at output origin — the
+            // usable-zone clamp would inset them under the bar and clip the edges.
             let auto_hide = self.auto_hide_titlebar.contains(&id);
             self.windows.target_rect(id).map(|r| {
                 let r = self.recover_offscreen_rect(r);
                 if auto_hide {
+                    r
+                } else if self.rect_is_output_covering(r) {
+                    if let Some(snap) = self.borderless_output_rect_for(id, r.width, r.height, true)
+                    {
+                        snap
+                    } else {
+                        r
+                    }
+                } else if self.x11_keep_on_full_output(id, r) {
+                    // Large undecorated X11 games: do not inset under the edge bar.
                     r
                 } else if self.should_draw_metis_ssd(id) {
                     self.clamp_body_below_bar(r)
@@ -5940,7 +6073,7 @@ impl MetisState {
     }
 
     /// Output a window was opened on (assigned at registration from the pointer).
-    fn launch_output_for(&self, id: u32) -> Option<smithay::output::Output> {
+    pub(crate) fn launch_output_for(&self, id: u32) -> Option<smithay::output::Output> {
         self.windows
             .output_name(id)
             .and_then(|name| self.output_by_name(&name))
@@ -5949,7 +6082,7 @@ impl MetisState {
     }
 
     /// Center a client rect for a window, accounting for SSD chrome insets.
-    fn centered_body_for_window(&self, id: u32, body_w: i32, body_h: i32) -> PixelRect {
+    pub(crate) fn centered_body_for_window(&self, id: u32, body_w: i32, body_h: i32) -> PixelRect {
         if !self.should_draw_metis_ssd(id) {
             let rect = match self.launch_output_for(id) {
                 Some(output) => self.centered_rect_in(&output, body_w, body_h),
@@ -6139,7 +6272,7 @@ impl MetisState {
 
     /// Keep a floating window on-screen. Overlay edge bars do not inset the bounds
     /// (windows may slide underneath); only the top bar reserves space for SSD windows.
-    fn clamp_floating_rect_for(&self, id: u32, rect: PixelRect) -> PixelRect {
+    pub(crate) fn clamp_floating_rect_for(&self, id: u32, rect: PixelRect) -> PixelRect {
         if self.should_draw_metis_ssd(id) {
             self.clamp_floating_rect(rect)
         } else {
@@ -8808,6 +8941,13 @@ impl MetisState {
             // under a titlebar inset.
             tracing::info!(id, %title, "x11: splash window — natural size placement");
         }
+        // Match Wayland: game-rules can request true-fullscreen once mapped.
+        let rule = self
+            .game_rules
+            .evaluate(app_id.as_deref(), Some(title.as_str()));
+        if rule.fullscreen && !is_splash {
+            self.pending_game_fullscreen.insert(id);
+        }
         self.place_x11_window(id, window.geometry().size, app_id.as_deref(), is_splash);
         self.apply_window_rect(id);
         self.windows.set_ready(id, true);
@@ -8830,12 +8970,17 @@ impl MetisState {
         self.note_window_focus(id);
         self.focus_window_id(id);
         self.event_bus.emit(&CompositorEvent::WindowFocused { id });
+        if self.pending_game_fullscreen.remove(&id) {
+            self.set_fullscreen(id, true, None);
+        }
         self.schedule_redraw();
     }
 
     /// Floating placement for a freshly mapped X11 window: restore saved geometry
     /// when the app has been seen before, otherwise center the client's natural
     /// size under the bar. Splash windows always keep their natural size.
+    /// Near-fullscreen / borderless game sizes map flush to the output origin so
+    /// they are not inset under the edge bar and clipped.
     fn place_x11_window(
         &mut self,
         id: u32,
@@ -8859,18 +9004,6 @@ impl MetisState {
             self.windows.set_placement_chosen(id, true);
             return;
         }
-        if let Some(app_id) = app_id {
-            if let Some(saved) = self.window_state.get(app_id) {
-                let saved_rect = saved.to_rect();
-                if saved_size_is_usable(saved_rect.width, saved_rect.height) {
-                    let rect = self.restore_body_for_window(id, saved_rect);
-                    self.windows.set_target_rect(id, rect);
-                    self.windows.set_placement_chosen(id, true);
-                    return;
-                }
-                self.window_state.remove(app_id);
-            }
-        }
         // Honor the client's requested size when available — enlarging a splash /
         // dialog to DEFAULT_FLOAT makes toolbar bitmaps tile across a huge window.
         let w = if natural.w > 0 {
@@ -8883,9 +9016,142 @@ impl MetisState {
         } else {
             DEFAULT_FLOAT_H
         };
+        let undecorated = self
+            .windows
+            .get(id)
+            .and_then(|r| r.x11())
+            .map(|x11| !x11.is_decorated())
+            .unwrap_or(false);
+        let is_launcher = x11_is_game_launcher(app_id);
+        // Launchers (Steam splash, etc.) animate size while loading — never force
+        // fullscreen or special output centering or they fight Metis in a loop.
+        if !is_launcher {
+            if let Some(rect) = self.borderless_output_rect_for(id, w, h, undecorated) {
+                tracing::info!(
+                    id,
+                    ?rect,
+                    undecorated,
+                    "x11: borderless/near-fullscreen placement at output origin"
+                );
+                self.windows.set_target_rect(id, rect);
+                self.windows.set_placement_chosen(id, true);
+                self.pending_game_fullscreen.insert(id);
+                return;
+            }
+            if undecorated {
+                if let Some(rect) = self.centered_on_output_for(id, w, h).filter(|_| {
+                    self.launch_output_for(id)
+                        .and_then(|o| self.space.output_geometry(&o))
+                        .is_some_and(|g| x11_large_undecorated_float(g, w, h))
+                }) {
+                    tracing::info!(id, ?rect, "x11: large undecorated float centered on output");
+                    self.windows.set_target_rect(id, rect);
+                    self.windows.set_placement_chosen(id, true);
+                    return;
+                }
+            }
+        }
+        if let Some(app_id) = app_id {
+            if let Some(saved) = self.window_state.get(app_id) {
+                let saved_rect = saved.to_rect();
+                if saved_size_is_usable(saved_rect.width, saved_rect.height) {
+                    // Never restore a stale near-fullscreen save into the usable
+                    // zone — that recreates the clipped borderless-window bug.
+                    if let Some(rect) = self.borderless_output_rect_for(
+                        id,
+                        saved_rect.width,
+                        saved_rect.height,
+                        undecorated,
+                    ) {
+                        self.windows.set_target_rect(id, rect);
+                        self.windows.set_placement_chosen(id, true);
+                        return;
+                    }
+                    let rect = self.restore_body_for_window(id, saved_rect);
+                    self.windows.set_target_rect(id, rect);
+                    self.windows.set_placement_chosen(id, true);
+                    return;
+                }
+                self.window_state.remove(app_id);
+            }
+        }
         let rect = self.centered_body_for_window(id, w, h);
         self.windows.set_target_rect(id, rect);
         self.windows.set_placement_chosen(id, true);
+    }
+
+    /// When `w`×`h` looks like borderless / fake-fullscreen for `id`'s output,
+    /// return that output's full geometry (flush origin). Otherwise `None`.
+    pub(crate) fn borderless_output_rect_for(
+        &self,
+        id: u32,
+        w: i32,
+        h: i32,
+        undecorated: bool,
+    ) -> Option<PixelRect> {
+        let output = self.launch_output_for(id)?;
+        let geo = self.space.output_geometry(&output)?;
+        if !x11_borderless_fullscreen_intent(geo, w, h, undecorated) {
+            return None;
+        }
+        Some(PixelRect {
+            x: geo.loc.x,
+            y: geo.loc.y,
+            width: geo.size.w,
+            height: geo.size.h,
+        })
+    }
+
+    /// Center `w`×`h` on the full output (not the bar usable zone). Used for
+    /// large undecorated game floats so they are not inset under the edge bar.
+    pub(crate) fn centered_on_output_for(&self, id: u32, w: i32, h: i32) -> Option<PixelRect> {
+        let output = self.launch_output_for(id)?;
+        let geo = self.space.output_geometry(&output)?;
+        let width = w.clamp(1, geo.size.w);
+        let height = h.clamp(1, geo.size.h);
+        Some(PixelRect {
+            x: geo.loc.x + (geo.size.w - width) / 2,
+            y: geo.loc.y + (geo.size.h - height) / 2,
+            width,
+            height,
+        })
+    }
+
+    /// Undecorated X11 float large enough that bar-inset clamping would recreate
+    /// the off-screen borderless-game bug.
+    fn x11_keep_on_full_output(&self, id: u32, rect: PixelRect) -> bool {
+        let Some(record) = self.windows.get(id) else {
+            return false;
+        };
+        let Some(x11) = record.x11() else {
+            return false;
+        };
+        if x11.is_decorated() {
+            return false;
+        }
+        let Some(output) = self.launch_output_for(id) else {
+            return false;
+        };
+        let Some(geo) = self.space.output_geometry(&output) else {
+            return false;
+        };
+        x11_large_undecorated_float(geo, rect.width, rect.height)
+    }
+
+    /// True when `rect` already covers (nearly) an entire output — skip bar inset.
+    pub(crate) fn rect_is_output_covering(&self, rect: PixelRect) -> bool {
+        for output in self.space.outputs() {
+            let Some(geo) = self.space.output_geometry(output) else {
+                continue;
+            };
+            if x11_borderless_fullscreen_intent(geo, rect.width, rect.height, true)
+                && (rect.x - geo.loc.x).abs() <= WINDOW_GAP_PX * 2
+                && (rect.y - geo.loc.y).abs() <= WINDOW_GAP_PX * 2
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Handle a client-initiated unmap of an X11 window. This is *deferred*: we hide

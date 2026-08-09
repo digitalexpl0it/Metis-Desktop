@@ -44,31 +44,47 @@ and system configuration.
 
 ```
 .
-├── metis-os-workspace/          # Cargo workspace
-│   ├── assets/                  # Wallpapers, portal registration, session launcher
-│   ├── metis-capture/           # Shared Wayland ext-image-copy-capture client (shell + portal)
-│   ├── metis-compositor/        # Smithay Wayland compositor (winit nested backend for dev)
-│   ├── metis-config/            # Shared config + theme-token types (serde, no GTK)
-│   ├── metis-gaming/            # Flatpak optimizer, health checks, metis-gamingd daemon
-│   ├── metis-grid/              # Window grid / tiling + scrolling layout engine (pure logic)
-│   ├── metis-i18n/              # gettext (shell/settings) + Fluent (compositor) helpers
-│   ├── metis-portal/            # xdg-desktop-portal backend (Settings, Screenshot, ScreenCast)
-│   ├── metis-protocol/          # Shared JSON IPC contracts between compositor and shell
-│   ├── metis-remote/            # Desktop sharing orchestrator (gnome-remote-desktop RDP)
-│   ├── metis-screenshot/        # Screenshot capture helpers
-│   ├── metis-secrets/           # Shared freedesktop Secret Service (oo7) wrapper
-│   ├── metis-settings/          # GTK4 settings app (display, desktop, devices, system)
-│   ├── metis-shell/             # GTK4 layer-shell: edge bar, panels, Task View; `--desktop-widgets` host
-│   ├── metis-viewer/            # Remote desktop viewer client
-│   └── scripts/                 # package-deb.sh + packaging / smoke helpers
+├── install.sh                   # One-shot deps + release install → /usr/local + greeter
+├── flake.nix                    # Nix flake entry (see nix/)
+├── CHANGELOG.md / SECURITY.md / LICENSE
 ├── Screenshots/                 # README showcase images
-└── docs/                        # User guide + development setup
+├── docs/                        # User guide, packaging, i18n, perf, widget schema
+│   ├── USER_GUIDE.md
+│   ├── UBUNTU_DEV.md
+│   ├── PACKAGING.md
+│   ├── I18N.md
+│   ├── PERF_AUDIT.md
+│   ├── WIDGET_PACK_SCHEMA.md
+│   ├── decisions/               # Architecture decision records
+│   └── upstream/                # Upstream blockers (e.g. wayland-rs UAF)
+├── nix/                         # NixOS module + packaging notes
+├── .github/                     # CI workflows + issue templates
+└── metis-os-workspace/          # Cargo workspace (all crates live here)
+    ├── Cargo.toml               # Workspace root
+    ├── TODO.md                  # Detailed roadmap (phases + checklists)
+    ├── assets/                  # Wallpapers, portal registration, session launcher
+    ├── packaging/               # .deb / Arch / polkit policy helpers
+    ├── scripts/                 # package-deb.sh + packaging / smoke helpers
+    ├── metis-capture/           # Shared Wayland ext-image-copy-capture client
+    ├── metis-compositor/        # Smithay Wayland compositor (winit + DRM backends)
+    ├── metis-config/            # Shared config + theme tokens (serde, no GTK)
+    ├── metis-gaming/            # Flatpak optimizer, health checks, metis-gamingd
+    ├── metis-grid/              # Window grid / tiling + scrolling layout (pure logic)
+    ├── metis-i18n/              # gettext (shell/settings) + Fluent (compositor)
+    ├── metis-portal/            # xdg-desktop-portal backend
+    ├── metis-protocol/          # Shared JSON IPC contracts + rate limits
+    ├── metis-remote/            # Desktop sharing + Polkit privileged helpers
+    ├── metis-screenshot/        # Native screenshot / recording helpers
+    ├── metis-secrets/           # Freedesktop Secret Service (oo7) wrapper
+    ├── metis-settings/          # GTK4 settings app
+    ├── metis-shell/             # GTK4 layer-shell bar, panels, Task View, widgets host
+    └── metis-viewer/            # Remote desktop viewer client
 ```
 
 ## Technology stack
 
 - **Language:** Rust (stable), `tokio` async, `serde`/`serde_json` for JSON contracts.
-- **Compositor:** [Smithay](https://github.com/Smithay/smithay) with a `winit` nested backend for development; `calloop` event loop; `image` for wallpaper decode; XWayland for X11 apps.
+- **Compositor:** [Smithay](https://github.com/Smithay/smithay) with a `winit` nested backend for development; DRM/KMS session backend; `calloop` event loop; `image` for wallpaper decode; XWayland for X11 apps.
 - **Shell / UI:** GTK4 with [`gtk4-layer-shell`](https://github.com/wmww/gtk4-layer-shell); `zbus` for the freedesktop notification daemon.
 - **IPC:** JSON over Unix sockets (`metis-protocol`) plus a runtime command file under `$XDG_RUNTIME_DIR/metis/`.
 - **Configuration:** JSON under `~/.config/metis/`.
@@ -193,9 +209,11 @@ Full walkthrough in the **[User Guide](docs/USER_GUIDE.md)**. The essentials:
   Metis Menu, Weather, Network, Calendars, Input, **Shortcuts** (read-only guide;
   edit under Keyboard), Bluetooth, Printers, Power, Sound, **Gaming**,
   **Control Center**, and **Remote access**.
-- **Gaming** — hybrid-GPU routing (`gaming.json`), Flatpak Steam/Lutris/Heroic
-  overrides, health checklist, and `metis-gamingd` for auto performance profile /
-  GameMode while gaming. See the [User Guide — Steam & Proton](docs/USER_GUIDE.md#steam-proton--steamos-class-gaming).
+- **Gaming** — Settings → Gaming: graphics mode, health → Fix, guided **Run gaming
+  setup** wizard (Steam / Vulkan / controllers / GameMode / NVIDIA consent),
+  Flatpak optimize, Steam library path picker, Metis-owned MangoHud / Gamescope
+  toggles (spawn-time only — no Steam VDF writes). Soft isolated X11 for gaming
+  launches. See the [User Guide — Steam & Proton](docs/USER_GUIDE.md#steam-proton--steamos-class-gaming).
 - **Screenshots** — **PrtSc** opens a native Metis overlay (Selection / Full screen /
   Window); **Shift+PrtSc** captures the full screen instantly; **Ctrl+PrtSc** starts in
   Window mode. **Esc** dismisses without capturing. Third-party apps (Flameshot, etc.)
@@ -242,7 +260,7 @@ Other files are created on demand:
 
 | File                   | Created when                       | Purpose                                                                                           |
 | ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `config.json`          | You change a preference            | Active theme (defaults to dark), graphics profile, onboarding state, briefing-on-login            |
+| `config.json`          | You change a preference            | Active theme (defaults to dark), graphics profile, onboarding state, briefing-on-login, XWayland mode |
 | `menu.json`            | You set launcher defaults / pins   | App launcher: terminal + file-manager choices (kitty preferred on auto-detect), pinned apps       |
 | `wallpaper.json`       | You pick a background              | Wallpaper picture / colour / gradient (+ per-output overrides)                                    |
 | `weather.json`         | You configure weather              | Bar weather: unit, auto-detect / IP-geolocation, saved locations                                  |
@@ -255,8 +273,9 @@ Other files are created on demand:
 | `power.json`           | You configure power settings       | Power profile (`powerprofilesctl`), idle blank/suspend, lid-close                                 |
 | `remote.json`          | You configure Remote access        | Live-session RDP sharing via gnome-remote-desktop                                                 |
 | `dashboard.json`       | You configure Control Center       | Enable, widget order, max height %, refresh interval, confirm-before-kill                         |
-| `gaming.json`          | You configure gaming               | Graphics mode, auto performance/GameMode, Flatpak GPU env                                         |
+| `gaming.json`          | You configure gaming               | Graphics mode, auto performance/GameMode, Flatpak GPU env, library paths, Metis launch tweaks     |
 | `gaming-flatpak.json`  | Gaming setup runs                  | Record of applied Flatpak gaming overrides                                                        |
+| `game-rules.json`      | Optional override of defaults      | Float / fullscreen rules for Steam/Proton games (built-ins if absent)                             |
 | `screenshot.json`      | You configure screenshots          | Default mode, pointer toggle, delay, after-capture, save dir                                      |
 | `outputs.json`         | You configure displays             | Per-output scale, resolution/refresh, layout, `display_mode` / `mirror_source`, night-light prefs |
 
@@ -308,16 +327,24 @@ reference.
   **Extension API v1** (2026-07-26): JSON declarative packs under
   `…/metis/widgets/<id>/` (no Electron / scripts / `.so`).
 - **Phase 15 — Session lock / remote / viewer closeout:** **complete** (2026-07-26/27).
-- **Phase 16 — CI / packaging / security baseline:** **complete** (cargo-deny, PR
-  quality gate, trust-boundary tests).
+- **Phase 16 — CI / packaging / security baseline:** **complete** (2026-08-02) —
+  cargo-deny, PR quality gate, trust-boundary tests, command-file allowlist.
 - **Phase 17 — Task View (Super+Tab):** **complete** (2026-08-06) — sticky
   Windows-style overlay with live app cards, workspace shelf, click-to-focus,
   press-and-drag to move, and per-card close.
+- **Phase 18 — Security polish (IPC / isolation):** **A–D complete** (2026-08-08) —
+  gaming path/env sanitization, IPC rate limits, widget pack schema gate, soft
+  two-bucket XWayland isolation. **§E track-only** — default-on colour management
+  (upstream UAF) + GLES MultiRenderer remain deferred.
+- **Phase 19 — Gaming Setup UX:** **complete** (2026-08-08) — guided drivers /
+  Steam / Vulkan / controllers wizard; NVIDIA consent + reboot banner; Settings
+  library paths + Metis MangoHud/Gamescope toggles; X11 borderless game placement
+  (Steam splash excluded from resize loops).
 
-Optional follow-up (remaining): Phase 18 security polish (IPC rate limits, gaming
-path canonicalize, widget pack schema); default-on colour-management protocol
-(upstream wayland-rs ObjectData UAF — still opt-in `METIS_COLOR_MGMT=1`); fuller
-per-surface HDR tone-map; dmabuf MultiRenderer without CPU readback.
+Optional follow-up (remaining): default-on colour-management protocol (upstream
+wayland-rs ObjectData UAF — still opt-in `METIS_COLOR_MGMT=1`); fuller per-surface
+HDR tone-map; dmabuf MultiRenderer without CPU readback; per-Steam-appid
+Gamescope profile UI.
 
 See [`metis-os-workspace/TODO.md`](metis-os-workspace/TODO.md) for the detailed
 roadmap, [`CHANGELOG.md`](CHANGELOG.md) for recent changes,

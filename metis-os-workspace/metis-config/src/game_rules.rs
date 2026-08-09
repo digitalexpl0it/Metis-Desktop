@@ -113,11 +113,19 @@ fn default_rules() -> Vec<WindowRule> {
             float: true,
             fullscreen: true,
         },
-        float_only(
-            "Proton / Wine games",
-            &["steam_app_", "proton", ".exe"],
-            &[],
-        ),
+        // Proton / Wine Steam titles: true-fullscreen on map so borderless-windowed
+        // clients cannot land as a float inset under the edge bar (clipped right/bottom).
+        WindowRule {
+            name: "Proton / Wine games (fullscreen)".to_string(),
+            app_id_contains: vec![
+                "steam_app_".to_string(),
+                "proton".to_string(),
+                ".exe".to_string(),
+            ],
+            title_contains: Vec::new(),
+            float: true,
+            fullscreen: true,
+        },
     ]
 }
 
@@ -209,9 +217,14 @@ mod tests {
     }
 
     #[test]
-    fn proton_exe_floats() {
+    fn proton_exe_floats_and_fullscreens() {
         let cfg = GameRulesConfig::default();
-        assert!(cfg.evaluate(Some("hl2.exe"), None).float);
+        let out = cfg.evaluate(Some("hl2.exe"), None);
+        assert!(out.float);
+        assert!(out.fullscreen);
+        let steam_app = cfg.evaluate(Some("steam_app_123456"), None);
+        assert!(steam_app.float);
+        assert!(steam_app.fullscreen);
     }
 
     #[test]

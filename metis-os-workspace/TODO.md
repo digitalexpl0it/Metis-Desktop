@@ -2,7 +2,8 @@
 
 **Current phase:** Phases **1–17** are complete for their shipped product bars
 (Phase 17 Task View / Super+Tab shipped).
-**Phase 18** (security / IPC / isolation polish) is open — see below.
+**Phase 18** (security / IPC / isolation polish) **A–D complete** 2026-08-08;
+§E remains track-only (colour management UAF + MultiRenderer) — see below.
 **Phase 19** (Gaming Setup UX — guided drivers + first-run polish) shipped
 2026-08-08 — see Phase 19 below.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
@@ -1705,6 +1706,7 @@ recent hosts; no passwords).
 | `locale.json` | *(Phase 8)* Session language override + formats-follow-language |
 | `gaming.json` | *(Phase 11/19)* Graphics mode, auto performance/GameMode, Flatpak GPU env, library paths, Metis launch tweaks |
 | `gaming-flatpak.json` | *(Phase 11)* Record of applied Flatpak gaming overrides |
+| `game-rules.json` | Float / fullscreen rules for Steam/Proton games (built-in defaults if absent) |
 | `screenshot.json` | *(Phase 12)* Native screenshot defaults: mode, pointer, delay, after-capture, save dir |
 | `input.json` | Mouse, touchpad, and keyboard settings (compositor live-reload) |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action |

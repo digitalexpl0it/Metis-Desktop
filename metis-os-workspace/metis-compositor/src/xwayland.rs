@@ -265,6 +265,128 @@ impl MetisState {
         self.schedule_redraw();
     }
 
+    /// Re-place a managed X11 float after the client changes size.
+    ///
+    /// Games often map small, then grow to a borderless/monitor-sized buffer while
+    /// Metis still holds the old centered top-left — that spills the surface off
+    /// the right/bottom. Launchers (Steam splash) are excluded: they animate size
+    /// while loading and fight aggressive re-configure in a visible loop.
+    pub(crate) fn reposition_x11_after_size_change(
+        &mut self,
+        id: u32,
+        window: &X11Surface,
+        elem: &Window,
+        new_size: Size<i32, Logical>,
+    ) {
+        let app_id = self.windows.get(id).and_then(|r| r.app_id.clone());
+        if crate::state::x11_is_game_launcher(app_id.as_deref()) {
+            self.apply_x11_launcher_configure(id, window, elem, new_size);
+            return;
+        }
+
+        let undecorated = !window.is_decorated();
+        let prev_loc = self
+            .space
+            .element_location(elem)
+            .unwrap_or_else(|| Point::from((0, 0)));
+        let old = self
+            .windows
+            .target_rect(id)
+            .map(|r| Size::from((r.width, r.height)))
+            .unwrap_or(new_size);
+        let size_grew = new_size.w > old.w + 32 || new_size.h > old.h + 32;
+
+        // Near-monitor borderless games: true fullscreen (only after a real grow).
+        if size_grew {
+            if let Some(rect) =
+                self.borderless_output_rect_for(id, new_size.w, new_size.h, undecorated)
+            {
+                tracing::info!(
+                    id,
+                    x11_window = window.window_id(),
+                    ?rect,
+                    size = ?new_size,
+                    "x11: size change → borderless flush + fullscreen"
+                );
+                self.windows.set_target_rect(id, rect);
+                self.set_fullscreen(id, true, None);
+                return;
+            }
+        }
+
+        // Only re-center when the client grew — shrinking/oscillating sizes must
+        // not yank placement or we loop with splash/loaders.
+        if !size_grew {
+            self.apply_x11_launcher_configure(id, window, elem, new_size);
+            return;
+        }
+
+        let output_geo = self
+            .launch_output_for(id)
+            .and_then(|o| self.space.output_geometry(&o));
+        let large_undeco = undecorated
+            && output_geo.is_some_and(|g| {
+                crate::state::x11_large_undecorated_float(g, new_size.w, new_size.h)
+            });
+        let rect = if large_undeco {
+            self.centered_on_output_for(id, new_size.w, new_size.h)
+                .unwrap_or_else(|| self.centered_body_for_window(id, new_size.w, new_size.h))
+        } else {
+            self.centered_body_for_window(id, new_size.w, new_size.h)
+        };
+        // Keep the client's exact size; only move. Changing size here causes
+        // clients to ConfigureRequest again → expand/shrink loops.
+        let geo = Rectangle::new(
+            Point::from((rect.x, rect.y)),
+            Size::from((new_size.w.max(1), new_size.h.max(1))),
+        );
+        let placed = metis_grid::PixelRect {
+            x: geo.loc.x,
+            y: geo.loc.y,
+            width: geo.size.w,
+            height: geo.size.h,
+        };
+        if geo.loc != prev_loc {
+            self.space.relocate_element(elem, geo.loc);
+        }
+        self.windows.set_target_rect(id, placed);
+        let _ = window.configure(geo);
+        tracing::info!(
+            id,
+            x11_window = window.window_id(),
+            ?placed,
+            "x11: size grew → re-centered float (size preserved)"
+        );
+        self.schedule_redraw();
+    }
+
+    /// Honor the client's exact size and keep the current location.
+    ///
+    /// Critical for Steam splash: never shrink/expand the configure size or the
+    /// client fights us in an expand/shrink loop while "Waiting for network…".
+    fn apply_x11_launcher_configure(
+        &mut self,
+        id: u32,
+        window: &X11Surface,
+        elem: &Window,
+        new_size: Size<i32, Logical>,
+    ) {
+        let loc = self
+            .space
+            .element_location(elem)
+            .unwrap_or_else(|| Point::from((0, 0)));
+        let size = Size::from((new_size.w.max(1), new_size.h.max(1)));
+        let placed = metis_grid::PixelRect {
+            x: loc.x,
+            y: loc.y,
+            width: size.w,
+            height: size.h,
+        };
+        self.windows.set_target_rect(id, placed);
+        let _ = window.configure(Rectangle::new(loc, size));
+        self.schedule_redraw();
+    }
+
     pub(crate) fn apply_x11_unfullscreen(&mut self, window: X11Surface) {
         let Some(elem) = self.x11_element(&window) else {
             return;
@@ -480,21 +602,33 @@ impl XwmHandler for MetisState {
         if let Some(h) = h {
             geo.size.h = h as i32;
         }
-        // `X11Surface::geometry().loc` is always ~(0,0) (it is size-only), so
-        // configuring with it teleports the window's X-server *root* position to
-        // the top-left on every client-driven resize. That desyncs the X root
-        // frame from the Metis Space location, and since override-redirect popups
-        // (Steam/CEF dropdowns, tooltips, combo menus) are positioned by the
-        // client in root coordinates, they then map into the top-left corner
-        // instead of under their anchor. Anchor the configure at the element's
-        // actual Space position so root coords stay in lockstep with what we
-        // render — this is what keeps menus under the thing that opened them.
-        if let Some(elem) = self.x11_element(&window) {
+
+        let Some(elem) = self.x11_element(&window) else {
+            let _ = window.configure(geo);
+            return;
+        };
+        let Some(id) = self.windows.id_for_x11_window(window.window_id()) else {
+            // Unmanaged: keep prior behavior (anchor at current Space loc if any).
             if let Some(loc) = self.space.element_location(&elem) {
                 geo.loc = loc;
             }
+            let _ = window.configure(geo);
+            return;
+        };
+        if self
+            .windows
+            .get(id)
+            .is_some_and(|r| r.maximized || r.fullscreen)
+        {
+            if let Some(output) = self.output_for_x11_element(&elem) {
+                if let Some(out_geo) = self.space.output_geometry(&output) {
+                    let _ = window.configure(out_geo);
+                }
+            }
+            return;
         }
-        let _ = window.configure(geo);
+
+        self.reposition_x11_after_size_change(id, &window, &elem, geo.size);
     }
 
     fn configure_notify(
@@ -512,9 +646,57 @@ impl XwmHandler for MetisState {
         // X11 clients (Chromium/Electron) map at (0,0) and re-assert their own
         // position, so blindly following `geometry.loc` here would repeatedly drag
         // the window into the top-left corner under the edge bar — both on first
-        // map and right after an interactive move. Ignore client-driven position;
-        // only unmanaged / override-redirect surfaces track their own geometry.
-        if self.windows.id_for_x11_window(window.window_id()).is_some() {
+        // map and right after an interactive move.
+        //
+        // Size changes are different: some games grow their buffer without a
+        // ConfigureRequest we still see as a delta (geometry already matches).
+        // Re-place when the committed size diverges from our target so borderless
+        // titles cannot keep a stale centered top-left and spill off-screen.
+        if let Some(id) = self.windows.id_for_x11_window(window.window_id()) {
+            if self
+                .windows
+                .get(id)
+                .is_some_and(|r| r.maximized || r.fullscreen)
+            {
+                self.schedule_redraw();
+                return;
+            }
+            let app_id = self.windows.get(id).and_then(|r| r.app_id.clone());
+            // Steam splash animates size — never re-place from ConfigureNotify.
+            if crate::state::x11_is_game_launcher(app_id.as_deref()) {
+                if let Some(t) = self.windows.target_rect(id) {
+                    // Keep target size in sync so later grow detection is accurate.
+                    self.windows.set_target_rect(
+                        id,
+                        metis_grid::PixelRect {
+                            x: t.x,
+                            y: t.y,
+                            width: geometry.size.w.max(1),
+                            height: geometry.size.h.max(1),
+                        },
+                    );
+                }
+                self.schedule_redraw();
+                return;
+            }
+            let target = self.windows.target_rect(id);
+            let size_grew = target
+                .is_some_and(|t| geometry.size.w > t.width + 32 || geometry.size.h > t.height + 32);
+            if size_grew {
+                self.reposition_x11_after_size_change(id, &window, &elem, geometry.size);
+                return;
+            }
+            if let Some(t) = target {
+                self.windows.set_target_rect(
+                    id,
+                    metis_grid::PixelRect {
+                        x: t.x,
+                        y: t.y,
+                        width: geometry.size.w.max(1),
+                        height: geometry.size.h.max(1),
+                    },
+                );
+            }
             self.schedule_redraw();
             return;
         }

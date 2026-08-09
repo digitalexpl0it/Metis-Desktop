@@ -456,6 +456,13 @@ module loads. Drivers are never installed at session start.
 per-title Launch Options. Leave GPU Launch Options empty on hybrid laptops —
 Metis session offload already sets PRIME / `DRI_PRIME` when unset.
 
+**Game windows (X11 / borderless).** Metis keeps Steam’s splash and main window
+as ordinary floats (they animate size while loading). Proton / `steam_app_*`
+titles and other large undecorated game windows are placed flush or promoted to
+true fullscreen so borderless-windowed clients are not inset under the edge bar
+and clipped. Defaults live in `~/.config/metis/game-rules.json` (built-in list
+if the file is absent); edit that file to float-only or fullscreen per app id.
+
 **Controllers & Steam Input.** Games read `/dev/input/event*` directly (SDL,
 Proton, Steam Input) — Metis does **not** grab evdev devices, so gamepads,
 the Steam Controller, DualSense, and Switch Pro controllers work as they do
@@ -1202,6 +1209,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `dashboard.json` | Control Center: enabled, widgets, height %, refresh, confirm-before-kill, process monitor |
 | `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, `extra_steam_paths`, Metis MangoHud/Gamescope toggles |
 | `gaming-flatpak.json` | Record of applied Flatpak gaming overrides (managed by `metis-gaming`) |
+| `game-rules.json` | Float / fullscreen rules for games and launchers (built-in defaults if absent) |
 | `outputs.json` | Per-output scale, resolution/refresh, arrangement (`layout_x`/`layout_y`), `display_mode` / `mirror_source`, VRR / HDR toggles, night-light prefs |
 
 ### Key `bar.json` fields
@@ -1249,6 +1257,8 @@ changes live.
 | Flatpak app missing from the launcher | Metis adds the Flatpak `exports/share` dirs to `XDG_DATA_DIRS` at session start — re-run `./run-metis.sh --install-session` and log out/in if you installed the session before 2026-07-03. Verify with `echo $XDG_DATA_DIRS \| tr ':' '\n' \| grep flatpak` inside the session |
 | Flatpak game: no controller | `flatpak override --user --device=all <app-id>`; confirm user is in `input` group |
 | Steam / Proton game black screen or wrong GPU | Install 32-bit Vulkan (`i386` + `mesa-vulkan-drivers:i386`). Metis auto-forwards its render GPU to clients and auto-offloads game/Steam launches to a discrete GPU when present (`METIS_GAME_GPU` = igpu, dgpu, or off). Per-game, override with `DRI_PRIME=1 %command%` / `prime-run %command%` (or NVIDIA offload vars). Session-wide, set `METIS_DRM_DEVICE=/dev/dri/cardN`; disable fullscreen optimizations per-game |
+| Game window borderless and clipped off-screen | Rebuild/reinstall compositor (2026-08-08 placement fix). Prefer exclusive fullscreen in-game, or `Super`+`Shift`+`F`. Adjust `game-rules.json` if a title should not auto-fullscreen |
+| Steam splash expands/shrinks and never loads | Fixed 2026-08-08: launcher windows are excluded from game borderless re-placement. Rebuild/reinstall and restart the Metis session; `pkill steam` if a stuck client remains |
 | Proton game: keys dead but mouse works | Re-login after `./run-metis.sh --install-session` (2026-07-04 XWayland keyboard-focus fix). Click the game window so it holds focus; confirm Steam is not popping over the game (focus-stealing prevention is in place) |
 | Proton game: menu clicks open wrong item / only Settings | Prefer unlocking the pointer for menus (Esc / game UI). Locked clicks stay at the lock anchor (Mutter/KWin); hint remapping was removed 2026-07-19 because it broke mouse-look. Filter logs with `rg 'game-pointer' ~/.local/state/metis/logs/session-latest.log` |
 | Proton game: cursor jumps on left/right click while aiming | Fixed 2026-07-19: re-arm inactive locks; do not remap locked clicks through `cursor_position_hint`. Rebuild/reinstall compositor and re-login. Verify `is_locked=true` on fire and no `click remapped` lines in session logs |
