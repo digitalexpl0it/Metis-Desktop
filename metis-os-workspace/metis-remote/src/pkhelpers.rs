@@ -296,7 +296,7 @@ fn stop_third_party_polkit_agents() {
 pub fn run_pkexec(args: &[&str], wait: Duration) -> Result<std::process::Output, String> {
     ensure_polkit_agent();
     let bin = privileged_exe();
-    let mut child = Command::new("pkexec")
+    let child = Command::new("pkexec")
         .arg(&bin)
         .args(args)
         .stdin(Stdio::null())

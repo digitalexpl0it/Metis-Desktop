@@ -947,6 +947,8 @@ Settings → Appearance ("Run setup again") or `metis-cmd.sh show-onboarding`.
       wizard when false, and call `mark_onboarding_complete()` on finish/skip.
       `METIS_NO_ONBOARDING=1` disables for dev. "Run setup again" in Settings
       Appearance re-triggers via `show-onboarding` runtime command.
+- [x] **Factory reset** — Settings → System → Reset clears `~/.config/metis`
+      (backup / keep custom themes / re-run onboarding options) (2026-09-20).
 
 ### B. Steps (keep it short and friendly)
 

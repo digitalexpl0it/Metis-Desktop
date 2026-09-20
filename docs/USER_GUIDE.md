@@ -969,6 +969,10 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   nested dev. Open with `metis-cmd settings remote` or `metis-cmd viewer`.
 - **Sound** — default output and input device selection (bar volume widget
   unchanged).
+- **Reset** — factory-reset Metis preferences under `~/.config/metis` with an
+  optional backup to `~/metis-config-backup-…`, keep custom themes (not stock
+  dark/light), and optionally run first-run setup again. Confirm before wipe;
+  log out / restart the session afterward for a full reload.
 
 **Bluetooth battery notes.** Many devices only expose a coarse percentage over
 plain Bluetooth (often updating on reconnect). Charging state requires a driver
@@ -1314,7 +1318,8 @@ changes live.
 | gdbus request path "does not exist" | Portal request objects are ephemeral — trigger a fresh `Screenshot` call; use `gdbus monitor --session --dest org.freedesktop.portal.Desktop` *before* the call to see the `Response` signal |
 | Bluetooth shows stale battery | Many devices only refresh over BT on reconnect; install **Solaar** for Logitech charging state, or use a Unifying/Bolt receiver |
 | Session won't start / behaves oddly | `./run-metis.sh --stop` then `./run-metis.sh --build --session` |
-| Theme looks wrong | Delete `~/.config/metis/themes/*.json` and restart to regenerate |
+| Theme looks wrong | Delete `~/.config/metis/themes/*.json` and restart to regenerate, or use **Settings → System → Reset** |
+| Want factory defaults | **Settings → System → Reset** (backup first); then log out and sign back in |
 | Verify the shell is reachable | `./run-metis.sh --verify` |
 | Compare compositor vs shell grid | `./run-metis.sh --verify-grid` |
 | Remote desktop toggle greyed out | Install `gnome-remote-desktop`; set a password on **Settings → Remote access** before enabling |

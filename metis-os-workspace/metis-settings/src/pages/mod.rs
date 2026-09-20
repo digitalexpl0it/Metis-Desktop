@@ -18,6 +18,7 @@ pub mod network;
 pub mod power;
 pub mod printers;
 pub mod remote;
+pub mod reset;
 pub mod screenshot;
 pub mod shortcuts;
 pub mod sound;

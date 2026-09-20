@@ -26,6 +26,7 @@ pub mod menu;
 pub mod outputs;
 pub mod power;
 pub mod remote;
+pub mod reset;
 pub mod sanitize;
 pub mod screenshot;
 pub mod startup;
@@ -501,6 +502,7 @@ pub use power::{
 pub use remote::{
     load_remote_config, remote_config_path, save_remote_config, RemoteBackend, RemoteConfig,
 };
+pub use reset::{reset_metis_config, reset_metis_config_at, ResetOptions, ResetResult};
 pub use sanitize::{is_safe_nm_token, validate_nm_id, validate_ssid, validate_vpn_data_fragment};
 pub use screenshot::{
     expand_save_dir, load_screenshot_config, save_default_screenshot_config,

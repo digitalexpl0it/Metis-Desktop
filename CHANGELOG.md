@@ -9,6 +9,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Settings → System → Reset** — factory-reset `~/.config/metis` with optional
+  backup (`~/metis-config-backup-…`), keep custom themes, and re-run first-run
+  setup. Destructive confirm; session restart recommended afterward.
 - **Onboarding: Network + Desktop widgets** — first-run wizard steps for Wi-Fi /
   wired connect and optional desktop widgets (seeds Clock + Folders when enabled).
 - **`metis-polkit-agent`** — first-party GTK4 PolicyKit authentication agent
