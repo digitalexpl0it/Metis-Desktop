@@ -917,6 +917,73 @@ fn settings_css(t: &ThemeTokens) -> String {
             padding: 0;
         }}
 
+        /* Users page account list */
+        .metis-settings-user-list {{
+            padding: 0;
+            overflow: hidden;
+        }}
+        .metis-settings-user-list > separator {{
+            background-color: color-mix(in srgb, {border} 80%, transparent);
+            min-height: 1px;
+            margin: 0;
+        }}
+        .metis-settings-user-row {{
+            padding: 14px 16px;
+            min-height: 64px;
+        }}
+        .metis-settings-user-row:hover {{
+            background-color: color-mix(in srgb, {accent} 10%, {raised});
+        }}
+        .metis-settings-user-avatar {{
+            border-radius: 999px;
+            background-color: color-mix(in srgb, {accent} 18%, {surface});
+            color: {accent};
+            min-width: 44px;
+            max-width: 44px;
+            min-height: 44px;
+            max-height: 44px;
+            padding: 0;
+        }}
+        .metis-settings-user-avatar > picture {{
+            border-radius: 999px;
+        }}
+        .metis-settings-user-username {{
+            color: {muted};
+            font-size: 12px;
+            padding: 0;
+        }}
+        .metis-settings-user-role {{
+            color: {muted};
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            padding: 0;
+            margin-top: 2px;
+        }}
+        .metis-settings-user-role-admin {{
+            color: {accent};
+        }}
+        .metis-settings-user-admin-label {{
+            color: {muted};
+            font-size: 12px;
+        }}
+        .metis-settings-user-action {{
+            font-size: 12px;
+        }}
+        .metis-settings-avatar {{
+            border-radius: 999px;
+            background-color: color-mix(in srgb, {accent} 14%, {surface});
+            color: {accent};
+            min-width: 64px;
+            max-width: 64px;
+            min-height: 64px;
+            max-height: 64px;
+            padding: 0;
+        }}
+        .metis-settings-avatar > picture {{
+            border-radius: 999px;
+        }}
+
         /* App titlebars — virtualized ListView; only visible rows exist. */
         .metis-settings-app-scroll {{
             background-color: transparent;

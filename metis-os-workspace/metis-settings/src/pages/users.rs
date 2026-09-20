@@ -1,6 +1,6 @@
 //! Settings → System → Users: profile, password, and local account admin.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -17,14 +17,13 @@ pub fn build() -> gtk::Widget {
     let accounts: Rc<RefCell<Vec<AccountInfo>>> = Rc::new(RefCell::new(Vec::new()));
     let list_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     list_box.add_css_class("metis-settings-list");
+    list_box.add_css_class("metis-settings-user-list");
 
     // ---- Your profile -----------------------------------------------------
     let (profile_card, profile_body) =
         ui::section_with_icon(&tr("Your profile"), "avatar-default-symbolic");
 
-    let avatar = gtk::Image::new();
-    avatar.set_pixel_size(64);
-    avatar.add_css_class("metis-settings-avatar");
+    let (avatar_frame, avatar) = circular_avatar(64, "metis-settings-avatar");
     refresh_avatar(&avatar);
 
     let change_pic = gtk::Button::with_label(&tr("Change picture…"));
@@ -70,7 +69,7 @@ pub fn build() -> gtk::Widget {
 
     let avatar_row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     avatar_row.add_css_class("metis-settings-row");
-    avatar_row.append(&avatar);
+    avatar_row.append(&avatar_frame);
     let avatar_col = gtk::Box::new(gtk::Orientation::Vertical, 6);
     avatar_col.set_valign(gtk::Align::Center);
     avatar_col.append(&change_pic);
@@ -185,13 +184,50 @@ fn face_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".face"))
 }
 
-fn refresh_avatar(avatar: &gtk::Image) {
-    let face = face_path();
-    if face.is_file() {
-        avatar.set_from_file(Some(&face));
-    } else {
-        avatar.set_from_icon_name(Some("avatar-default-symbolic"));
+fn circular_avatar(size: i32, css_class: &str) -> (gtk::Box, gtk::Picture) {
+    let frame = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    frame.add_css_class(css_class);
+    frame.set_size_request(size, size);
+    frame.set_hexpand(false);
+    frame.set_vexpand(false);
+    frame.set_halign(gtk::Align::Center);
+    frame.set_valign(gtk::Align::Center);
+    // Required for border-radius to actually clip the photo.
+    frame.set_overflow(gtk::Overflow::Hidden);
+
+    let pic = gtk::Picture::new();
+    pic.set_content_fit(gtk::ContentFit::Cover);
+    pic.set_can_shrink(true);
+    pic.set_size_request(size, size);
+    pic.set_hexpand(true);
+    pic.set_vexpand(true);
+    frame.append(&pic);
+    (frame, pic)
+}
+
+fn set_avatar_picture(pic: &gtk::Picture, path: Option<&std::path::Path>) {
+    if let Some(path) = path.filter(|p| p.is_file()) {
+        pic.set_file(Some(&gio::File::for_path(path)));
+        return;
     }
+    pic.set_file(Option::<&gio::File>::None);
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    let theme = gtk::IconTheme::for_display(&display);
+    let icon = theme.lookup_icon(
+        "avatar-default-symbolic",
+        &[],
+        64,
+        1,
+        gtk::TextDirection::None,
+        gtk::IconLookupFlags::FORCE_SYMBOLIC,
+    );
+    pic.set_paintable(Some(&icon));
+}
+
+fn refresh_avatar(pic: &gtk::Picture) {
+    set_avatar_picture(pic, Some(face_path().as_path()));
 }
 
 fn install_face_image(src: &std::path::Path) -> std::io::Result<()> {
@@ -237,11 +273,23 @@ fn refresh_account_list(accounts: &Rc<RefCell<Vec<AccountInfo>>>, list_box: &gtk
     }
     for (i, acct) in rows.iter().enumerate() {
         let row = build_user_row(acct, accounts.clone(), list_box.clone());
-        if i % 2 == 1 {
-            row.add_css_class("metis-settings-zebra");
+        if i > 0 {
+            list_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         }
         list_box.append(&row);
     }
+}
+
+fn account_face_path(acct: &AccountInfo) -> PathBuf {
+    if acct.is_current {
+        return face_path();
+    }
+    PathBuf::from(&acct.home).join(".face")
+}
+
+fn load_account_avatar(pic: &gtk::Picture, acct: &AccountInfo) {
+    let face = account_face_path(acct);
+    set_avatar_picture(pic, Some(face.as_path()));
 }
 
 fn build_user_row(
@@ -249,71 +297,92 @@ fn build_user_row(
     accounts: Rc<RefCell<Vec<AccountInfo>>>,
     list_box: gtk::Box,
 ) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    row.add_css_class("metis-settings-row");
-    row.set_margin_top(4);
-    row.set_margin_bottom(4);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    row.add_css_class("metis-settings-user-row");
+    row.set_hexpand(true);
 
-    let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    let titles = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    titles.set_hexpand(true);
+    let (avatar_frame, avatar) = circular_avatar(44, "metis-settings-user-avatar");
+    load_account_avatar(&avatar, acct);
+    row.append(&avatar_frame);
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    text.set_hexpand(true);
+    text.set_valign(gtk::Align::Center);
+
     let name = gtk::Label::new(Some(&acct.display_name));
     name.set_xalign(0.0);
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     name.add_css_class("metis-settings-row-title");
-    titles.append(&name);
-    let mut sub = acct.username.clone();
-    if acct.is_current {
-        sub.push_str(" · ");
-        sub.push_str(&tr("you"));
-    }
-    let sub_lbl = gtk::Label::new(Some(&sub));
-    sub_lbl.set_xalign(0.0);
-    sub_lbl.add_css_class("metis-settings-hint");
-    titles.append(&sub_lbl);
-    top.append(&titles);
-    row.append(&top);
+    text.append(&name);
 
-    let (admin_row, admin_sw) = ui::switch_row(&tr("Administrator"));
+    let mut user_line = acct.username.clone();
+    if acct.is_current {
+        user_line.push_str(" · ");
+        user_line.push_str(&tr("you"));
+    }
+    let user_lbl = gtk::Label::new(Some(&user_line));
+    user_lbl.set_xalign(0.0);
+    user_lbl.add_css_class("metis-settings-user-username");
+    text.append(&user_lbl);
+
+    let role = if acct.is_admin {
+        tr("Administrator")
+    } else {
+        tr("Standard user")
+    };
+    let role_lbl = gtk::Label::new(Some(&role));
+    role_lbl.set_xalign(0.0);
+    role_lbl.add_css_class("metis-settings-user-role");
+    if acct.is_admin {
+        role_lbl.add_css_class("metis-settings-user-role-admin");
+    }
+    text.append(&role_lbl);
+    row.append(&text);
+
+    let controls = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    controls.set_valign(gtk::Align::Center);
+    controls.set_halign(gtk::Align::End);
+
+    let admin_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    admin_line.set_halign(gtk::Align::End);
+    let admin_lbl = gtk::Label::new(Some(&tr("Administrator")));
+    admin_lbl.add_css_class("metis-settings-user-admin-label");
+    let admin_sw = gtk::Switch::new();
+    admin_sw.set_valign(gtk::Align::Center);
     admin_sw.set_active(acct.is_admin);
     if acct.is_current {
+        // Don't let the session user demote themselves from this page.
         admin_sw.set_sensitive(false);
+        admin_lbl.set_sensitive(false);
     }
     {
         let user = acct.username.clone();
         let accounts = accounts.clone();
         let list_box = list_box.clone();
-        let suppress = Rc::new(Cell::new(false));
-        ui::defer_switch_active_notify_when(
-            &admin_sw,
-            {
-                let suppress = suppress.clone();
-                move || !suppress.get()
-            },
-            move |active| {
-                let user = user.clone();
-                let accounts = accounts.clone();
-                let list_box = list_box.clone();
-                bg::run_bg(
-            move || {
-                let result = metis_remote::set_admin(&user, active);
-                result
-            },
-            move |result| {
-        if let Err(err) = result {
-                                    tracing::warn!(%err, "failed to set admin");
-                                }
-                                refresh_account_list(&accounts, &list_box);
-            },
-        );
-            },
-        );
+        ui::defer_switch_active_notify(&admin_sw, move |active| {
+            let user = user.clone();
+            let accounts = accounts.clone();
+            let list_box = list_box.clone();
+            bg::run_bg(
+                move || metis_remote::set_admin(&user, active),
+                move |result| {
+                    if let Err(err) = result {
+                        tracing::warn!(%err, "failed to set admin");
+                    }
+                    refresh_account_list(&accounts, &list_box);
+                },
+            );
+        });
     }
-    row.append(&admin_row);
+    admin_line.append(&admin_lbl);
+    admin_line.append(&admin_sw);
+    controls.append(&admin_line);
 
-    let btns = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let btns = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     btns.set_halign(gtk::Align::End);
     let pw = gtk::Button::with_label(&tr("Change password"));
     pw.add_css_class("flat");
+    pw.add_css_class("metis-settings-user-action");
     {
         let user = acct.username.clone();
         let accounts = accounts.clone();
@@ -328,6 +397,7 @@ fn build_user_row(
         let remove = gtk::Button::with_label(&tr("Remove"));
         remove.add_css_class("destructive-action");
         remove.add_css_class("flat");
+        remove.add_css_class("metis-settings-user-action");
         let user = acct.username.clone();
         let accounts = accounts.clone();
         let list_box = list_box.clone();
@@ -354,27 +424,24 @@ fn build_user_row(
                     let accounts = accounts.clone();
                     let list_box = list_box.clone();
                     bg::run_bg(
-            move || {
-                let result = metis_remote::remove_user(&user);
-                result
-            },
-            move |result| {
-        if let Err(err) = result {
-                                        tracing::warn!(%err, "failed to remove user");
-                                    }
-                                    refresh_account_list(&accounts, &list_box);
-            },
-        );
+                        move || metis_remote::remove_user(&user),
+                        move |result| {
+                            if let Err(err) = result {
+                                tracing::warn!(%err, "failed to remove user");
+                            }
+                            refresh_account_list(&accounts, &list_box);
+                        },
+                    );
                 }),
                 Rc::new(|| {}),
             );
         });
         btns.append(&remove);
     }
-    row.append(&btns);
+    controls.append(&btns);
+    row.append(&controls);
     row
 }
-
 fn open_password_sheet(user: &str, accounts: Rc<RefCell<Vec<AccountInfo>>>, list_box: gtk::Box) {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
     let p1 = gtk::PasswordEntry::builder()
