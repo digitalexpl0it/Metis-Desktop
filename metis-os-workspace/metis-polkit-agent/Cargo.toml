@@ -1,0 +1,24 @@
+[package]
+name = "metis-polkit-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Metis PolicyKit authentication agent (GTK4)"
+
+[[bin]]
+name = "metis-polkit-agent"
+path = "src/main.rs"
+
+[dependencies]
+async-channel = "2"
+futures-util = "0.3"
+glib = "0.19"
+gtk = { package = "gtk4", version = "0.8", features = ["v4_10"] }
+libc = "0.2"
+metis-config = { workspace = true }
+serde = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-util", "process"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zeroize = "1"
+zbus = { version = "5", default-features = false, features = ["tokio"] }

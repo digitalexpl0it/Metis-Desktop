@@ -78,7 +78,7 @@ pub const CATEGORIES: &[Category] = &[
         title: "System",
         icon: "preferences-system-symbolic",
         hue: NavHue::Green,
-        blurb: "Sound, power, locale, remote access, and more",
+        blurb: "Users, date & time, sound, power, locale, remote access, and more",
     },
 ];
 
@@ -261,6 +261,22 @@ pub const NAV: &[NavItem] = &[
         hue: None,
         subtitle: None,
         category: None,
+    },
+    NavItem {
+        page_id: Some("users"),
+        title: "Users",
+        icon: Some("system-users-symbolic"),
+        hue: Some(NavHue::Blue),
+        subtitle: Some("Profile, password, and local accounts"),
+        category: Some("system"),
+    },
+    NavItem {
+        page_id: Some("date_time"),
+        title: "Date & Time",
+        icon: Some("preferences-system-time-symbolic"),
+        hue: Some(NavHue::Teal),
+        subtitle: Some("Clock, time zone, and calendar week start"),
+        category: Some("system"),
     },
     NavItem {
         page_id: Some("locale"),

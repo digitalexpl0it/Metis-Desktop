@@ -1,6 +1,70 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+/// Layout preset for the Metis app menu. `Default` is today's Metis menu
+/// (utility/power rail + Frequent/search + Pinned grid).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MenuStyle {
+    /// Metis default — rail | Frequent + search | Pinned.
+    #[default]
+    Default,
+    /// Search on top; rail + app list (+ optional pinned).
+    Whisker,
+    /// Optional user header above the usual Metis columns.
+    ArcMenu,
+    /// Search on top spanning the content; rail + list + pinned.
+    Mint,
+}
+
+impl MenuStyle {
+    pub const ALL: &[MenuStyle] = &[
+        MenuStyle::Default,
+        MenuStyle::Whisker,
+        MenuStyle::ArcMenu,
+        MenuStyle::Mint,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MenuStyle::Default => "default",
+            MenuStyle::Whisker => "whisker",
+            MenuStyle::ArcMenu => "arc_menu",
+            MenuStyle::Mint => "mint",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            MenuStyle::Default => "Metis",
+            MenuStyle::Whisker => "Whisker",
+            MenuStyle::ArcMenu => "ArcMenu",
+            MenuStyle::Mint => "Mint",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            MenuStyle::Default => {
+                "Classic Metis menu: quick rail, Frequent Apps with search, and Pinned."
+            }
+            MenuStyle::Whisker => "Search on top, places rail beside the app list.",
+            MenuStyle::ArcMenu => "Metis columns with an optional user header on top.",
+            MenuStyle::Mint => "Search across the top; rail, apps, and pinned below.",
+        }
+    }
+
+    pub fn css_class(self) -> &'static str {
+        match self {
+            MenuStyle::Default => "metis-menu-style-default",
+            MenuStyle::Whisker => "metis-menu-style-whisker",
+            MenuStyle::ArcMenu => "metis-menu-style-arc",
+            MenuStyle::Mint => "metis-menu-style-mint",
+        }
+    }
+}
 
 /// Persistent app-menu state, stored at `~/.config/metis/menu.json`.
 ///
@@ -12,7 +76,7 @@ use serde::{Deserialize, Serialize};
 /// menu rail. Each is a binary name on `$PATH` *or* an absolute path. `None` or an
 /// empty string means "auto-detect" — fall back to the first installed entry in
 /// [`KNOWN_TERMINALS`] / [`KNOWN_FILE_MANAGERS`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MenuConfig {
     #[serde(default)]
     pub pinned: Vec<String>,
@@ -22,6 +86,102 @@ pub struct MenuConfig {
     pub terminal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_manager: Option<String>,
+    /// Layout preset. Missing / unknown → Metis [`MenuStyle::Default`].
+    #[serde(default)]
+    pub style: MenuStyle,
+    /// Show avatar + display name in styles that have a header slot (and on
+    /// Default when enabled — header sits above the Frequent column).
+    #[serde(default)]
+    pub show_user_header: bool,
+    /// Show the left utility / power icon rail.
+    #[serde(default = "default_true")]
+    pub show_rail: bool,
+    /// Show the Pinned apps column.
+    #[serde(default = "default_true")]
+    pub show_pinned: bool,
+    /// Optional display-name override; empty / missing → GECOS / `$USER`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_display_name: Option<String>,
+    /// Optional avatar image path; empty / missing → `~/.face` when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_path: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for MenuConfig {
+    fn default() -> Self {
+        Self {
+            pinned: Vec::new(),
+            launch_counts: HashMap::new(),
+            terminal: None,
+            file_manager: None,
+            style: MenuStyle::Default,
+            show_user_header: false,
+            show_rail: true,
+            show_pinned: true,
+            user_display_name: None,
+            avatar_path: None,
+        }
+    }
+}
+
+impl MenuConfig {
+    /// Resolve the name shown in the menu user header.
+    pub fn resolved_display_name(&self) -> String {
+        if let Some(name) = self
+            .user_display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return name.to_string();
+        }
+        if let Some(gecos) = gecos_full_name() {
+            return gecos;
+        }
+        std::env::var("USER").unwrap_or_else(|_| "User".into())
+    }
+
+    /// Avatar file to load, if any.
+    pub fn resolved_avatar_path(&self) -> Option<PathBuf> {
+        if let Some(p) = self
+            .avatar_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let path = PathBuf::from(p);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        let face = directories::UserDirs::new()
+            .map(|u| u.home_dir().join(".face"))
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".face")))?;
+        face.is_file().then_some(face)
+    }
+}
+
+fn gecos_full_name() -> Option<String> {
+    let user = std::env::var("USER").ok()?;
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    for line in passwd.lines() {
+        let mut parts = line.split(':');
+        let name = parts.next()?;
+        if name != user {
+            continue;
+        }
+        // name:x:uid:gid:gecos:home:shell
+        let gecos = parts.nth(3)?;
+        let full = gecos.split(',').next().unwrap_or(gecos).trim();
+        if !full.is_empty() {
+            return Some(full.to_string());
+        }
+    }
+    None
 }
 
 /// Known terminal emulators in auto-detect preference order: `(binary, label)`.
@@ -57,7 +217,7 @@ pub fn binary_in_path(bin: &str) -> bool {
         return false;
     }
     if bin.contains('/') {
-        return is_executable_file(std::path::Path::new(bin));
+        return is_executable_file(Path::new(bin));
     }
     let Some(path) = std::env::var_os("PATH") else {
         return false;
@@ -66,7 +226,7 @@ pub fn binary_in_path(bin: &str) -> bool {
 }
 
 #[cfg(unix)]
-fn is_executable_file(path: &std::path::Path) -> bool {
+fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     match std::fs::metadata(path) {
         Ok(meta) => meta.is_file() && meta.permissions().mode() & 0o111 != 0,
@@ -75,11 +235,11 @@ fn is_executable_file(path: &std::path::Path) -> bool {
 }
 
 #[cfg(not(unix))]
-fn is_executable_file(path: &std::path::Path) -> bool {
+fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
-pub fn menu_config_path() -> std::path::PathBuf {
+pub fn menu_config_path() -> PathBuf {
     super::config_dir().join("menu.json")
 }
 

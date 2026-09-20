@@ -5,10 +5,37 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-09-20]
+
+### Added
+
+- **`metis-polkit-agent`** — first-party GTK4 PolicyKit authentication agent
+  started with the Metis session (compositor + watchdog). `pkexec` prompts
+  (Users, firewall, Date & Time, …) no longer require GNOME/KDE agents; PAM
+  still uses the system `polkit-agent-helper-1`.
+
+### Changed
+
+- Packaging and session install ship `metis-polkit-agent`; deb Recommends drop
+  `policykit-1-gnome | mate-polkit` in favor of depending on `pkexec`/`polkitd`.
+
 ## [2026-09-19]
 
 ### Added
 
+- **Users settings** — Settings → System → Users: change display name and
+  `~/.face` avatar (synced with Metis Menu), change password, list other local
+  users, add/remove accounts, and toggle Administrator (`sudo` group). Privileged
+  ops use PolicyKit via `metis-remote` (`org.metis.accounts.*`).
+- **Date & Time settings** — Settings → System → Date & Time: automatic NTP,
+  automatic timezone (IP geolocation), manual date/time and timezone sheets,
+  12/24-hour bar clock format, and first day of week (`datetime.json` + calendar).
+  System changes go through `timedatectl` / `org.metis.datetime.*` Polkit actions.
+- **Selectable Metis Menu layouts** — Settings → Metis Menu offers Metis
+  (today’s classic), Whisker, ArcMenu, and Mint layout thumbnails, plus toggles
+  for user avatar/name, the places/power rail, and pinned apps. Presets and
+  flags live in `menu.json`; changing them sends `reload-bar` so the shell
+  rebuilds the menu live. Missing style fields keep the Metis default.
 - **Settings UI 2.0** — Home overview with category tiles, a compact icon
   sidebar, and category panels via a GtkStack slide (not an Overlay — GTK 4.22
   overlays were eating pointer events). Search on Home filters tiles and lists
@@ -26,6 +53,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- **Wallpaper flash on change** — switching picture / solid / gradient in
+  Settings no longer clears the desktop to black while the next image decodes.
+  The compositor keeps the previous GPU texture on screen, then crossfades into
+  the new background (~280 ms ease-out). Apply is faster too: cover-crop no
+  longer resizes the full source before cropping, decoded RGBA is cached under
+  `~/.cache/metis/wallpaper-rgba/` (warmed while browsing thumbs), and Settings
+  sends `ApplyBackground` off the GTK thread.
 - **Settings stays running after close** — closing the Settings window now tears
   down chrome state, hides leftover dialogs, quits the unique-instance
   `GtkApplication`, and hard-exits so perpetual page timers (network / Bluetooth

@@ -427,9 +427,22 @@ fn wire_nav(inner: &Rc<Inner>, button: &gtk::Button, delta_months: i32) {
 }
 
 impl Inner {
+    fn week_start_offset(&self) -> u32 {
+        match metis_config::load_datetime_config()
+            .first_day_of_week
+            .sunday_based_index()
+        {
+            Some(0) => 0, // Sunday
+            Some(1) => 1, // Monday
+            _ => 0,       // Locale default → Sunday-based for now
+        }
+    }
+
     fn visible_range(&self) -> (NaiveDate, NaiveDate) {
         let anchor = *self.shown.borrow();
-        let first_col = anchor.weekday().num_days_from_sunday();
+        let start = self.week_start_offset();
+        let sunday_based = anchor.weekday().num_days_from_sunday();
+        let first_col = (sunday_based + 7 - start) % 7;
         let grid_start = anchor
             .checked_sub_days(Days::new(first_col as u64))
             .unwrap_or(anchor);
@@ -464,7 +477,7 @@ impl Inner {
             self.grid.remove(&child);
         }
 
-        for (i, wd) in [
+        let labels = [
             metis_i18n::tr("Su"),
             metis_i18n::tr("Mo"),
             metis_i18n::tr("Tu"),
@@ -472,10 +485,10 @@ impl Inner {
             metis_i18n::tr("Th"),
             metis_i18n::tr("Fr"),
             metis_i18n::tr("Sa"),
-        ]
-        .iter()
-        .enumerate()
-        {
+        ];
+        let start = self.week_start_offset() as usize;
+        for i in 0..7 {
+            let wd = &labels[(i + start) % 7];
             let label = gtk::Label::new(Some(wd));
             label.add_css_class("metis-cal-weekday");
             self.grid.attach(&label, i as i32, 0, 1, 1);

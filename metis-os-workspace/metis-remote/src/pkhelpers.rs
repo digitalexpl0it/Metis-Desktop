@@ -1,7 +1,13 @@
 //! Privileged helpers intended to run only under `pkexec` (Phase 15 §B).
 
-use std::path::Path;
-use std::process::Command;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use zeroize::Zeroize;
 
 /// Packages Metis may install via Polkit (onboarding + gaming health fixes).
 pub const APT_ALLOWLIST: &[&str] = &[
@@ -19,11 +25,11 @@ pub const APT_ALLOWLIST: &[&str] = &[
     "steam-installer",
     "steam-devices",
     "nftables",
-    "policykit-1-gnome",
-    "mate-polkit",
+    "pkexec",
+    "polkitd",
 ];
 
-fn require_root() -> Result<(), String> {
+pub(crate) fn require_root() -> Result<(), String> {
     let uid = Command::new("id")
         .arg("-u")
         .output()
@@ -154,12 +160,279 @@ pub fn add_input_group(user: &str) -> Result<(), String> {
 }
 
 /// Prefer the packaged binary so pkexec cannot escalate a writable cwd copy.
-pub fn privileged_exe() -> std::path::PathBuf {
+pub fn privileged_exe() -> PathBuf {
     const INSTALLED: &str = "/usr/bin/metis-remote";
     if Path::new(INSTALLED).is_file() {
         return Path::new(INSTALLED).to_path_buf();
     }
     std::env::current_exe().unwrap_or_else(|_| Path::new("metis-remote").to_path_buf())
+}
+
+fn metis_polkit_agent_running() -> bool {
+    let Ok(dir) = fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(exe) = fs::read_link(entry.path().join("exe")) else {
+            continue;
+        };
+        if exe
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s == "metis-polkit-agent")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn resolve_metis_polkit_agent() -> Option<PathBuf> {
+    if let Ok(override_bin) = std::env::var("METIS_POLKIT_AGENT_BIN") {
+        let p = PathBuf::from(override_bin);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    const INSTALLED: &[&str] = &[
+        "/usr/libexec/metis-polkit-agent",
+        "/usr/bin/metis-polkit-agent",
+        "/usr/local/bin/metis-polkit-agent",
+    ];
+    for path in INSTALLED {
+        let p = Path::new(path);
+        if p.is_file() {
+            return Some(p.to_path_buf());
+        }
+    }
+    std::env::current_exe().ok().and_then(|exe| {
+        let sibling = exe.parent()?.join("metis-polkit-agent");
+        sibling.is_file().then_some(sibling)
+    })
+}
+
+/// Ensure the Metis PolicyKit authentication agent is running.
+///
+/// Without an agent, `pkexec` falls back to `pkttyagent` (needs a TTY) and
+/// Settings background threads hang or fail with "Not authorized".
+pub fn ensure_polkit_agent() {
+    if std::env::var_os("METIS_NO_POLKIT_AGENT").is_some() {
+        return;
+    }
+    if metis_polkit_agent_running() {
+        return;
+    }
+    stop_third_party_polkit_agents();
+    let Some(bin) = resolve_metis_polkit_agent() else {
+        tracing::warn!(
+            "metis-polkit-agent not found — install Metis or set METIS_POLKIT_AGENT_BIN"
+        );
+        return;
+    };
+    let mut cmd = Command::new(&bin);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    match cmd.spawn() {
+        Ok(_) => {
+            tracing::info!(path = %bin.display(), "started metis-polkit-agent");
+            std::thread::sleep(Duration::from_millis(400));
+        }
+        Err(err) => {
+            tracing::warn!(%err, path = %bin.display(), "failed to start metis-polkit-agent");
+        }
+    }
+}
+
+fn stop_third_party_polkit_agents() {
+    let Ok(dir) = fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
+        let Ok(exe) = fs::read_link(entry.path().join("exe")) else {
+            continue;
+        };
+        let exe_s = exe.to_string_lossy();
+        if exe_s.contains("polkit-gnome-authentication-agent")
+            || exe_s.contains("polkit-kde-authentication-agent")
+            || exe_s.contains("polkit-mate-authentication-agent")
+            || exe_s.contains("lxqt-policykit-agent")
+        {
+            tracing::info!(%pid, path = %exe_s, "stopping third-party PolicyKit agent");
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+    }
+    std::thread::sleep(Duration::from_millis(300));
+}
+
+/// Run `pkexec <privileged_exe> <args…>` with an in-process timeout.
+///
+/// Do **not** wrap with the `timeout` binary — polkit then sees `timeout` as
+/// the subject, and some agents mishandle auth. Stdin is always `/dev/null`
+/// so a GUI agent can attach (never pipe secrets into pkexec).
+pub fn run_pkexec(args: &[&str], wait: Duration) -> Result<std::process::Output, String> {
+    ensure_polkit_agent();
+    let bin = privileged_exe();
+    let mut child = Command::new("pkexec")
+        .arg(&bin)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to start pkexec ({e}) — install policykit-1 / pkexec"))?;
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(wait) {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(format!("pkexec wait failed: {e}")),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+            std::thread::sleep(Duration::from_millis(500));
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+            Err(
+                "Timed out waiting for admin approval. The Metis PolicyKit dialog \
+                 should appear — if it does not, ensure metis-polkit-agent is running."
+                    .into(),
+            )
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("pkexec worker thread disconnected".into())
+        }
+    }
+}
+
+/// Format a failed `pkexec` output into a user-facing error.
+pub fn pkexec_failure_message(output: &std::process::Output, context: &str) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = if !stderr.trim().is_empty() {
+        stderr.trim().to_string()
+    } else {
+        stdout.trim().to_string()
+    };
+    if detail.is_empty() {
+        format!(
+            "Admin approval failed or was cancelled{context}. \
+             Enter your account password in the PolicyKit dialog \
+             (Authorize alone is not enough)."
+        )
+    } else if detail.to_ascii_lowercase().contains("not authorized") {
+        format!(
+            "{detail} — authentication failed. Use your user password in the \
+             PolicyKit dialog (wrong password, empty password, or a broken agent \
+             all produce this message)."
+        )
+    } else {
+        detail
+    }
+}
+
+/// Write a one-shot password file under `$XDG_RUNTIME_DIR` (mode 0600).
+///
+/// Prefer this over piping secrets into `pkexec`'s stdin — a piped stdin can
+/// prevent the GUI authentication agent from attaching cleanly.
+pub fn write_password_file(password: &str) -> Result<PathBuf, String> {
+    if password.is_empty() || password.contains('\0') {
+        return Err("password must not be empty".into());
+    }
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    let path = dir.join(format!(
+        "metis-pw-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| format!("create password file: {e}"))?;
+    file.write_all(password.as_bytes())
+        .map_err(|e| format!("write password file: {e}"))?;
+    if !password.ends_with('\n') {
+        file.write_all(b"\n")
+            .map_err(|e| format!("write password file: {e}"))?;
+    }
+    file.sync_all()
+        .map_err(|e| format!("sync password file: {e}"))?;
+    Ok(path)
+}
+
+/// Read + delete a password file written by [`write_password_file`] (root only).
+pub fn take_password_file(path: &str) -> Result<String, String> {
+    require_root()?;
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return Err("password file must be an absolute path".into());
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("password file path must not contain ..".into());
+    }
+    let meta = fs::metadata(path).map_err(|e| format!("stat password file: {e}"))?;
+    if !meta.is_file() {
+        return Err("password file is not a regular file".into());
+    }
+    if meta.len() > 4096 {
+        return Err("password file too large".into());
+    }
+    let mode = meta.mode() & 0o777;
+    if mode & 0o077 != 0 {
+        let _ = fs::remove_file(path);
+        return Err("password file permissions too open (expected 0600)".into());
+    }
+    let file_uid = meta.uid();
+    let caller_uid = std::env::var("PKEXEC_UID")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok());
+    if file_uid != 0 && caller_uid.is_some_and(|u| u != file_uid) {
+        let _ = fs::remove_file(path);
+        return Err("password file owner does not match caller".into());
+    }
+    let mut raw = fs::read_to_string(path).map_err(|e| format!("read password file: {e}"))?;
+    let _ = fs::remove_file(path);
+    let trimmed = raw.trim_end_matches(['\r', '\n']).to_string();
+    raw.zeroize();
+    if trimmed.is_empty() {
+        return Err("password file was empty".into());
+    }
+    Ok(trimmed)
 }
 
 #[cfg(test)]

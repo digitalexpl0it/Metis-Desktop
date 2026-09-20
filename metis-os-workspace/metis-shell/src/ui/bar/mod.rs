@@ -31,6 +31,49 @@ thread_local! {
     // Set while a coalesced rebuild is queued, so a burst of config/monitor change
     // triggers collapses into a single rebuild pass.
     static REBUILD_SCHEDULED: Cell<bool> = const { Cell::new(false) };
+    /// Last menu layout applied to bar widgets. `reload-bar` only diffs `bar.json`,
+    /// so Settings → Metis Menu style/feature toggles (in `menu.json`) need this
+    /// to force a widget remount when the launcher layout changes.
+    static LAST_MENU_LAYOUT: Cell<Option<MenuLayoutSnap>> =
+        const { Cell::new(None) };
+}
+
+/// Layout-relevant slice of `menu.json` (not launch counts / pins).
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MenuLayoutSnap {
+    style: metis_config::MenuStyle,
+    show_user_header: bool,
+    show_rail: bool,
+    show_pinned: bool,
+}
+
+fn menu_layout_snap() -> MenuLayoutSnap {
+    let cfg = metis_config::load_menu_config();
+    MenuLayoutSnap {
+        style: cfg.style,
+        show_user_header: cfg.show_user_header,
+        show_rail: cfg.show_rail,
+        show_pinned: cfg.show_pinned,
+    }
+}
+
+fn remember_menu_layout() {
+    LAST_MENU_LAYOUT.with(|cell| cell.set(Some(menu_layout_snap())));
+}
+
+/// True when `menu.json` layout fields changed since the last bar widget build.
+fn take_menu_layout_changed() -> bool {
+    let snap = menu_layout_snap();
+    LAST_MENU_LAYOUT.with(|cell| {
+        let prev = cell.get();
+        cell.set(Some(snap));
+        match prev {
+            Some(old) => old != snap,
+            // Unseeded (should be rare after init) — remount so a Settings
+            // layout click is never a silent no-op.
+            None => true,
+        }
+    })
 }
 
 /// GTK widgets the control center embeds into (same layer surface as the bar).
@@ -93,6 +136,7 @@ pub fn init_and_show() {
         .collect();
     let count = handles.len();
     BARS.with(|bars| *bars.borrow_mut() = handles);
+    remember_menu_layout();
 
     // Defer pollers so GTK can finish the first layer-shell commit before subprocess I/O.
     glib::timeout_add_seconds_local(2, move || {
@@ -1375,6 +1419,7 @@ fn rebuild_bars_in_place(config: Rc<RefCell<BarConfig>>) {
             rehydrate_widget_state(&handle.widget_refs);
         }
     });
+    remember_menu_layout();
 }
 
 /// Re-apply cached service state after tearing down and rebuilding bar widgets.
@@ -1467,6 +1512,7 @@ fn rebuild_all_bars(config: Rc<RefCell<BarConfig>>) {
     for handle in old {
         handle.window.destroy();
     }
+    remember_menu_layout();
 }
 
 fn watch_bar_config() {
@@ -1812,11 +1858,12 @@ fn apply_config_diff(
     new: &BarConfig,
 ) {
     let enabling_auto_hide = new.auto_hide && !old.auto_hide;
+    let menu_layout_changed = take_menu_layout_changed();
     *config.borrow_mut() = new.clone();
     let target_count = target_monitors(new).len();
     if target_count != cur_count {
         rebuild_all_bars(config.clone());
-    } else if needs_widget_rebuild(old, new) {
+    } else if menu_layout_changed || needs_widget_rebuild(old, new) {
         rebuild_bars_in_place(config.clone());
     } else {
         apply_bars_live(config.clone());

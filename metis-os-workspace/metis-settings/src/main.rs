@@ -6,6 +6,7 @@
 //! Settings UI 2.0: Home overview + mini sidebar + right-edge category sheets.
 
 mod apps;
+mod bg;
 mod bluetooth;
 mod dialog;
 mod gaming;

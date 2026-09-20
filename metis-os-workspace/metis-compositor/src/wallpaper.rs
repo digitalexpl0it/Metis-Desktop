@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use image::imageops::Triangle;
+use image::imageops::{FilterType, Triangle};
 use image::{Rgba, RgbaImage};
 use metis_config::{BackgroundKind, GradientDirection};
 use smithay::backend::{
@@ -54,6 +54,9 @@ pub struct OutputRegion {
     pub size: Size<i32, Physical>,
 }
 
+/// Crossfade length when Settings (or IPC) swaps image / solid / gradient.
+const WALLPAPER_FADE_MS: u64 = 280;
+
 pub struct Wallpaper {
     /// Background used for any output without a per-output override.
     default_mode: BackgroundMode,
@@ -68,6 +71,15 @@ pub struct Wallpaper {
     /// The raw texture backing `buffer`, kept so the bar's backdrop blur can
     /// sample the wallpaper region behind the bar (TextureBuffer hides it).
     texture: Option<GlesTexture>,
+    /// Previous GPU wallpaper kept on screen while the next compose uploads, then
+    /// crossfaded out. Set only for config swaps (`apply_config`), not layout
+    /// resize (which snaps once the new buffer is ready).
+    outgoing: Option<TextureBuffer<GlesTexture>>,
+    /// When the incoming texture finished uploading and the fade started.
+    fade_start: Option<Instant>,
+    /// Next successful decode should stash the current buffer into `outgoing`
+    /// and fade rather than dropping it (Settings background changes).
+    fade_on_next_upload: bool,
     /// Decoded RGBA pixels (CPU) ready for a fast GPU upload during render.
     cpu_pixels: Option<Vec<u8>>,
     /// Full-resolution sources kept in memory (keyed by path) so resizes only
@@ -106,6 +118,9 @@ impl Wallpaper {
             full_size: Size::from((0, 0)),
             buffer: None,
             texture: None,
+            outgoing: None,
+            fade_start: None,
+            fade_on_next_upload: false,
             cpu_pixels: None,
             sources: HashMap::new(),
             decode_slot: Arc::new(Mutex::new((0, None))),
@@ -137,9 +152,9 @@ impl Wallpaper {
         (self.default_mode.clone(), self.default_path.clone())
     }
 
-    /// Re-read `wallpaper.json` and switch the background at runtime: drop the
-    /// cached sources/buffers so the next decode regenerates from the new config.
-    /// The caller re-applies the layout and kicks off the decode.
+    /// Re-read `wallpaper.json` and switch the background at runtime. Keeps the
+    /// current GPU texture on screen while the next image/solid/gradient composes,
+    /// then crossfades — clearing here caused a multi-second black flash in Settings.
     pub fn apply_config(&mut self) {
         let (mode, path, overrides) = resolve_config();
         if mode == self.default_mode && path == self.default_path && overrides == self.overrides {
@@ -149,13 +164,32 @@ impl Wallpaper {
         self.default_mode = mode;
         self.default_path = path;
         self.overrides = overrides;
-        self.sources.clear(); // force regeneration / re-read
-        self.invalidate();
+        // Keep decoded sources that are still referenced so switching back (or
+        // re-applying the same picture) skips the multi‑MB PNG decode.
+        let mut keep = HashSet::new();
+        if matches!(self.default_mode, BackgroundMode::Image) {
+            keep.insert(self.default_path.clone());
+        }
+        for p in self.overrides.values() {
+            keep.insert(p.clone());
+        }
+        self.sources.retain(|p, _| keep.contains(p));
+        // Soft invalidate + request a fade when the new framebuffer uploads.
+        self.decode_generation = self.decode_generation.wrapping_add(1);
+        self.cpu_pixels = None;
+        self.fade_on_next_upload = true;
+        // Drop any in-progress fade so we always blend from the currently shown
+        // wallpaper into the newly requested one.
+        self.outgoing = None;
+        self.fade_start = None;
     }
 
     pub fn invalidate(&mut self) {
         self.buffer = None;
         self.texture = None;
+        self.outgoing = None;
+        self.fade_start = None;
+        self.fade_on_next_upload = false;
         self.cpu_pixels = None;
         // Bump the generation so any in-flight worker's result is ignored on poll.
         // Never drop `decode_slot` or join here — that orphaned workers and/or
@@ -168,6 +202,8 @@ impl Wallpaper {
     pub fn invalidate_gpu_cache(&mut self) {
         self.buffer = None;
         self.texture = None;
+        self.outgoing = None;
+        self.fade_start = None;
     }
 
     /// Set the output layout (full framebuffer size + per-output regions) the
@@ -190,12 +226,14 @@ impl Wallpaper {
         self.redecode_at = Some(self.redecode_at.map_or(at, |prev| prev.min(at)));
     }
 
-    /// Drive debounced decoding and result polling from the compositor
-    /// heartbeat. Returns true while the wallpaper still needs a frame rendered
-    /// (decode pending/running, or decoded pixels awaiting GPU upload).
+    /// Drive debounced decoding, result polling, and wallpaper crossfade from the
+    /// compositor heartbeat. Returns true while the wallpaper still needs a frame
+    /// rendered (decode pending/running, pixels awaiting GPU upload, or fade).
     pub fn tick_decode(&mut self) -> bool {
         if !self.enabled() {
             self.redecode_at = None;
+            self.outgoing = None;
+            self.fade_start = None;
             return false;
         }
         if let Some(at) = self.redecode_at {
@@ -207,10 +245,33 @@ impl Wallpaper {
             }
         }
         self.poll_decode();
-        // Only schedule frames when a re-decode is queued or decoded pixels still
-        // need a GPU upload. Polling while a worker is running caused a 60fps
-        // render spin that blocked the nested compositor during startup.
-        self.redecode_at.is_some() || (self.cpu_pixels.is_some() && self.buffer.is_none())
+        self.tick_fade();
+        // Only schedule frames when a re-decode is queued, decoded pixels still
+        // need a GPU upload, or a crossfade is in progress. Polling while a
+        // worker is running caused a 60fps render spin that blocked the nested
+        // compositor during startup.
+        self.redecode_at.is_some()
+            || (self.cpu_pixels.is_some() && self.buffer.is_none())
+            || self.fade_start.is_some()
+    }
+
+    fn tick_fade(&mut self) {
+        let Some(start) = self.fade_start else {
+            return;
+        };
+        if start.elapsed() >= Duration::from_millis(WALLPAPER_FADE_MS) {
+            self.outgoing = None;
+            self.fade_start = None;
+        }
+    }
+
+    fn fade_alpha(&self) -> Option<f32> {
+        let start = self.fade_start?;
+        let t = (start.elapsed().as_secs_f32()
+            / Duration::from_millis(WALLPAPER_FADE_MS).as_secs_f32())
+        .clamp(0.0, 1.0);
+        // Ease-out quad — snappy start, soft settle.
+        Some(1.0 - (1.0 - t) * (1.0 - t))
     }
 
     /// Compose the full-desktop wallpaper on a background thread (one cover-crop
@@ -281,17 +342,10 @@ impl Wallpaper {
                                 .get(&path)
                                 .or_else(|| new_sources.get(&path))
                                 .cloned()
-                                .or_else(|| match image::open(&path) {
-                                    Ok(img) => {
-                                        let arc = Arc::new(img.into_rgba8());
-                                        new_sources.insert(path.clone(), arc.clone());
-                                        Some(arc)
-                                    }
-                                    Err(_) => {
-                                        tracing::warn!(path = %path.display(), "failed to open wallpaper");
-                                        None
-                                    }
-                                });
+                                .or_else(|| load_image_cached(&path).map(|arc| {
+                                    new_sources.insert(path.clone(), arc.clone());
+                                    arc
+                                }));
                             match source {
                                 Some(src) => cover_crop_rgba(&src, rw, rh),
                                 None => vec![0u8; (rw as usize) * (rh as usize) * 4],
@@ -348,11 +402,23 @@ impl Wallpaper {
                         self.sources.insert(path, src);
                     }
                     self.cpu_pixels = Some(out.pixels);
-                    // Drop the previous GPU upload so `ensure` imports the new
-                    // framebuffer this frame (soft layout invalidate keeps the
-                    // old texture until we get here).
-                    self.buffer = None;
-                    self.texture = None;
+                    if self.fade_on_next_upload {
+                        // Keep painting the previous wallpaper until the new
+                        // texture uploads, then crossfade.
+                        if let Some(prev) = self.buffer.take() {
+                            self.outgoing = Some(prev);
+                        }
+                        self.texture = None;
+                        self.fade_on_next_upload = false;
+                        self.fade_start = None;
+                    } else {
+                        // Layout / hotplug: snap once the new buffer is ready
+                        // (previous soft-invalidate already kept it until now).
+                        self.buffer = None;
+                        self.texture = None;
+                        self.outgoing = None;
+                        self.fade_start = None;
+                    }
                 }
             }
         }
@@ -396,6 +462,9 @@ impl Wallpaper {
                 tracing::info!(width = w, height = h, "wallpaper ready");
                 self.texture = Some(texture);
                 self.buffer = Some(buf);
+                if self.outgoing.is_some() {
+                    self.fade_start = Some(Instant::now());
+                }
             }
             Err(err) => tracing::warn!(?err, "failed to upload wallpaper texture"),
         }
@@ -419,44 +488,133 @@ impl Wallpaper {
     /// Wallpaper element with its top-left placed at `loc` (physical). The
     /// texture spans the whole virtual desktop, so the DRM backend offsets it by
     /// the negative of each output's origin to slice the per-output framebuffer.
+    ///
+    /// Prefer [`render_elements_at`] when a config crossfade may be active.
     pub fn render_element_at(
         &self,
         loc: Point<f64, Physical>,
     ) -> Option<TextureRenderElement<GlesTexture>> {
-        let buffer = self.buffer.as_ref()?;
-        Some(TextureRenderElement::from_texture_buffer(
-            loc,
-            buffer,
-            None,
-            None,
-            None,
-            Kind::Unspecified,
-        ))
+        self.render_elements_at(loc).into_iter().next()
+    }
+
+    /// Zero, one, or two wallpaper elements for `loc`. During a Settings
+    /// background crossfade this returns the fading-in texture first (on top)
+    /// and the previous wallpaper beneath it. Higher stack index = further back
+    /// in the scene (`render.rs` pushes later = more background).
+    pub fn render_elements_at(
+        &self,
+        loc: Point<f64, Physical>,
+    ) -> Vec<TextureRenderElement<GlesTexture>> {
+        let mut elems = Vec::with_capacity(2);
+        let fade = self.fade_alpha();
+        if let Some(buffer) = self.buffer.as_ref() {
+            let alpha = if self.outgoing.is_some() {
+                fade.or(Some(0.0))
+            } else {
+                None
+            };
+            elems.push(TextureRenderElement::from_texture_buffer(
+                loc,
+                buffer,
+                alpha,
+                None,
+                None,
+                Kind::Unspecified,
+            ));
+        }
+        if let Some(prev) = self.outgoing.as_ref() {
+            // Keep the previous wallpaper fully opaque under the fade-in.
+            elems.push(TextureRenderElement::from_texture_buffer(
+                loc,
+                prev,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ));
+        } else if elems.is_empty() {
+            // Nothing uploaded yet — callers fall back to the desktop underlay.
+        }
+        elems
     }
 
     /// True while a background decode is running and the texture is not uploaded yet.
     pub fn decode_in_flight(&self) -> bool {
         self.enabled()
             && self.buffer.is_none()
+            && self.outgoing.is_none()
             && (self.decode_thread.is_some() || self.redecode_at.is_some())
     }
 }
 
+fn load_image_cached(path: &std::path::Path) -> Option<Arc<RgbaImage>> {
+    if let Some((w, h, rgba)) = metis_config::load_wallpaper_rgba_cache(path) {
+        if let Some(img) = RgbaImage::from_raw(w, h, rgba) {
+            return Some(Arc::new(img));
+        }
+    }
+    match image::open(path) {
+        Ok(img) => {
+            let rgba = img.into_rgba8();
+            if let Err(err) =
+                metis_config::store_wallpaper_rgba_cache(path, rgba.width(), rgba.height(), &rgba)
+            {
+                tracing::debug!(path = %path.display(), %err, "wallpaper rgba cache write failed");
+            }
+            Some(Arc::new(rgba))
+        }
+        Err(_) => {
+            tracing::warn!(path = %path.display(), "failed to open wallpaper");
+            None
+        }
+    }
+}
+
 fn cover_crop_rgba(rgba: &image::RgbaImage, out_w: u32, out_h: u32) -> Vec<u8> {
+    cover_crop_rgba_filter(rgba, out_w, out_h, Triangle)
+}
+
+/// Cover-crop: crop the source to the output aspect first, then resize once.
+/// (The previous path resized the whole image up/down then cropped — much heavier
+/// for ultrawide / mismatched aspects.)
+fn cover_crop_rgba_filter(
+    rgba: &image::RgbaImage,
+    out_w: u32,
+    out_h: u32,
+    filter: FilterType,
+) -> Vec<u8> {
     let (iw, ih) = (rgba.width(), rgba.height());
-    if iw == 0 || ih == 0 {
+    if iw == 0 || ih == 0 || out_w == 0 || out_h == 0 {
         return vec![0; (out_w as usize) * (out_h as usize) * 4];
     }
+    if iw == out_w && ih == out_h {
+        return rgba.as_raw().clone();
+    }
 
-    let scale = (out_w as f32 / iw as f32).max(out_h as f32 / ih as f32);
-    let rw = ((iw as f32 * scale).ceil() as u32).max(1);
-    let rh = ((ih as f32 * scale).ceil() as u32).max(1);
-    let resized = image::imageops::resize(rgba, rw, rh, Triangle);
-    let x = rw.saturating_sub(out_w) / 2;
-    let y = rh.saturating_sub(out_h) / 2;
-    image::imageops::crop_imm(&resized, x, y, out_w, out_h)
-        .to_image()
-        .into_raw()
+    let src_aspect = iw as f32 / ih as f32;
+    let dst_aspect = out_w as f32 / out_h as f32;
+    let (cx, cy, cw, ch) = if src_aspect > dst_aspect {
+        // Source wider than output — crop sides.
+        let cw = ((ih as f32 * dst_aspect).round() as u32).clamp(1, iw);
+        let cx = (iw - cw) / 2;
+        (cx, 0, cw, ih)
+    } else {
+        // Source taller — crop top/bottom.
+        let ch = ((iw as f32 / dst_aspect).round() as u32).clamp(1, ih);
+        let cy = (ih - ch) / 2;
+        (0, cy, iw, ch)
+    };
+
+    let cropped = if cx == 0 && cy == 0 && cw == iw && ch == ih {
+        None
+    } else {
+        Some(image::imageops::crop_imm(rgba, cx, cy, cw, ch).to_image())
+    };
+    let src = cropped.as_ref().unwrap_or(rgba);
+    if src.width() == out_w && src.height() == out_h {
+        return src.as_raw().clone();
+    }
+    image::imageops::resize(src, out_w, out_h, filter).into_raw()
 }
 
 /// Copy a `src_w × src_h` RGBA block into `dst` (a `dst_w × dst_h` RGBA buffer)

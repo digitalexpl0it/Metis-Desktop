@@ -60,7 +60,7 @@ Do **not** mix a `/usr` package install with `./install.sh` / `--install-session
 |-------|------|
 | **Depends** | Required to start a Metis session (GTK4, seat, DRM, PipeWire, kitty, …) |
 | **Bundled** | `libgtk4-layer-shell` on Ubuntu 24.04 only; 26.04 / Debian 13 use `libgtk4-layer-shell0` |
-| **Recommends** | keyring, portals helpers, volumes, **nftables**, **polkit agent** (apt installs by default) |
+| **Recommends** | keyring, portals helpers, volumes, **nftables** (apt installs by default) |
 | **Suggests** | GRD, FreeRDP, GameMode, Flatpak, BT, printers, biometrics |
 
 ## From source: `./install.sh`
@@ -165,6 +165,7 @@ Nix: [`.github/workflows/nix-flake.yml`](../.github/workflows/nix-flake.yml).
 | `/usr/share/applications/metis-*.desktop` + icons | Settings / Viewer |
 | `/usr/share/metis/{wallpapers,widgets,locale}` | Assets / i18n |
 | `/usr/share/polkit-1/actions/org.metis.policy` | Polkit |
+| `/usr/bin/metis-polkit-agent` / `/usr/libexec/metis-polkit-agent` | Metis PolicyKit auth agent |
 | `/etc/pam.d/metis` | Lock-screen PAM |
 
 ## Explicit non-goals (for now)

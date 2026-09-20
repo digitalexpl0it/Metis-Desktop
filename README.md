@@ -264,7 +264,7 @@ Other files are created on demand:
 | ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `config.json`          | You change a preference            | Active theme (defaults to dark), graphics profile, onboarding state, briefing-on-login, XWayland mode |
 | `menu.json`            | You set launcher defaults / pins   | App launcher: terminal + file-manager choices (kitty preferred on auto-detect), pinned apps       |
-| `wallpaper.json`       | You pick a background              | Wallpaper picture / colour / gradient (+ per-output overrides). Settings → Background lists imports, Metis bundles, and system images under `/usr/share/backgrounds` |
+| `wallpaper.json`       | You pick a background              | Wallpaper picture / colour / gradient (+ per-output overrides). Settings → Background lists imports, Metis bundles, and system images under `/usr/share/backgrounds`. Changes crossfade live; decode cache in `~/.cache/metis/wallpaper-rgba/` |
 | `weather.json`         | You configure weather              | Bar weather: unit, auto-detect / IP-geolocation, saved locations                                  |
 | `desk.json`            | The compositor persists its layout | Compositor window-grid layout (app tiles)                                                         |
 | `desktop-widgets.json` | You enable Desktop widgets         | Wallpaper widgets: enable, edit mode, chrome, builtins + JSON extension instances                 |

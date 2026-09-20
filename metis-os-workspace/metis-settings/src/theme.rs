@@ -161,6 +161,7 @@ fn settings_css(t: &ThemeTokens) -> String {
     let rs = t.radius_sm;
     let accent2 = t.accent_secondary();
     let text_rgb = t.text_rgb();
+    let accent_rgb = t.accent_rgb();
     format!(
         r#"
         /* The shared bar stylesheet makes every `window` transparent for the
@@ -1106,6 +1107,8 @@ fn settings_css(t: &ThemeTokens) -> String {
             border-radius: 999px;
             min-width: 40px;
             min-height: 22px;
+            /* Cap height so subtitle rows cannot vertically stretch the track. */
+            max-height: 22px;
             transition: none;
         }}
         switch:checked {{
@@ -1117,6 +1120,7 @@ fn settings_css(t: &ThemeTokens) -> String {
             border-radius: 999px;
             min-width: 18px;
             min-height: 18px;
+            max-height: 18px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
             transition: none;
         }}
@@ -1233,6 +1237,56 @@ fn settings_css(t: &ThemeTokens) -> String {
             box-shadow: 0 3px 8px rgba(0,0,0,0.45);
         }}
         .metis-style-caption {{ color: {text}; font-weight: 600; }}
+
+        /* Metis Menu · layout thumbnails */
+        .metis-menu-layout-preview {{
+            background-color: {surface};
+            border: 1px solid {border};
+            border-radius: 10px;
+            padding: 6px;
+        }}
+        .metis-menu-thumb-rail {{
+            background-color: rgba({text_rgb}, 0.06);
+            border-radius: 4px;
+            padding: 3px;
+        }}
+        .metis-menu-thumb-dot {{
+            background-color: rgba({text_rgb}, 0.28);
+            border-radius: 999px;
+        }}
+        .metis-menu-thumb-list {{
+            background-color: rgba({text_rgb}, 0.04);
+            border-radius: 4px;
+            padding: 3px;
+        }}
+        .metis-menu-thumb-pins {{
+            background-color: rgba({text_rgb}, 0.04);
+            border-radius: 4px;
+            padding: 3px;
+        }}
+        .metis-menu-thumb-line {{
+            background-color: rgba({text_rgb}, 0.35);
+            border-radius: 2px;
+        }}
+        .metis-menu-thumb-row {{
+            background-color: rgba({text_rgb}, 0.14);
+            border-radius: 2px;
+        }}
+        .metis-menu-thumb-search {{
+            background-color: rgba({accent_rgb}, 0.28);
+            border-radius: 3px;
+        }}
+        .metis-menu-thumb-tile {{
+            background-color: rgba({text_rgb}, 0.18);
+            border-radius: 3px;
+        }}
+        .metis-menu-thumb-user {{
+            padding-bottom: 2px;
+        }}
+        .metis-menu-thumb-avatar {{
+            background-color: rgba({accent_rgb}, 0.45);
+            border-radius: 999px;
+        }}
 
         /* Appearance · Wallpaper grid */
         .metis-wallpaper-grid {{ padding: 4px; }}

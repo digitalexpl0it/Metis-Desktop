@@ -847,11 +847,14 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   colors; font. (Wallpaper, edge bar, and window chrome live on their own pages
   below.)
 - **Background** — picture / solid colour / gradient, applied live and remembered
-  in `wallpaper.json`, with optional per-output picture overrides. The picture
-  picker groups **Your pictures** (imports under `~/.config/metis/wallpapers`),
-  **Metis** (bundled defaults), and **System** (e.g. Ubuntu/GNOME images under
+  in `wallpaper.json`, with optional per-output picture overrides. Changes
+  **crossfade** (~280 ms) from the previous background — the desktop never goes
+  black while the next image decodes. The picture picker groups **Your
+  pictures** (imports under `~/.config/metis/wallpapers`), **Metis** (bundled
+  defaults), and **System** (e.g. Ubuntu/GNOME images under
   `/usr/share/backgrounds`). Large libraries are paginated (9 thumbs per page)
-  with All / Metis / System filters; thumbnails load asynchronously.
+  with All / Metis / System filters; thumbnails load asynchronously and warm a
+  decode cache (`~/.cache/metis/wallpaper-rgba/`) so clicks apply quickly.
 - **Edge bar** — position (top/bottom/left/right),
   distance from the edge, **bar length** (40–100%, centered), **bar background**
   (theme / solid / gradient + direction), **auto-hide** (slides to a peek and
@@ -895,12 +898,20 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   object — labels may use `{helper.<key>}`. No network from helpers by default;
   not available to `open_uri` / `launch`. Rhai/Lua/WASM remain deferred. Example
   packs: `com.metis.example.quicklinks`, `com.metis.example.helperstatus`.
-- **Metis Menu** — choose your default **terminal** and **file manager** (from
-  auto-detected installs or a custom binary path), plus the launcher panel
-  opacity. Tap **Super** to toggle the menu; start typing while it is open to
-  filter applications. Selecting **Settings** restores and focuses the existing
-  Settings window (including when minimized) instead of opening a duplicate.
-  Saved to `menu.json`.
+- **Metis Menu** — pick a **layout** (Metis default, Whisker, ArcMenu, Mint),
+  toggle the user avatar/name header, places/power rail, and pinned column;
+  choose your default **terminal** and **file manager** (auto-detected installs
+  or a custom binary path); and set launcher panel opacity. Tap **Super** to
+  toggle the menu; start typing while it is open to filter applications.
+  Selecting **Settings** restores and focuses the existing Settings window
+  (including when minimized) instead of opening a duplicate. Saved to
+  `menu.json` (layout changes reload the edge bar live).
+- **Users** — profile picture (`~/.face`), display name, password change, and
+  local account management (add/remove, Administrator/`sudo` toggle). Privileged
+  actions show a PolicyKit password dialog (`metis-remote`).
+- **Date & Time** — automatic date/time (NTP), automatic timezone, manual
+  clock/timezone when auto is off, 12/24-hour bar format, and calendar first day
+  of the week (`datetime.json`).
 - **Weather** — manual location override + search, multiple saved locations
   (reorder/remove), °F/°C unit, and an IP-geolocation toggle.
 - **Network** — Wireless / Wired / **VPN** / **DNS** / Proxy. Wi-Fi
@@ -1075,10 +1086,10 @@ paths are advertised to RDP; remote images are written under
 set a password first. If Metis Viewer says FreeRDP was not found, install
 `freerdp3-wayland` or `freerdp2-x11`. If **Security** says firewall rules are not
 applied (or Retry fails / times out), install `nftables` (recommended) or enable
-`ufw` (`sudo ufw enable`), and ensure a PolicyKit agent is running in the Metis
-session so a password dialog can appear (e.g. `policykit-1-gnome` or
-`mate-polkit`). Without an agent, `pkexec` waits until it times out. You can
-also run `pkexec metis-remote firewall apply` from a terminal. PipeWire and the
+`ufw` (`sudo ufw enable`). Metis starts `metis-polkit-agent` with the session so
+a password dialog can appear for `pkexec`; without it, authorization waits until
+it times out. You can also run `pkexec metis-remote firewall apply` from a
+terminal. PipeWire and the
 Metis ScreenCast portal must be running in the DRM session — re-run
 `./run-metis.sh --install-session` if portal capture is broken. Check status:
 `metis-remote status` (JSON).
@@ -1212,8 +1223,9 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `calendars.json` | Calendar accounts (no passwords — secrets in Keyring / Secret Service) |
 | `themes/dark.json`, `themes/light.json` | Design tokens — accents, semantic colors, `text_on_accent`, shadows/glows |
 | `config.json` | Active theme, onboarding state, briefing-on-login |
-| `menu.json` | App launcher terminal / file-manager defaults and pinned apps |
-| `wallpaper.json` | Background picture / colour / gradient, plus per-output overrides |
+| `menu.json` | App launcher layout style, feature toggles, terminal / file-manager defaults, and pinned apps |
+| `datetime.json` | Auto-timezone preference and calendar first day of week |
+| `wallpaper.json` | Background picture / colour / gradient, plus per-output overrides; live crossfade. Decode cache: `~/.cache/metis/wallpaper-rgba/` |
 | `weather.json` | Bar weather: unit, auto-detect, IP-geolocation, saved locations |
 | `desk.json` | Compositor window-grid layout (widget tiles) |
 | `desktop-widgets.json` | Wallpaper desktop widgets: enable, edit mode, chrome, instances |
@@ -1267,6 +1279,7 @@ changes live.
 | Settings window closes but `metis-settings` still runs | Rebuild/reinstall Settings (2026-09-19 quit-on-close). Closing the window should exit the process; confirm with `pgrep metis-settings`. Category sheet **X** only returns to Home |
 | Terminal floods with Gtk theme parser warnings when Settings opens | Harmless: Settings loads the shared shell stylesheet, which uses some CSS GTK’s engine skips (`max-width`, `color-mix`, etc.). UI still works |
 | Background picker feels sluggish with many system wallpapers | Use the page controls / filters (2026-09-19); thumbs load async and cache. Prefer **Metis** or **Your pictures** if you do not need distro images |
+| Wallpaper flashes black / takes seconds before the fade when changing Background | Rebuild/reinstall compositor + Settings (2026-09-19): soft hold + crossfade; RGBA cache under `~/.cache/metis/wallpaper-rgba/`. Prefer a release build. First browse of a page warms the cache |
 | Bottom edge bar freezes while Settings (or another maximized window) is open | Rebuild/reinstall compositor (2026-09-19): maximized reclamp no longer storms configures from CSD shadow bbox overflow |
 | Missing layer-shell | Install `libgtk4-layer-shell-dev` (26.04 / Debian 13), or build from source on 24.04 |
 | Maximized title controls unusable (top auto-hide bar) | Move the pointer just **below** the thin peek strip to reveal the titlebar; the absolute screen edge opens the edge bar instead |
@@ -1297,7 +1310,7 @@ changes live.
 | Verify the shell is reachable | `./run-metis.sh --verify` |
 | Compare compositor vs shell grid | `./run-metis.sh --verify-grid` |
 | Remote desktop toggle greyed out | Install `gnome-remote-desktop`; set a password on **Settings → Remote access** before enabling |
-| LAN firewall not applied / Retry times out | Install `nftables` (or active `ufw`); install a PolicyKit agent (`policykit-1-gnome` / `mate-polkit`); use **Retry firewall apply** under Security, or `pkexec metis-remote firewall apply` |
+| LAN firewall not applied / Retry times out | Install `nftables` (or active `ufw`); ensure `metis-polkit-agent` is running; use **Retry firewall apply** under Security, or `pkexec metis-remote firewall apply` |
 | RDP connects but screen is black | Confirm you are on a DRM session (not nested dev); unlock if the session is locked; check `metis-remote status` and PipeWire/portal stack |
 | `metis-remote` not found | Package may be missing — `dpkg -l metis-desktop` and reinstall with `sudo apt install ./metis-desktop_*.deb`. Dev trees: `./run-metis.sh --install-session` |
 | Metis Viewer: `cliprdr_… failed` / instant disconnect | Update Viewer (clipboard channel disabled in spawn). **Do not RDP into the same session from itself** — connect from another machine (e.g. the KVM host → guest IP) |

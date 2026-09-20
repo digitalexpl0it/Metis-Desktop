@@ -111,9 +111,12 @@ xfreerdp /v:$(hostname -I | awk '{print $1}'):3389 /u:$USER /p:'your-strong-pass
 Metis integration: `~/.config/metis/remote.json` + `metis-remote
 {status|enable|disable|autostart|set-credentials|firewall|…}`; Settings page
 **Remote access**; `metis-session` calls `metis-remote autostart` when enabled.
-LAN-only firewall apply uses timed `pkexec` — install `nftables` (preferred) and
-a PolicyKit agent in the session (`policykit-1-gnome` or `mate-polkit`) so the
-admin password dialog can appear. See USER_GUIDE → Remote desktop.
+LAN-only firewall apply uses timed `pkexec` — Metis starts `metis-polkit-agent`
+with the session so the admin password dialog can appear (no third-party
+PolicyKit agent required). Users / Date & Time settings use the same agent with
+actions in `packaging/polkit/org.metis.policy` (install to
+`/usr/share/polkit-1/actions/org.metis.policy` when updating `metis-remote`).
+See USER_GUIDE → Remote desktop.
 
 **XWayland:** default one shared server (`xwayland_mode: shared`). Opt-in
 `xwayland_mode: isolated` in `config.json` starts a second gaming bucket
@@ -415,9 +418,12 @@ On first run, Metis writes defaults to `~/.config/metis/`:
 Created later, on demand:
 
 - `config.json` — active theme, onboarding state, briefing-on-login (written when you change a preference)
-- `menu.json` — app launcher terminal / file-manager defaults and pinned apps
+- `menu.json` — app launcher layout style, feature toggles, terminal / file-manager defaults, and pinned apps
+- `datetime.json` — auto-timezone preference and calendar first day of week
 - `wallpaper.json` — background picture / colour / gradient (and per-output overrides).
   Settings → Background also offers system images from `/usr/share/backgrounds`
+  (paginated picker). Live apply crossfades; decoded RGBA cache lives under
+  `~/.cache/metis/wallpaper-rgba/` (safe to delete to reclaim disk).
   (paginated; not copied into the Metis store unless imported).
 - `weather.json` — bar weather unit, auto-detect / IP-geolocation, saved locations
 - `dismissed.json` — dismissed calendar reminders
@@ -437,6 +443,7 @@ Created later, on demand:
 | Settings closes but process stays (`pgrep metis-settings`) | Rebuild/reinstall `metis-settings` (2026-09-19 quit-on-close). Sheet **X** returns to Home; window close exits the app |
 | Gtk theme parser warnings on Settings open | Expected noise from the shared shell stylesheet (unsupported CSS props / `color-mix`). Harmless — ignore unless the UI looks wrong |
 | Bottom edge bar freezes with maximized Settings open | Rebuild/reinstall compositor (2026-09-19 maximized reclamp geometry-only fix) |
+| Wallpaper flashes black or lags ~seconds on Background change | Rebuild/reinstall **release** `metis-compositor` + `metis-settings` (2026-09-19 crossfade + RGBA cache). Browse the picker once to warm `~/.cache/metis/wallpaper-rgba/` |
 | DRM session: black screen / no input | Run from a VT you own (or via the display-manager entry) so libseat can take DRM master; check the log and SSH in to `Ctrl+Alt+Backspace` is unavailable — `pkill metis-compositor`. |
 | DRM session: "no GPU found for seat" | Ensure you are in the `video`/`render`/`input` groups and `seatd`/logind is running; try `METIS_DRM_DEVICE=/dev/dri/card0`. |
 | Screenshot / Flameshot fails | `./run-metis.sh --install-session`, log out and back in, then `metis-portal --capture-test /tmp/test.png`; install `xdg-desktop-portal` + `xdg-desktop-portal-gtk` if missing |

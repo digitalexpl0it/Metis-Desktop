@@ -900,13 +900,18 @@ impl WallpaperBrowser {
     fn queue_thumb_load(self: &Rc<Self>, path: PathBuf, gen: u64) {
         if self.thumb_cache.borrow().contains_key(&path) {
             self.apply_thumb(&path);
+            // Still warm the compositor RGBA cache in the background so a click
+            // does not wait on a cold PNG decode.
+            let warm = path.clone();
+            std::thread::spawn(move || warm_wallpaper_rgba_cache(&warm));
             return;
         }
         let tx = self.thumb_tx.clone();
         std::thread::spawn(move || {
             if let Ok(png) = decode_thumb_png(&path) {
-                let _ = tx.send((path, png, gen));
+                let _ = tx.send((path.clone(), png, gen));
             }
+            warm_wallpaper_rgba_cache(&path);
         });
     }
 
@@ -974,6 +979,49 @@ fn decode_thumb_png(path: &Path) -> Result<Vec<u8>, ()> {
     let pixbuf =
         gdk_pixbuf::Pixbuf::from_file_at_scale(path, THUMB_W, THUMB_H, true).map_err(|_| ())?;
     pixbuf.save_to_bufferv("png", &[]).map_err(|_| ())
+}
+
+/// Decode the full wallpaper once into the shared RGBA cache the compositor
+/// reads on apply — browsing the gallery pre-warms clicks.
+fn warm_wallpaper_rgba_cache(path: &Path) {
+    if metis_config::wallpaper_rgba_cache_fresh(path) {
+        return;
+    }
+    let Ok(pixbuf) = gdk_pixbuf::Pixbuf::from_file(path) else {
+        return;
+    };
+    let pixbuf = if pixbuf.n_channels() == 3 {
+        match pixbuf.add_alpha(false, 0, 0, 0) {
+            Ok(p) => p,
+            Err(_) => return,
+        }
+    } else {
+        pixbuf
+    };
+    if pixbuf.n_channels() != 4 {
+        return;
+    }
+    let w = pixbuf.width();
+    let h = pixbuf.height();
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let stride = pixbuf.rowstride() as usize;
+    let src = pixbuf.read_pixel_bytes();
+    let ww = w as usize;
+    let hh = h as usize;
+    let mut rgba = vec![0u8; ww * hh * 4];
+    for y in 0..hh {
+        let start = y * stride;
+        let end = start + ww * 4;
+        if end > src.len() {
+            return;
+        }
+        rgba[y * ww * 4..(y + 1) * ww * 4].copy_from_slice(&src[start..end]);
+    }
+    if let Err(err) = metis_config::store_wallpaper_rgba_cache(path, w as u32, h as u32, &rgba) {
+        tracing::debug!(path = %path.display(), %err, "wallpaper rgba cache warm failed");
+    }
 }
 
 fn wallpaper_thumb(
@@ -1063,7 +1111,7 @@ fn save_and_apply(cfg: &metis_config::WallpaperConfig) {
     if let Err(err) = metis_config::save_wallpaper_config(cfg) {
         tracing::warn!(%err, "failed to save wallpaper.json");
     }
-    runtime::apply_background();
+    runtime::apply_background_async();
 }
 
 fn direction_to_index(dir: metis_config::GradientDirection) -> u32 {

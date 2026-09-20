@@ -319,7 +319,7 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
             BUILD_ARGS+=("$prof")
         fi
     fi
-    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-viewer -p metis-screenshot -p metis-gaming; then
+    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming; then
         echo "ERROR: release build failed." >&2
         exit 1
     fi
@@ -348,6 +348,10 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
     fi
     if [[ -x "$REL/metis-remote" ]]; then
         $SUDO install -Dm755 "$REL/metis-remote" "$BIN_DST/metis-remote"
+    fi
+    if [[ -x "$REL/metis-polkit-agent" ]]; then
+        $SUDO install -Dm755 "$REL/metis-polkit-agent" "$BIN_DST/metis-polkit-agent"
+        $SUDO install -Dm755 "$REL/metis-polkit-agent" /usr/libexec/metis-polkit-agent
     fi
     if [[ -x "$REL/metis-viewer" ]]; then
         $SUDO install -Dm755 "$REL/metis-viewer" "$BIN_DST/metis-viewer"
@@ -880,11 +884,11 @@ export RUST_LOG="${RUST_LOG:-metis_shell=info,metis_compositor=info,warn}"
                 BUILD_ARGS+=("$prof")
             fi
         fi
-        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-viewer -p metis-screenshot -p metis-gaming)
+        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming)
     else
         SHELL_BIN="$TARGET_DIR/debug/metis-shell"
         COMP_BIN="$TARGET_DIR/debug/metis-compositor"
-        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-viewer -p metis-screenshot -p metis-gaming)
+        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming)
     fi
 
     if [[ "$FORCE_BUILD" -eq 1 ]] || binary_needs_rebuild "$SHELL_BIN" || binary_needs_rebuild "$COMP_BIN"; then

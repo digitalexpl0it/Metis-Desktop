@@ -381,47 +381,14 @@ pub fn clear_as_root() -> Result<FirewallStatus, String> {
 }
 
 fn escalate(args: &[&str]) -> Result<(), String> {
-    let bin = crate::pkhelpers::privileged_exe();
-    // Bound wait: without a PolicyKit agent, bare `pkexec` can hang forever and
-    // leave Settings stuck on "Applying…". Always wrap with `timeout`.
-    let output = Command::new("timeout")
-        .args(["--signal=TERM", "--kill-after=5s", "45s"])
-        .arg("pkexec")
-        .arg(&bin)
-        .args(args)
-        .output()
-        .map_err(|e| {
-            format!(
-                "failed to run timeout/pkexec ({e}) — install coreutils + policykit-1, \
-                 or run as root to apply LAN-only firewall rules"
-            )
-        })?;
+    let output = crate::pkhelpers::run_pkexec(args, std::time::Duration::from_secs(45))?;
     if output.status.success() {
         return Ok(());
     }
-    let code = output.status.code();
-    if code == Some(124) || code == Some(137) {
-        return Err(
-            "Timed out waiting for admin approval. Install a PolicyKit agent \
-             (e.g. `policykit-1-gnome`) so a password dialog can appear, then use \
-             Retry under Security — or run: pkexec metis-remote firewall apply"
-                .into(),
-        );
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let detail = if !stderr.trim().is_empty() {
-        stderr.trim().to_string()
-    } else {
-        stdout.trim().to_string()
-    };
-    Err(if detail.is_empty() {
-        "Admin approval failed or was cancelled (no password dialog usually means \
-         no PolicyKit agent is running in this session)"
-            .into()
-    } else {
-        detail
-    })
+    Err(crate::pkhelpers::pkexec_failure_message(
+        &output,
+        " for firewall changes",
+    ))
 }
 
 fn apply_nft() -> Result<(), String> {

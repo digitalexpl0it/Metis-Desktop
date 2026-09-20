@@ -8,6 +8,7 @@ pub mod calendars;
 pub mod clocks;
 pub mod css;
 pub mod dashboard;
+pub mod datetime;
 pub mod decorations;
 pub mod desktop_widgets;
 pub mod game_rules;
@@ -436,6 +437,9 @@ pub use decorations::{
     decorations_config_path, load_decorations_config, save_decorations_config, DecorationsConfig,
     DecorationsOverride,
 };
+pub use datetime::{
+    datetime_config_path, load_datetime_config, save_datetime_config, DateTimeConfig, FirstDayOfWeek,
+};
 pub use desktop_widgets::{
     desktop_widgets_config_path, load_desktop_widgets_config, save_desktop_widgets_config,
     DesktopWidgetChrome, DesktopWidgetChromeOverride, DesktopWidgetInstance, DesktopWidgetKind,
@@ -480,8 +484,8 @@ pub use lock::{
 };
 pub use menu::{
     argv_in_terminal, binary_in_path, load_menu_config, menu_config_path, resolve_executable,
-    resolve_file_manager, resolve_terminal, save_menu_config, MenuConfig, KNOWN_FILE_MANAGERS,
-    KNOWN_TERMINALS,
+    resolve_file_manager, resolve_terminal, save_menu_config, MenuConfig, MenuStyle,
+    KNOWN_FILE_MANAGERS, KNOWN_TERMINALS,
 };
 pub use outputs::{
     format_schedule_hhmm, format_schedule_minutes, load_outputs_config,
@@ -514,9 +518,10 @@ pub use viewer::{
 pub use wallpaper::{
     bundled_wallpaper_dir, bundled_wallpaper_dirs, collect_wallpaper_images,
     collect_wallpaper_images_depth, default_wallpaper_path, list_bundled_wallpapers,
-    load_wallpaper_config, parse_hex_rgb, save_wallpaper_config, system_wallpaper_dirs,
-    wallpaper_config_path, wallpaper_store_dir, BackgroundKind, GradientDirection, WallpaperConfig,
-    WALLPAPER_IMAGE_EXTS,
+    load_wallpaper_config, load_wallpaper_rgba_cache, parse_hex_rgb, save_wallpaper_config,
+    store_wallpaper_rgba_cache, system_wallpaper_dirs, wallpaper_config_path,
+    wallpaper_rgba_cache_fresh, wallpaper_rgba_cache_path, wallpaper_store_dir, BackgroundKind,
+    GradientDirection, WallpaperConfig, WALLPAPER_IMAGE_EXTS,
 };
 pub use weather::{
     load_weather_config, save_weather_config, weather_config_path, TempUnit, WeatherConfig,

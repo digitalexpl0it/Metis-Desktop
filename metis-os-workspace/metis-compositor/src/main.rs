@@ -205,6 +205,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // background so the first GtkApplication launch doesn't cold-start it.
         // Must not block: the compositor needs to start rendering immediately.
         start_portal_stack(state.socket_name.to_string_lossy().into_owned());
+        // First-party PolicyKit agent for pkexec prompts (Users, firewall, …).
+        ensure_polkit_agent();
+        start_polkit_agent_watchdog();
         update_standalone_activation_env(&state.socket_name.to_string_lossy());
     }
 
@@ -219,6 +222,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         backend == Backend::Winit && std::env::var_os("METIS_IMPORT_ACTIVATION_ENV").is_some();
     if import_activation_env {
         update_activation_environment(&state.socket_name.to_string_lossy());
+        // Nested session owns activation — run our agent rather than fighting
+        // the host DE's agent on a shared bus without import-env.
+        ensure_polkit_agent();
+        start_polkit_agent_watchdog();
         tracing::info!(
             wayland_display = ?state.socket_name,
             "imported nested WAYLAND_DISPLAY into D-Bus/systemd activation environment"
@@ -339,6 +346,11 @@ fn update_standalone_activation_env(display: &str) {
     }
     if let Some(gtk_theme) = metis_config::appearance_gtk_theme_env(theme_mode) {
         vars.push(format!("GTK_THEME={gtk_theme}"));
+    }
+    if let Ok(session_id) = std::env::var("XDG_SESSION_ID") {
+        if !session_id.is_empty() {
+            vars.push(format!("XDG_SESSION_ID={session_id}"));
+        }
     }
     let refs: Vec<&str> = vars.iter().map(String::as_str).collect();
     push_activation_environment(&refs);
@@ -581,6 +593,142 @@ fn prewarm_portal_gtk() {
         return;
     }
     let _ = spawn_portal_daemon("xdg-desktop-portal-gtk");
+}
+
+/// Start the Metis PolicyKit authentication agent when missing.
+///
+/// `pkexec` from Settings needs an agent to show the password dialog. Metis
+/// ships `metis-polkit-agent` so we do not depend on GNOME/KDE agents.
+fn ensure_polkit_agent() {
+    if std::env::var_os("METIS_NO_POLKIT_AGENT").is_some() {
+        return;
+    }
+    if metis_polkit_agent_running() {
+        return;
+    }
+    // Own the session: stop third-party agents so RegisterAuthenticationAgent
+    // succeeds for metis-polkit-agent.
+    stop_third_party_polkit_agents();
+    let Some(bin) = resolve_metis_polkit_agent() else {
+        tracing::warn!(
+            "metis-polkit-agent not found — pkexec prompts will fail until it is installed"
+        );
+        return;
+    };
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    match cmd.spawn() {
+        Ok(_) => tracing::info!(path = %bin.display(), "started metis-polkit-agent"),
+        Err(err) => {
+            tracing::warn!(%err, path = %bin.display(), "failed to start metis-polkit-agent")
+        }
+    }
+}
+
+fn stop_third_party_polkit_agents() {
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(pid) = name.parse::<i32>() else {
+            continue;
+        };
+        let Ok(exe) = std::fs::read_link(entry.path().join("exe")) else {
+            continue;
+        };
+        let exe = exe.to_string_lossy();
+        if exe.contains("polkit-gnome-authentication-agent")
+            || exe.contains("polkit-kde-authentication-agent")
+            || exe.contains("polkit-mate-authentication-agent")
+            || exe.contains("lxqt-policykit-agent")
+        {
+            tracing::info!(%pid, path = %exe, "stopping third-party PolicyKit agent");
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+}
+
+fn start_polkit_agent_watchdog() {
+    if std::env::var_os("METIS_NO_POLKIT_AGENT").is_some() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("metis-polkit-watchdog".into())
+        .spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            if std::env::var_os("METIS_NO_POLKIT_AGENT").is_some() {
+                continue;
+            }
+            if metis_polkit_agent_running() {
+                continue;
+            }
+            tracing::warn!("metis-polkit-agent missing — respawning");
+            ensure_polkit_agent();
+        })
+        .expect("spawn polkit agent watchdog");
+}
+
+fn metis_polkit_agent_running() -> bool {
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(exe) = std::fs::read_link(entry.path().join("exe")) else {
+            continue;
+        };
+        if exe
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s == "metis-polkit-agent")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn resolve_metis_polkit_agent() -> Option<std::path::PathBuf> {
+    if let Ok(override_bin) = std::env::var("METIS_POLKIT_AGENT_BIN") {
+        let p = std::path::PathBuf::from(override_bin);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    const INSTALLED: &[&str] = &[
+        "/usr/libexec/metis-polkit-agent",
+        "/usr/bin/metis-polkit-agent",
+        "/usr/local/bin/metis-polkit-agent",
+    ];
+    for path in INSTALLED {
+        let p = std::path::Path::new(path);
+        if p.is_file() {
+            return Some(p.to_path_buf());
+        }
+    }
+    std::env::current_exe().ok().and_then(|exe| {
+        let sibling = exe.parent()?.join("metis-polkit-agent");
+        sibling.is_file().then_some(sibling)
+    })
 }
 
 fn parse_client_command() -> Option<String> {

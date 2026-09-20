@@ -2475,6 +2475,32 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         caret-color: {text};
         box-shadow: none;
     }}
+    .metis-menu-search-row {{
+        margin-bottom: 2px;
+    }}
+    .metis-menu-search-row .metis-menu-search {{
+        margin-top: 0;
+    }}
+    .metis-menu-user {{
+        padding: 2px 2px 10px 2px;
+        border-bottom: 1px solid {border};
+        margin-bottom: 4px;
+    }}
+    .metis-menu-user-avatar {{
+        border-radius: 999px;
+        min-width: 40px;
+        min-height: 40px;
+    }}
+    .metis-menu-user-name {{
+        font-size: 14px;
+        font-weight: 600;
+        color: {text};
+    }}
+    /* Style presets mostly share the same panel; Whisker/Mint keep search flush. */
+    .metis-menu-style-whisker .metis-menu-scroll,
+    .metis-menu-style-mint .metis-menu-scroll {{
+        min-height: 400px;
+    }}
     .metis-menu-search > text {{
         background-color: transparent;
         color: {text};

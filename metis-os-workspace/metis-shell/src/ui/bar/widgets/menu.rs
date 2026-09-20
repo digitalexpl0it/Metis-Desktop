@@ -1,5 +1,5 @@
-//! The Metis app-menu popover: an ArcMenu-style panel with a utility/power rail,
-//! a Frequent Apps + alphabetical list (with apps-only search), and a Pinned grid.
+//! The Metis app-menu popover: selectable layouts (Metis default, Whisker, ArcMenu,
+//! Mint) sharing a utility/power rail, Frequent Apps + search, and a Pinned grid.
 //!
 //! It reuses the bar's non-autohide popover scheme (see `dropdown.rs`): no popup
 //! grab (the compositor ignores those), dismissed via toggle and the compositor
@@ -275,9 +275,33 @@ pub(crate) fn set_below_screenshot(below: bool) {
 
 /// Build the menu popover and wire it to `button` (the brand launcher button).
 pub fn install(button: &gtk::Button) {
-    let panel = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    panel.add_css_class("metis-bar-dropdown-panel");
-    panel.add_css_class("metis-menu-panel");
+    let menu_cfg = metis_config::load_menu_config();
+    let style = menu_cfg.style;
+    let show_rail = menu_cfg.show_rail;
+    let show_pinned = menu_cfg.show_pinned;
+    let show_user = menu_cfg.show_user_header;
+    let search_on_top = matches!(
+        style,
+        metis_config::MenuStyle::Whisker | metis_config::MenuStyle::Mint
+    );
+
+    let panel = if show_user || search_on_top {
+        // Header / top-search styles stack above the rail|list|pinned body.
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        panel.add_css_class("metis-bar-dropdown-panel");
+        panel.add_css_class("metis-menu-panel");
+        panel.add_css_class(style.css_class());
+        panel
+    } else {
+        // Metis default (and ArcMenu without header): same horizontal root as
+        // today's menu — rail | Frequent+search | Pinned.
+        let panel = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        panel.add_css_class("metis-bar-dropdown-panel");
+        panel.add_css_class("metis-menu-panel");
+        panel.add_css_class(style.css_class());
+        panel
+    };
+    let stacked = show_user || search_on_top;
 
     // The rail's icon tooltips render as a label inside this overlay (part of the
     // menu's own surface) rather than a child popup, so they always paint on top of
@@ -290,13 +314,49 @@ pub fn install(button: &gtk::Button) {
     tip.set_can_target(false);
     tip.set_visible(false);
 
-    // ---- Left rail: quick launchers + power actions ----
-    let rail = build_rail(&overlay, &tip);
-    panel.append(&rail);
+    let user_header_widgets: Option<(gtk::Image, gtk::Label)> = if show_user {
+        let (header, user_avatar, user_name) = build_user_header(&menu_cfg);
+        panel.append(&header);
+        Some((user_avatar, user_name))
+    } else {
+        None
+    };
 
-    // ---- Center column: header + scrollable app list + search ----
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text(metis_i18n::tr("Search applications…"))
+        .build();
+    search.add_css_class("metis-menu-search");
+
+    if search_on_top {
+        let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        search_row.add_css_class("metis-menu-search-row");
+        search.set_hexpand(true);
+        search_row.append(&search);
+        panel.append(&search_row);
+    }
+
+    // Columns live on `columns` — the horizontal panel itself for Metis default,
+    // or a nested body row when a header / top search sits above.
+    let columns = if stacked {
+        let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        body.add_css_class("metis-menu-body");
+        body.set_hexpand(true);
+        body.set_vexpand(true);
+        body
+    } else {
+        panel.clone()
+    };
+
+    if show_rail {
+        let rail = build_rail(&overlay, &tip);
+        columns.append(&rail);
+    }
+
+    // ---- Center column: header + scrollable app list (+ search when bottom) ----
     let center = gtk::Box::new(gtk::Orientation::Vertical, 8);
     center.add_css_class("metis-menu-center");
+    center.set_hexpand(true);
+    center.set_vexpand(true);
 
     let header = gtk::Label::builder()
         .label(metis_i18n::tr("Frequent Apps"))
@@ -323,40 +383,13 @@ pub fn install(button: &gtk::Button) {
     wire_vertical_scroll(&apps_scroll, &apps_scroll);
     center.append(&apps_scroll);
 
-    let search = gtk::SearchEntry::builder()
-        .placeholder_text(metis_i18n::tr("Search applications…"))
-        .build();
-    search.add_css_class("metis-menu-search");
-    center.append(&search);
+    if !search_on_top {
+        center.append(&search);
+    }
 
-    panel.append(&center);
+    columns.append(&center);
 
-    // ---- Vertical divider ----
-    let divider = gtk::Separator::new(gtk::Orientation::Vertical);
-    divider.add_css_class("metis-menu-divider");
-    panel.append(&divider);
-
-    // ---- Right column: pinned grid ----
-    let pinned_col = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    pinned_col.add_css_class("metis-menu-pinned");
-    let pinned_header = gtk::Label::builder()
-        .label(metis_i18n::tr("Pinned"))
-        .halign(gtk::Align::Start)
-        .build();
-    pinned_header.add_css_class("metis-bar-section-title");
-    pinned_col.append(&pinned_header);
-
-    let pinned_hint = gtk::Label::new(Some(&metis_i18n::tr(
-        "Right-click an app and choose Pin to Start.",
-    )));
-    pinned_hint.add_css_class("metis-menu-empty");
-    pinned_hint.set_wrap(true);
-    pinned_hint.set_halign(gtk::Align::Start);
-    pinned_hint.set_valign(gtk::Align::Start);
-    pinned_hint.set_xalign(0.0);
-    pinned_hint.set_visible(false);
-    pinned_col.append(&pinned_hint);
-
+    // ---- Pinned column (optional) ----
     let pinned_flow = gtk::FlowBox::builder()
         .orientation(gtk::Orientation::Horizontal)
         .selection_mode(gtk::SelectionMode::None)
@@ -368,23 +401,50 @@ pub fn install(button: &gtk::Button) {
         .build();
     pinned_flow.add_css_class("metis-menu-pinned-flow");
     pinned_flow.set_valign(gtk::Align::Start);
-    // Wrap the grid in a plain Box: a Box never stretches its non-expanding
-    // children, so the tiles keep their natural height and pack at the top
-    // instead of the FlowBox absorbing the tall column's extra vertical space
-    // (which otherwise inflates each row and spreads them far apart).
-    let pinned_wrap = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    pinned_wrap.set_valign(gtk::Align::Start);
-    pinned_wrap.append(&pinned_flow);
-    let pinned_scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .vexpand(true)
-        .child(&pinned_wrap)
-        .build();
-    pinned_scroll.add_css_class("metis-menu-scroll");
-    wire_vertical_scroll(&pinned_scroll, &pinned_scroll);
-    pinned_col.append(&pinned_scroll);
-    panel.append(&pinned_col);
+
+    let pinned_hint = gtk::Label::new(Some(&metis_i18n::tr(
+        "Right-click an app and choose Pin to Start.",
+    )));
+    pinned_hint.add_css_class("metis-menu-empty");
+    pinned_hint.set_wrap(true);
+    pinned_hint.set_halign(gtk::Align::Start);
+    pinned_hint.set_valign(gtk::Align::Start);
+    pinned_hint.set_xalign(0.0);
+    pinned_hint.set_visible(false);
+
+    if show_pinned {
+        let divider = gtk::Separator::new(gtk::Orientation::Vertical);
+        divider.add_css_class("metis-menu-divider");
+        columns.append(&divider);
+
+        let pinned_col = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        pinned_col.add_css_class("metis-menu-pinned");
+        let pinned_header = gtk::Label::builder()
+            .label(metis_i18n::tr("Pinned"))
+            .halign(gtk::Align::Start)
+            .build();
+        pinned_header.add_css_class("metis-bar-section-title");
+        pinned_col.append(&pinned_header);
+        pinned_col.append(&pinned_hint);
+
+        let pinned_wrap = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        pinned_wrap.set_valign(gtk::Align::Start);
+        pinned_wrap.append(&pinned_flow);
+        let pinned_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .vexpand(true)
+            .child(&pinned_wrap)
+            .build();
+        pinned_scroll.add_css_class("metis-menu-scroll");
+        wire_vertical_scroll(&pinned_scroll, &pinned_scroll);
+        pinned_col.append(&pinned_scroll);
+        columns.append(&pinned_col);
+    }
+
+    if stacked {
+        panel.append(&columns);
+    }
 
     overlay.set_child(Some(&panel));
     overlay.add_overlay(&tip);
@@ -443,6 +503,7 @@ pub fn install(button: &gtk::Button) {
         let search = search.clone();
         let list_generation = list_generation.clone();
         let pin_ctx = pin_ctx.clone();
+        let show_pinned = show_pinned;
         Rc::new(move || {
             let keep_search_focus = search.has_focus();
             let query = search.text().to_string();
@@ -460,7 +521,9 @@ pub fn install(button: &gtk::Button) {
             );
             // Always refresh pins — including during search — so a right-click
             // Pin action is visible immediately in the pinned column.
-            populate_pinned(&pinned_flow, &pinned_hint, &apps, &pin_ctx);
+            if show_pinned {
+                populate_pinned(&pinned_flow, &pinned_hint, &apps, &pin_ctx);
+            }
             restore_search_focus(&search, keep_search_focus);
         })
     };
@@ -507,10 +570,16 @@ pub fn install(button: &gtk::Button) {
         let btn = button.clone();
         let rebuild = rebuild.clone();
         let search = search.clone();
+        let user_header_widgets = user_header_widgets.clone();
         popover.connect_map(move |popover| {
             btn.add_css_class("metis-bar-dropdown-active");
             if let Some(window) = popover.root().and_downcast::<gtk::Window>() {
                 window.set_keyboard_mode(KeyboardMode::Exclusive);
+            }
+            // Refresh profile header from disk each open (Settings may have
+            // changed ~/.face / menu.json without remounting the bar).
+            if let Some((avatar, name)) = user_header_widgets.as_ref() {
+                refresh_user_header(avatar, name);
             }
             // Clearing the search entry fires `search_changed`, which would
             // synchronously rebuild the entire app list during `map` and freeze
@@ -560,6 +629,40 @@ pub fn install(button: &gtk::Button) {
         super::super::dropdown::close_all();
         glib::idle_add_local_once(move || popover.popup());
     });
+}
+
+fn build_user_header(cfg: &metis_config::MenuConfig) -> (gtk::Box, gtk::Image, gtk::Label) {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("metis-menu-user");
+    row.set_hexpand(true);
+
+    let avatar = gtk::Image::new();
+    avatar.add_css_class("metis-menu-user-avatar");
+    avatar.set_pixel_size(40);
+    let name = gtk::Label::builder()
+        .label(cfg.resolved_display_name())
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .build();
+    name.add_css_class("metis-menu-user-name");
+    refresh_user_header(&avatar, &name);
+    row.append(&avatar);
+    row.append(&name);
+
+    (row, avatar, name)
+}
+
+fn refresh_user_header(avatar: &gtk::Image, name: &gtk::Label) {
+    let cfg = metis_config::load_menu_config();
+    name.set_label(&cfg.resolved_display_name());
+    // Clear then reload so GTK does not keep a stale paintable when ~/.face
+    // is overwritten in place.
+    avatar.clear();
+    if let Some(path) = cfg.resolved_avatar_path() {
+        avatar.set_from_file(Some(path));
+    } else {
+        avatar.set_from_icon_name(Some("avatar-default-symbolic"));
+    }
 }
 
 fn build_rail(overlay: &gtk::Overlay, tip: &gtk::Label) -> gtk::Box {

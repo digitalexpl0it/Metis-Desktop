@@ -94,4 +94,126 @@
     <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
     <annotate key="org.freedesktop.policykit.exec.argv1">pk-ubuntu-drivers-install</annotate>
   </action>
+
+  <action id="org.metis.accounts.list">
+    <description>List local Metis user accounts</description>
+    <message>Authentication is required to list user accounts</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-accounts-list</annotate>
+  </action>
+
+  <action id="org.metis.accounts.set-name">
+    <description>Change a local user's display name</description>
+    <message>Authentication is required to change a user's display name</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-accounts-set-name</annotate>
+  </action>
+
+  <action id="org.metis.accounts.set-password">
+    <description>Change a local user's password</description>
+    <message>Authentication is required to change a user's password</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-accounts-set-password</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <action id="org.metis.accounts.set-admin">
+    <description>Grant or revoke administrator (sudo) access</description>
+    <message>Authentication is required to change administrator access</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-accounts-set-admin</annotate>
+  </action>
+
+  <action id="org.metis.accounts.add">
+    <description>Create a local user account</description>
+    <message>Authentication is required to create a user account</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-accounts-add</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <action id="org.metis.accounts.remove">
+    <description>Delete a local user account</description>
+    <message>Authentication is required to delete a user account</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-accounts-remove</annotate>
+  </action>
+
+  <action id="org.metis.datetime.status">
+    <description>Read system date and time status</description>
+    <message>Authentication is required to read date and time status</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-datetime-status</annotate>
+  </action>
+
+  <action id="org.metis.datetime.set-ntp">
+    <description>Enable or disable network time synchronization</description>
+    <message>Authentication is required to change automatic date and time</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-datetime-set-ntp</annotate>
+  </action>
+
+  <action id="org.metis.datetime.set-timezone">
+    <description>Change the system time zone</description>
+    <message>Authentication is required to change the time zone</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-datetime-set-timezone</annotate>
+  </action>
+
+  <action id="org.metis.datetime.set-time">
+    <description>Set the system clock manually</description>
+    <message>Authentication is required to set the date and time</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-datetime-set-time</annotate>
+  </action>
 </policyconfig>

@@ -3,11 +3,14 @@
 use std::io::Read;
 
 use metis_remote::{
-    add_input_group, apt_install, autostart_from_config, disable, enable, firewall_apply,
-    firewall_apply_as_root, firewall_clear, firewall_clear_as_root, firewall_rustdesk_apply,
+    accounts_list_as_root, add_input_group, add_user_as_root, apt_install, autostart_from_config,
+    datetime_status_as_root, disable, enable, firewall_apply, firewall_apply_as_root,
+    firewall_clear, firewall_clear_as_root, firewall_rustdesk_apply,
     firewall_rustdesk_apply_as_root, firewall_rustdesk_clear, firewall_rustdesk_clear_as_root,
-    firewall_rustdesk_status, firewall_status, pause, privileged_exe, resume, rustdesk_disable,
-    rustdesk_enable, rustdesk_status, set_lan_only, set_password, status, ubuntu_drivers_install,
+    firewall_rustdesk_status, firewall_status, pause, privileged_exe, remove_user_as_root, resume,
+    rustdesk_disable, rustdesk_enable, rustdesk_status, set_account_password_as_root,
+    set_admin_as_root, set_display_name_as_root, set_lan_only, set_ntp_as_root, set_password,
+    set_time_as_root, set_timezone_as_root, status, ubuntu_drivers_install,
 };
 use zeroize::Zeroize;
 
@@ -78,7 +81,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let trimmed = password.trim_end_matches(['\r', '\n']);
             if trimmed.is_empty() {
                 password.zeroize();
-                return Err("password on stdin must not be empty".into());
+                return Err(String::from("password on stdin must not be empty"));
             }
             let mut owned = trimmed.to_string();
             password.zeroize();
@@ -145,7 +148,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let kill = args.get(2).map(String::as_str) == Some("--kill");
                 rustdesk_disable(kill)
             }
-            _ => Err("usage: metis-remote rustdesk {status|enable|disable [--kill]}".into()),
+            _ => Err(String::from("usage: metis-remote rustdesk {status|enable|disable [--kill]}")),
         },
         Some("pk-apt-install") => {
             let pkgs: Vec<String> = args.into_iter().skip(1).collect();
@@ -159,6 +162,113 @@ fn run(args: Vec<String>) -> Result<(), String> {
             add_input_group(&user)
         }
         Some("pk-ubuntu-drivers-install") => ubuntu_drivers_install(),
+        Some("pk-accounts-list") => accounts_list_as_root(),
+        Some("pk-accounts-set-name") => {
+            let user = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-name <user> <name>"))?;
+            let name = args
+                .get(2)
+                .cloned()
+                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-name <user> <name>"))?;
+            set_display_name_as_root(&user, &name)
+        }
+        Some("pk-accounts-set-password") => {
+            let user = args.get(1).cloned().ok_or_else(|| {
+                String::from(
+                    "usage: metis-remote pk-accounts-set-password <user> [--password-file PATH]",
+                )
+            })?;
+            let password_file = parse_password_file_arg(&args[2..])?;
+            set_account_password_as_root(&user, password_file.as_deref())
+        }
+        Some("pk-accounts-set-admin") => {
+            let user = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-admin <user> true|false"))?;
+            let flag = args
+                .get(2)
+                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-admin <user> true|false"))?;
+            let on = match flag.as_str() {
+                "true" | "1" | "yes" | "on" => true,
+                "false" | "0" | "no" | "off" => false,
+                other => return Err(format!("invalid admin flag '{other}'")),
+            };
+            set_admin_as_root(&user, on)
+        }
+        Some("pk-accounts-add") => {
+            let user = args.get(1).cloned().ok_or_else(|| {
+                String::from(
+                    "usage: metis-remote pk-accounts-add <user> [--admin] [--name N] [--password-file PATH]",
+                )
+            })?;
+            let mut admin = false;
+            let mut display: Option<String> = None;
+            let mut password_file: Option<String> = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--admin" => {
+                        admin = true;
+                        i += 1;
+                    }
+                    "--name" => {
+                        let n = args.get(i + 1).cloned().ok_or_else(|| {
+                            String::from(
+                                "usage: metis-remote pk-accounts-add <user> [--admin] [--name N] [--password-file PATH]",
+                            )
+                        })?;
+                        display = Some(n);
+                        i += 2;
+                    }
+                    "--password-file" => {
+                        let p = args.get(i + 1).cloned().ok_or_else(|| {
+                            String::from(
+                                "usage: metis-remote pk-accounts-add … --password-file PATH",
+                            )
+                        })?;
+                        password_file = Some(p);
+                        i += 2;
+                    }
+                    other => return Err(format!("unknown pk-accounts-add flag '{other}'")),
+                }
+            }
+            add_user_as_root(&user, display.as_deref(), admin, password_file.as_deref())
+        }
+        Some("pk-accounts-remove") => {
+            let user = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-remove <user>"))?;
+            remove_user_as_root(&user)
+        }
+        Some("pk-datetime-status") => datetime_status_as_root(),
+        Some("pk-datetime-set-ntp") => {
+            let flag = args
+                .get(1)
+                .ok_or_else(|| String::from("usage: metis-remote pk-datetime-set-ntp true|false"))?;
+            let on = match flag.as_str() {
+                "true" | "1" | "yes" | "on" => true,
+                "false" | "0" | "no" | "off" => false,
+                other => return Err(format!("invalid ntp flag '{other}'")),
+            };
+            set_ntp_as_root(on)
+        }
+        Some("pk-datetime-set-timezone") => {
+            let tz = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| String::from("usage: metis-remote pk-datetime-set-timezone <Area/City>"))?;
+            set_timezone_as_root(&tz)
+        }
+        Some("pk-datetime-set-time") => {
+            let spec = args.get(1..).map(|s| s.join(" ")).filter(|s| !s.is_empty()).ok_or_else(
+                || String::from("usage: metis-remote pk-datetime-set-time <YYYY-MM-DD HH:MM:SS>"),
+            )?;
+            set_time_as_root(&spec)
+        }
         // Dev helper: show which binary pkexec would use.
         Some("pk-exe") => {
             println!("{}", privileged_exe().display());
@@ -172,6 +282,24 @@ fn print_firewall(snap: &metis_remote::FirewallStatus) -> Result<(), String> {
     let json = serde_json::to_string_pretty(snap).map_err(|e| e.to_string())?;
     println!("{json}");
     Ok(())
+}
+
+fn parse_password_file_arg(args: &[String]) -> Result<Option<String>, String> {
+    let mut out = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--password-file" => {
+                let p = args.get(i + 1).cloned().ok_or_else(|| {
+                    String::from("missing path after --password-file")
+                })?;
+                out = Some(p);
+                i += 2;
+            }
+            other => return Err(format!("unexpected argument '{other}'")),
+        }
+    }
+    Ok(out)
 }
 
 fn print_help() {
@@ -194,6 +322,8 @@ fn print_help() {
   rustdesk disable    Clear RustDesk backend preference ([--kill] stops process)
   pk-apt-install …    Polkit: install allowlisted apt packages
   pk-ubuntu-drivers-install  Polkit: ubuntu-drivers install (NVIDIA consent path)
+  pk-accounts-list / set-name / set-password / set-admin / add / remove
+  pk-datetime-status / set-ntp / set-timezone / set-time
 
 Never put the RDP password on the shell command line — pipe it to stdin."
     );

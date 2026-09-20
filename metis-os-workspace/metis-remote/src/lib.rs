@@ -1,12 +1,24 @@
 //! Desktop sharing orchestration for Metis (gnome-remote-desktop session-sharing RDP,
 //! optional RustDesk backend).
 
+mod accounts;
+mod datetime;
 mod firewall;
 mod gnome_rdp;
 mod host;
 mod pkhelpers;
 mod rustdesk;
 
+pub use accounts::{
+    add_user, add_user_as_root, accounts_list_as_root, list_accounts, remove_user,
+    remove_user_as_root, set_admin, set_admin_as_root, set_display_name, set_display_name_as_root,
+    set_password as set_account_password, set_password_as_root as set_account_password_as_root,
+    AccountInfo,
+};
+pub use datetime::{
+    set_ntp, set_ntp_as_root, set_time, set_time_as_root, set_timezone, set_timezone_as_root,
+    status as datetime_status, status_as_root as datetime_status_as_root, DateTimeStatus,
+};
 pub use firewall::FirewallStatus;
 pub use gnome_rdp::{
     disable_sharing, enable_sharing, pause_sharing, resume_sharing, set_credentials,
@@ -14,8 +26,8 @@ pub use gnome_rdp::{
 };
 pub use host::{hostname, lan_addresses};
 pub use pkhelpers::{
-    add_input_group, apt_install, privileged_exe, ubuntu_drivers_install, validate_username,
-    APT_ALLOWLIST,
+    add_input_group, apt_install, ensure_polkit_agent, privileged_exe, ubuntu_drivers_install,
+    validate_username, APT_ALLOWLIST,
 };
 pub use rustdesk::RustDeskStatus;
 

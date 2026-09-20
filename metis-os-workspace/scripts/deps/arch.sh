@@ -39,7 +39,7 @@ METIS_PACMAN_PACKAGES=(
   tesseract-data-eng
   ffmpeg
   nftables
-  polkit-gnome
+  polkit
 )
 
 METIS_PACMAN_REMOTE=(

@@ -120,6 +120,14 @@ passes the same default when spawning Settings. Closing the Settings window
 hard-exits the process (2026-09-19) so unique-instance + page poll timers cannot
 leave a background `metis-settings`.
 
+**Wallpaper apply:** Background changes soft-hold the previous GPU texture and
+crossfade (~280 ms). Decoded full RGBA is cached under
+`~/.cache/metis/wallpaper-rgba/` (warmed while Settings loads thumbs) so repeat
+clicks skip multi‑MB PNG decode. Cover-crop crops to aspect before resize.
+Prefer a **release** compositor for first-time applies of large system
+wallpapers — debug builds decode far slower even with `profile.dev.package.image`
+at `opt-level = 3`.
+
 ### P5 — Dependency feature bloat
 
 | Crate | Issue | Action taken |

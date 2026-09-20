@@ -44,7 +44,8 @@ METIS_APT_PACKAGES=(
   tesseract-ocr-eng
   ffmpeg
   nftables
-  policykit-1-gnome
+  pkexec
+  polkitd
 )
 
 METIS_APT_REMOTE=(

@@ -48,6 +48,13 @@ pub fn apply_background() {
     }
 }
 
+/// Like [`apply_background`], but never blocks the GTK main thread — wallpaper
+/// decode can take seconds for large PNGs; the compositor still keeps the old
+/// wallpaper on screen until the fade starts.
+pub fn apply_background_async() {
+    std::thread::spawn(apply_background);
+}
+
 /// Ask the compositor to re-read `input.json` and apply pointer/keyboard settings
 /// immediately. Best-effort.
 pub fn reload_input() {

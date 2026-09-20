@@ -433,6 +433,10 @@ pub fn row(label: &str, control: &impl AsRef<gtk::Widget>) -> gtk::Box {
 /// (GNOME-style) so users are not forced to hit the small thumb target.
 pub fn switch_row(label: &str) -> (gtk::Box, gtk::Switch) {
     let sw = gtk::Switch::new();
+    // Keep the thumb at its natural size — rows with subtitles otherwise
+    // stretch GtkSwitch to the full row height.
+    sw.set_valign(gtk::Align::Center);
+    sw.set_vexpand(false);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.add_css_class("metis-settings-row");
     let lbl = gtk::Label::new(Some(label));

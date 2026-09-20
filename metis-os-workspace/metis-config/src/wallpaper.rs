@@ -116,6 +116,101 @@ pub fn save_wallpaper_config(cfg: &WallpaperConfig) -> std::io::Result<()> {
     std::fs::write(wallpaper_config_path(), json)
 }
 
+/// On-disk RGBA cache for full wallpaper decodes (`~/.cache/metis/wallpaper-rgba/`).
+/// Avoids re-decoding multi‑MB PNGs on every Settings click; the compositor and
+/// Settings gallery warmer share this format.
+const RGBA_CACHE_MAGIC: &[u8; 4] = b"MWP1";
+
+fn cache_root() -> PathBuf {
+    directories::ProjectDirs::from("com", "metis", "metis")
+        .map(|d| d.cache_dir().to_path_buf())
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(".cache/metis"))
+                .unwrap_or_else(|_| PathBuf::from(".cache/metis"))
+        })
+        .join("wallpaper-rgba")
+}
+
+fn wallpaper_rgba_cache_key(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let len = meta.len();
+    // Stable, path-independent key so renames that keep inode content still miss
+    // correctly when mtime/size change.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in path.to_string_lossy().as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h ^= len;
+    h = h.wrapping_mul(0x100000001b3);
+    h ^= modified;
+    Some(format!("{h:016x}"))
+}
+
+/// Cache file for a wallpaper source, if the path is readable.
+pub fn wallpaper_rgba_cache_path(path: &Path) -> Option<PathBuf> {
+    Some(cache_root().join(format!("{}.rgba", wallpaper_rgba_cache_key(path)?)))
+}
+
+/// Read a previously decoded RGBA wallpaper (`None` on miss / corruption).
+pub fn load_wallpaper_rgba_cache(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
+    let cache = wallpaper_rgba_cache_path(path)?;
+    let bytes = std::fs::read(&cache).ok()?;
+    if bytes.len() < 12 || &bytes[0..4] != RGBA_CACHE_MAGIC {
+        let _ = std::fs::remove_file(&cache);
+        return None;
+    }
+    let w = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
+    let h = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+    let need = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+    if bytes.len() != 12 + need || w == 0 || h == 0 {
+        let _ = std::fs::remove_file(&cache);
+        return None;
+    }
+    Some((w, h, bytes[12..].to_vec()))
+}
+
+/// Persist a decoded RGBA wallpaper for fast compositor apply.
+pub fn store_wallpaper_rgba_cache(path: &Path, w: u32, h: u32, rgba: &[u8]) -> std::io::Result<()> {
+    let Some(cache) = wallpaper_rgba_cache_path(path) else {
+        return Ok(());
+    };
+    let need = (w as usize)
+        .checked_mul(h as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "size overflow"))?;
+    if rgba.len() != need {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "rgba length mismatch",
+        ));
+    }
+    std::fs::create_dir_all(cache_root())?;
+    let mut out = Vec::with_capacity(12 + need);
+    out.extend_from_slice(RGBA_CACHE_MAGIC);
+    out.extend_from_slice(&w.to_le_bytes());
+    out.extend_from_slice(&h.to_le_bytes());
+    out.extend_from_slice(rgba);
+    let tmp = cache.with_extension("rgba.tmp");
+    std::fs::write(&tmp, &out)?;
+    std::fs::rename(&tmp, &cache)?;
+    Ok(())
+}
+
+/// True when a valid RGBA cache entry already exists for `path`.
+pub fn wallpaper_rgba_cache_fresh(path: &Path) -> bool {
+    wallpaper_rgba_cache_path(path)
+        .map(|p| p.is_file())
+        .unwrap_or(false)
+}
+
 /// Directory where user-imported wallpapers are copied to.
 pub fn wallpaper_store_dir() -> PathBuf {
     config_dir().join("wallpapers")

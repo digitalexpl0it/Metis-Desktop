@@ -127,7 +127,12 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       cannot leave a zombie `metis-settings`
 - [x] **Bottom-bar + maximized freeze** (2026-09-19) — compositor
       `reclamp_maximized_geometry` compares client geometry only (CSD bbox
-      overflow no longer configure-storms Settings / the bar)- [x] Bar symbolic icons — bluetooth, clipboard, and notifications match other bar
+      overflow no longer configure-storms Settings / the bar)
+- [x] **Wallpaper crossfade + fast apply** (2026-09-19) — soft-hold previous GPU
+      texture while decoding; ~280 ms ease-out fade into picture / solid /
+      gradient; crop-then-resize cover; `~/.cache/metis/wallpaper-rgba/` warmed
+      from Settings thumbs; `ApplyBackground` off the GTK thread
+- [x] Bar symbolic icons — bluetooth, clipboard, and notifications match other bar
       icons (GTK symbolic + theme text color)
 - [x] Theme file watcher (live `themes/*.json` reload)
 - [x] Freedesktop notification D-Bus daemon (`org.freedesktop.Notifications`)
@@ -138,6 +143,9 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       power actions rail, Frequent/alphabetical app list with apps-only search,
       and a pinnable apps grid; translucent panel (`menu_opacity`) with in-surface
       tooltips, dismissed synchronously on launch
+  - [x] **Selectable layouts** — Metis (default = today’s menu), Whisker, ArcMenu,
+        Mint via `menu.json` `style` + Settings thumbnails; optional user header,
+        rail, and pinned toggles; `reload-bar` applies live
   - [x] Dedicated **Settings · Metis Menu** page — Quick launchers (configurable
         Terminal / File-manager from auto-detected installs or a custom binary path,
         persisted to `menu.json`; shell falls back to env hint → known candidates →
@@ -883,6 +891,8 @@ strings, and lays out correctly for RTL scripts — without per-string rebuilds.
       catalog roots, formatting helpers.
 - [x] **Locale detection + override** — `locale.json` + Settings → System →
       **Language & region**.
+- [x] **Users + Date & Time** — Settings pages for profile/accounts (Polkit via
+      `metis-remote`) and NTP/timezone/`datetime.json` week start (2026-09-19).
 
 ### B. Extract & translate strings
 
@@ -1715,7 +1725,8 @@ recent hosts; no passwords).
 | `clock.json` | World clocks and alarms |
 | `calendars.json` | Calendar accounts |
 | `config.json` | Active theme, onboarding state (`onboarding_complete` + `onboarding_step`), briefing-on-login |
-| `menu.json` | App launcher: terminal + file-manager defaults, pinned apps |
+| `menu.json` | App launcher: layout style + feature toggles, terminal + file-manager defaults, pinned apps |
+| `datetime.json` | Auto-timezone preference + first day of week |
 | `wallpaper.json` | Wallpaper picture / colour / gradient (+ per-output overrides) |
 | `desk.json` | Compositor window-grid layout (app tiles; not desktop widgets) |
 | `desktop-widgets.json` | *(Phase 14)* Wallpaper widgets: enable, edit mode, chrome, instances (Folders / Apps / Clock / System / Weather / Equalizer) |

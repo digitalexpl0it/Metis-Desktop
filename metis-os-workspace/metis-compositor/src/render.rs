@@ -103,14 +103,14 @@ impl MetisState {
 
         self.wallpaper.poll_decode();
         let skip_underlay = self.output_has_fullscreen(target.output_name);
-        let wallpaper_owned = if skip_underlay {
+        let wallpaper_elems = if skip_underlay {
             // Fullscreen game covers the output — skip wallpaper decode/upload and
             // the extra composite layer so Smithay can promote the game buffer to
             // the primary plane when formats match.
-            None
+            Vec::new()
         } else {
             self.wallpaper.ensure(renderer);
-            self.wallpaper.render_element_at(wallpaper_origin)
+            self.wallpaper.render_elements_at(wallpaper_origin)
         };
 
         // Bar backdrop-blur element per output (each output may carry its own
@@ -387,8 +387,9 @@ impl MetisState {
         render_elements.extend(lower_layer_elems);
         // Below the windows, above the wallpaper.
         render_elements.extend(blur_elements.into_iter().map(OutputStack::Blur));
-        if let Some(wallpaper) = wallpaper_owned {
-            render_elements.push(OutputStack::Wallpaper(wallpaper));
+        if !wallpaper_elems.is_empty() {
+            // Crossfade stacks incoming (with alpha) then outgoing beneath it.
+            render_elements.extend(wallpaper_elems.into_iter().map(OutputStack::Wallpaper));
         } else if !skip_underlay {
             // Clean boot / slow wallpaper decode: keep a dark fill so the splash
             // logo never sits on an empty/white framebuffer.

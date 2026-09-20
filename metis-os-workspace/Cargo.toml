@@ -11,6 +11,7 @@ members = [
     "metis-settings",
     "metis-portal",
     "metis-remote",
+    "metis-polkit-agent",
     "metis-viewer",
     "metis-gaming",
     "metis-capture",
@@ -35,6 +36,7 @@ metis-protocol = { path = "metis-protocol" }
 metis-config = { path = "metis-config" }
 metis-i18n = { path = "metis-i18n" }
 metis-gaming = { path = "metis-gaming" }
+metis-remote = { path = "metis-remote" }
 metis-capture = { path = "metis-capture" }
 metis-secrets = { path = "metis-secrets" }
 
