@@ -102,27 +102,24 @@ pub fn build() -> gtk::Widget {
             let name_c = name.clone();
             let accounts = accounts.clone();
             let list_box = list_box.clone();
-            bg::run_bg(
-                move || metis_remote::set_display_name(&user, &name_c),
-                {
-                    let name_c = name.clone();
-                    let name_entry = name_entry.clone();
-                    move |result: Result<(), String>| match result {
-                        Ok(()) => {
-                            let mut menu = metis_config::load_menu_config();
-                            menu.user_display_name = Some(name_c);
-                            menu.show_user_header = true;
-                            let _ = metis_config::save_menu_config(&menu);
-                            refresh_account_list(&accounts, &list_box);
-                            runtime::send("reload-bar");
-                        }
-                        Err(err) => {
-                            tracing::warn!(%err, "failed to set display name");
-                            name_entry.set_placeholder_text(Some(err.as_str()));
-                        }
+            bg::run_bg(move || metis_remote::set_display_name(&user, &name_c), {
+                let name_c = name.clone();
+                let name_entry = name_entry.clone();
+                move |result: Result<(), String>| match result {
+                    Ok(()) => {
+                        let mut menu = metis_config::load_menu_config();
+                        menu.user_display_name = Some(name_c);
+                        menu.show_user_header = true;
+                        let _ = metis_config::save_menu_config(&menu);
+                        refresh_account_list(&accounts, &list_box);
+                        runtime::send("reload-bar");
                     }
-                },
-            );
+                    Err(err) => {
+                        tracing::warn!(%err, "failed to set display name");
+                        name_entry.set_placeholder_text(Some(err.as_str()));
+                    }
+                }
+            });
         });
     }
 
@@ -491,16 +488,14 @@ fn open_password_sheet(user: &str, accounts: Rc<RefCell<Vec<AccountInfo>>>, list
                 a.zeroize();
                 result
             },
-            move |result| {
-                match result {
-                    Ok(()) => {
-                        dialog::dismiss(false);
-                        refresh_account_list(&accounts, &list_box);
-                    }
-                    Err(e) => {
-                        tracing::warn!(%e, "failed to set password");
-                        err.set_label(&e);
-                    }
+            move |result| match result {
+                Ok(()) => {
+                    dialog::dismiss(false);
+                    refresh_account_list(&accounts, &list_box);
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "failed to set password");
+                    err.set_label(&e);
                 }
             },
         );

@@ -297,7 +297,7 @@ fn show_at_step(initial_step: usize) {
 
         // Phase 1: measure the card, center on screen, then reveal (splash pattern).
         if !o.centered && !o.parked && !o.fading {
-            let w = o.window.width();
+            let w = o.window.width().min(CARD_WIDTH + 8);
             let h = o.window.height();
             if w > 1 && h > 1 {
                 let (mon_w, mon_h) = monitor_size();
@@ -954,33 +954,63 @@ fn build_gaming() -> gtk::Widget {
     summary.add_css_class("metis-onboarding-subtitle");
     summary.set_xalign(0.0);
     summary.set_wrap(true);
+    summary.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    summary.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+    summary.set_width_request(BODY_INNER_WIDTH);
+    summary.set_max_width_chars(42);
     col.append(&summary);
 
-    let auto_gpu =
-        gtk::CheckButton::with_label(&metis_i18n::tr("Enable automatic GPU switching for games"));
-    auto_gpu.set_active(GAMING_AUTO_GPU.get());
+    let auto_gpu = wrapping_check(
+        &metis_i18n::tr("Enable automatic GPU switching for games"),
+        GAMING_AUTO_GPU.get(),
+    );
     auto_gpu.connect_active_notify(|s| GAMING_AUTO_GPU.set(s.is_active()));
     col.append(&auto_gpu);
 
-    let optimize = gtk::CheckButton::with_label(&metis_i18n::tr(
-        "Optimize Flatpak Steam / Lutris / Heroic (--device=all, network, Wayland)",
-    ));
-    optimize.set_active(GAMING_OPTIMIZE.get());
+    let optimize = wrapping_check(
+        &metis_i18n::tr("Optimize Flatpak Steam / Lutris / Heroic"),
+        GAMING_OPTIMIZE.get(),
+    );
+    optimize.set_tooltip_text(Some(&metis_i18n::tr(
+        "Applies Flatpak overrides: --device=all, network, and Wayland sockets.",
+    )));
     optimize.connect_active_notify(|s| GAMING_OPTIMIZE.set(s.is_active()));
     col.append(&optimize);
 
     let hint = gtk::Label::new(Some(&metis_i18n::tr(
-        "Metis routes games onto the discrete GPU automatically — leave Steam Launch Options \
-         empty for GPU. Drivers and packages are never installed silently; use Settings → Gaming \
-         → Run gaming setup or Fix for Steam, Vulkan, controllers, and NVIDIA (consent).",
+        "Games use the discrete GPU automatically — leave Steam Launch Options empty. \
+         Install drivers and packages from Settings → Gaming (never silently).",
     )));
     hint.add_css_class("metis-onboarding-hint");
     hint.set_xalign(0.0);
     hint.set_margin_top(8);
     hint.set_wrap(true);
+    hint.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    hint.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+    hint.set_width_request(BODY_INNER_WIDTH);
+    hint.set_max_width_chars(42);
     col.append(&hint);
 
     col.upcast()
+}
+
+/// CheckButton whose label wraps inside the onboarding card width.
+fn wrapping_check(label: &str, active: bool) -> gtk::CheckButton {
+    let check = gtk::CheckButton::new();
+    check.set_active(active);
+    check.set_halign(gtk::Align::Fill);
+    check.set_hexpand(false);
+    check.set_size_request(BODY_INNER_WIDTH, -1);
+    let lbl = gtk::Label::new(Some(label));
+    lbl.set_wrap(true);
+    lbl.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    lbl.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+    lbl.set_xalign(0.0);
+    lbl.set_hexpand(true);
+    lbl.set_max_width_chars(40);
+    lbl.set_width_request(BODY_INNER_WIDTH.saturating_sub(40));
+    check.set_child(Some(&lbl));
+    check
 }
 
 fn apply_onboarding_gaming_prefs() {

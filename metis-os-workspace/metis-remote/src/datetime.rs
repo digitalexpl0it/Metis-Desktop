@@ -26,7 +26,14 @@ fn escalate(args: &[&str]) -> Result<(), String> {
 
 fn timedatectl_show_map() -> Result<std::collections::HashMap<String, String>, String> {
     let output = Command::new("timedatectl")
-        .args(["show", "--no-pager", "--property=Timezone", "--property=NTP", "--property=NTPSynchronized", "--property=LocalRTC"])
+        .args([
+            "show",
+            "--no-pager",
+            "--property=Timezone",
+            "--property=NTP",
+            "--property=NTPSynchronized",
+            "--property=LocalRTC",
+        ])
         .output()
         .map_err(|e| format!("timedatectl show failed: {e}"))?;
     if !output.status.success() {
@@ -102,10 +109,7 @@ fn local_time_string() -> String {
 pub fn status() -> Result<DateTimeStatus, String> {
     let map = timedatectl_show_map()?;
     Ok(DateTimeStatus {
-        timezone: map
-            .get("Timezone")
-            .cloned()
-            .unwrap_or_else(|| "UTC".into()),
+        timezone: map.get("Timezone").cloned().unwrap_or_else(|| "UTC".into()),
         ntp: parse_bool(map.get("NTP")),
         ntp_synchronized: parse_bool(map.get("NTPSynchronized")),
         local_rtc: parse_bool(map.get("LocalRTC")),
@@ -121,10 +125,7 @@ pub fn status_as_root() -> Result<(), String> {
 }
 
 pub fn set_ntp(on: bool) -> Result<(), String> {
-    escalate(&[
-        "pk-datetime-set-ntp",
-        if on { "true" } else { "false" },
-    ])
+    escalate(&["pk-datetime-set-ntp", if on { "true" } else { "false" }])
 }
 
 pub fn set_ntp_as_root(on: bool) -> Result<(), String> {

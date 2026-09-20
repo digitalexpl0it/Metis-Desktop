@@ -433,12 +433,13 @@ pub use dashboard::{
     save_dashboard_config, save_default_dashboard_config, DashboardConfig, DashboardWidgetId,
     KNOWN_PROCESS_MONITORS,
 };
+pub use datetime::{
+    datetime_config_path, load_datetime_config, save_datetime_config, DateTimeConfig,
+    FirstDayOfWeek,
+};
 pub use decorations::{
     decorations_config_path, load_decorations_config, save_decorations_config, DecorationsConfig,
     DecorationsOverride,
-};
-pub use datetime::{
-    datetime_config_path, load_datetime_config, save_datetime_config, DateTimeConfig, FirstDayOfWeek,
 };
 pub use desktop_widgets::{
     desktop_widgets_config_path, load_desktop_widgets_config, save_desktop_widgets_config,

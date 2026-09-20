@@ -290,9 +290,10 @@ fn parse_password_file_arg(args: &[String]) -> Result<Option<String>, String> {
     while i < args.len() {
         match args[i].as_str() {
             "--password-file" => {
-                let p = args.get(i + 1).cloned().ok_or_else(|| {
-                    String::from("missing path after --password-file")
-                })?;
+                let p = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| String::from("missing path after --password-file"))?;
                 out = Some(p);
                 i += 2;
             }

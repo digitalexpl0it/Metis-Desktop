@@ -63,13 +63,15 @@ fn user_in_admin_group(user: &str) -> bool {
         return false;
     }
     let groups = String::from_utf8_lossy(&output.stdout);
-    groups.split_whitespace().any(|g| g == "sudo" || g == "admin" || g == "wheel")
+    groups
+        .split_whitespace()
+        .any(|g| g == "sudo" || g == "admin" || g == "wheel")
 }
 
 /// List local human users (UID ≥ 1000, exclude nobody). Unprivileged.
 pub fn list_accounts() -> Result<Vec<AccountInfo>, String> {
-    let passwd = std::fs::read_to_string("/etc/passwd")
-        .map_err(|e| format!("read /etc/passwd: {e}"))?;
+    let passwd =
+        std::fs::read_to_string("/etc/passwd").map_err(|e| format!("read /etc/passwd: {e}"))?;
     let current = current_username();
     let mut out = Vec::new();
     for line in passwd.lines() {
@@ -81,8 +83,12 @@ pub fn list_accounts() -> Result<Vec<AccountInfo>, String> {
         let gecos = parts.next().unwrap_or("");
         let home = parts.next().unwrap_or("");
         let shell = parts.next().unwrap_or("");
-        let Ok(uid) = uid_s.parse::<u32>() else { continue };
-        let Ok(gid) = gid_s.parse::<u32>() else { continue };
+        let Ok(uid) = uid_s.parse::<u32>() else {
+            continue;
+        };
+        let Ok(gid) = gid_s.parse::<u32>() else {
+            continue;
+        };
         if uid < 1000 || name == "nobody" {
             continue;
         }
@@ -91,12 +97,7 @@ pub fn list_accounts() -> Result<Vec<AccountInfo>, String> {
         if shell.ends_with("nologin") || shell.ends_with("/false") {
             continue;
         }
-        let display = gecos
-            .split(',')
-            .next()
-            .unwrap_or(gecos)
-            .trim()
-            .to_string();
+        let display = gecos.split(',').next().unwrap_or(gecos).trim().to_string();
         let display_name = if display.is_empty() {
             name.to_string()
         } else {
@@ -336,9 +337,7 @@ pub fn add_user_as_root(
         cmd.args(["-c", name]);
     }
     cmd.arg(user);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("useradd failed: {e}"))?;
+    let output = cmd.output().map_err(|e| format!("useradd failed: {e}"))?;
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
         // Retry without -G sudo when the group is absent.
@@ -352,9 +351,7 @@ pub fn add_user_as_root(
                 cmd.args(["-c", name]);
             }
             cmd.arg(user);
-            let output = cmd
-                .output()
-                .map_err(|e| format!("useradd failed: {e}"))?;
+            let output = cmd.output().map_err(|e| format!("useradd failed: {e}"))?;
             if !output.status.success() {
                 password.zeroize();
                 let err = String::from_utf8_lossy(&output.stderr);

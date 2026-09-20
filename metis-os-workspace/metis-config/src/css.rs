@@ -1886,6 +1886,7 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         font-size: 14px;
         color: {muted};
         line-height: 1.45;
+        max-width: 448px;
     }}
     .metis-onboarding-skip {{
         font-size: 13px;
@@ -1974,6 +1975,7 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
     .metis-onboarding-hint {{
         font-size: 12px;
         color: {muted};
+        max-width: 448px;
     }}
     .metis-onboarding-keybind {{
         font-family: monospace;

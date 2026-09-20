@@ -10,7 +10,7 @@ mod pkhelpers;
 mod rustdesk;
 
 pub use accounts::{
-    add_user, add_user_as_root, accounts_list_as_root, list_accounts, remove_user,
+    accounts_list_as_root, add_user, add_user_as_root, list_accounts, remove_user,
     remove_user_as_root, set_admin, set_admin_as_root, set_display_name, set_display_name_as_root,
     set_password as set_account_password, set_password_as_root as set_account_password_as_root,
     AccountInfo,

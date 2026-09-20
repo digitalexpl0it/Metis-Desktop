@@ -342,10 +342,12 @@ impl Wallpaper {
                                 .get(&path)
                                 .or_else(|| new_sources.get(&path))
                                 .cloned()
-                                .or_else(|| load_image_cached(&path).map(|arc| {
-                                    new_sources.insert(path.clone(), arc.clone());
-                                    arc
-                                }));
+                                .or_else(|| {
+                                    load_image_cached(&path).map(|arc| {
+                                        new_sources.insert(path.clone(), arc.clone());
+                                        arc
+                                    })
+                                });
                             match source {
                                 Some(src) => cover_crop_rgba(&src, rw, rh),
                                 None => vec![0u8; (rw as usize) * (rh as usize) * 4],
@@ -370,7 +372,10 @@ impl Wallpaper {
 
                 if let Ok(mut guard) = slot_worker.lock() {
                     if guard.0 == generation {
-                        guard.1 = Some(DecodeOutput { pixels: buf, sources: new_sources });
+                        guard.1 = Some(DecodeOutput {
+                            pixels: buf,
+                            sources: new_sources,
+                        });
                     }
                 }
             })

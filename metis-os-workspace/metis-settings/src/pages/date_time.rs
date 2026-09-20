@@ -16,7 +16,8 @@ pub fn build() -> gtk::Widget {
     let status = Rc::new(RefCell::new(metis_remote::datetime_status().ok()));
     let dt_cfg = metis_config::load_datetime_config();
 
-    let (card, body) = ui::section_with_icon(&tr("Date & Time"), "preferences-system-time-symbolic");
+    let (card, body) =
+        ui::section_with_icon(&tr("Date & Time"), "preferences-system-time-symbolic");
 
     // Automatic Date & Time (NTP)
     let ntp_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -163,17 +164,17 @@ pub fn build() -> gtk::Widget {
                 let status = status.clone();
                 time_btn.set_sensitive(!active);
                 bg::run_bg(
-            move || {
-                let result = metis_remote::set_ntp(active);
-                result
-            },
-            move |result| {
-        if let Err(err) = result {
-                                    tracing::warn!(%err, "set-ntp failed");
-                                }
-                                refresh_status(&status, &time_value, &tz_value);
-            },
-        );
+                    move || {
+                        let result = metis_remote::set_ntp(active);
+                        result
+                    },
+                    move |result| {
+                        if let Err(err) = result {
+                            tracing::warn!(%err, "set-ntp failed");
+                        }
+                        refresh_status(&status, &time_value, &tz_value);
+                    },
+                );
             },
         );
     }
@@ -201,15 +202,15 @@ pub fn build() -> gtk::Widget {
                     let tz_value = tz_value.clone();
                     let status = status.clone();
                     bg::run_bg(
-                    move || {
-                        if let Some(tz) = resolve_timezone_from_ip() {
-                            let _ = metis_remote::set_timezone(&tz);
-                        }
-                    },
-                    move |_| {
-                        refresh_status(&status, &time_value, &tz_value);
-                    },
-                );
+                        move || {
+                            if let Some(tz) = resolve_timezone_from_ip() {
+                                let _ = metis_remote::set_timezone(&tz);
+                            }
+                        },
+                        move |_| {
+                            refresh_status(&status, &time_value, &tz_value);
+                        },
+                    );
                 }
             },
         );
@@ -348,12 +349,12 @@ fn open_set_time_sheet(
                 result
             },
             move |result| {
-        if let Err(err) = result {
-                            tracing::warn!(%err, "set-time failed");
-                        } else {
-                            dialog::dismiss(false);
-                            refresh_status(&status, &time_value, &tz_value);
-                        }
+                if let Err(err) = result {
+                    tracing::warn!(%err, "set-time failed");
+                } else {
+                    dialog::dismiss(false);
+                    refresh_status(&status, &time_value, &tz_value);
+                }
             },
         );
     });
@@ -405,19 +406,19 @@ fn open_timezone_sheet(
             let time_value = time_value.clone();
             let tz_value = tz_value.clone();
             bg::run_bg(
-            move || {
-                let result = metis_remote::set_timezone(&tz);
-                result
-            },
-            move |result| {
-        if let Err(err) = result {
-                                tracing::warn!(%err, "set-timezone failed");
-                            } else {
-                                dialog::dismiss(false);
-                                refresh_status(&status, &time_value, &tz_value);
-                            }
-            },
-        );
+                move || {
+                    let result = metis_remote::set_timezone(&tz);
+                    result
+                },
+                move |result| {
+                    if let Err(err) = result {
+                        tracing::warn!(%err, "set-timezone failed");
+                    } else {
+                        dialog::dismiss(false);
+                        refresh_status(&status, &time_value, &tz_value);
+                    }
+                },
+            );
         });
     }
 
