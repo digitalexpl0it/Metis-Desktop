@@ -9,6 +9,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Onboarding: Network + Desktop widgets** — first-run wizard steps for Wi-Fi /
+  wired connect and optional desktop widgets (seeds Clock + Folders when enabled).
 - **`metis-polkit-agent`** — first-party GTK4 PolicyKit authentication agent
   started with the Metis session (compositor + watchdog). `pkexec` prompts
   (Users, firewall, Date & Time, …) no longer require GNOME/KDE agents. PAM

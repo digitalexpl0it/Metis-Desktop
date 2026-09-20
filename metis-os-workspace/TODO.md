@@ -955,7 +955,10 @@ Settings → Appearance ("Run setup again") or `metis-cmd.sh show-onboarding`.
 - [x] **Wallpaper** — bundled thumbnails only; live apply via compositor IPC.
 - [x] **Clock** — 12h / 24h format (`bar.json`).
 - [x] **Edge bar** — position, show on all/primary, opacity, blur.
+- [x] **Network** — Wi-Fi list / connect + wired status (2026-09-20).
 - [x] **Weather** — auto-detect on; optional city search (Open-Meteo geocoding).
+- [x] **Desktop widgets** — optional master switch; seeds Clock + Folders
+      when enabled with an empty layout (2026-09-20).
 - [x] **Gaming** — hybrid/Steam summary + auto GPU / Flatpak optimize prefs.
 - [x] **Optional software** — detect Remote / Flatpak / GameMode / Bluetooth /
       printers / keyring; grey out installed; toggles + `pkexec apt-get install`

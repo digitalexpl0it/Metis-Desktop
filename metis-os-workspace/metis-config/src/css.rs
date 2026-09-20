@@ -1977,6 +1977,33 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         color: {muted};
         max-width: 448px;
     }}
+    .metis-onboarding-wifi-list {{
+        border-radius: 8px;
+        overflow: hidden;
+    }}
+    .metis-onboarding-wifi-row {{
+        padding: 7px 10px;
+        border-radius: 6px;
+        background-color: transparent;
+    }}
+    .metis-onboarding-wifi-row-alt {{
+        background-color: color-mix(in srgb, {text} 7%, transparent);
+    }}
+    .metis-onboarding-wifi-row:hover {{
+        background-color: color-mix(in srgb, {accent} 14%, transparent);
+    }}
+    .metis-onboarding-wifi-sheet {{
+        background-color: {overlay_card_bg};
+        border: 1px solid {border};
+        border-radius: 12px;
+        padding: 12px 14px;
+        box-shadow: {shadow};
+    }}
+    .metis-onboarding-wifi-sheet-title {{
+        font-size: 13px;
+        font-weight: 600;
+        color: {text};
+    }}
     .metis-onboarding-keybind {{
         font-family: monospace;
         font-size: 13px;

@@ -1,6 +1,7 @@
 //! First-run onboarding wizard: a centered layer-shell overlay that walks the user
-//! through theme, wallpaper, clock, edge bar, weather, gaming, and optional host
-//! packages before marking `onboarding_complete` in `config.json`.
+//! through theme, wallpaper, clock, edge bar, network, weather, desktop widgets,
+//! gaming, and optional host packages before marking `onboarding_complete` in
+//! `config.json`.
 //!
 //! Progress is resumable: `onboarding_step` is written on each Next/Back so a
 //! session restart mid-wizard continues where the user left off.
@@ -27,7 +28,7 @@ use metis_config::{
 /// Metis wordmark (same asset as the splash).
 const LOGO_BYTES: &[u8] = include_bytes!("../../assets/metis_logo.png");
 
-const STEP_COUNT: usize = 10;
+const STEP_COUNT: usize = 12;
 const FADE: Duration = Duration::from_millis(320);
 
 fn step_titles() -> [String; STEP_COUNT] {
@@ -39,7 +40,9 @@ fn step_titles() -> [String; STEP_COUNT] {
         tr("Pick a wallpaper"),
         tr("Clock format"),
         tr("Edge bar"),
+        tr("Network"),
         tr("Weather"),
+        tr("Desktop widgets"),
         tr("Gaming"),
         tr("Optional software"),
         tr("You're all set"),
@@ -151,7 +154,7 @@ fn show_at_step(initial_step: usize) {
             o.window.set_margin(Edge::Top, 0);
             o.window.set_margin(Edge::Left, 0);
             o.window.set_opacity(0.0);
-            o.window.set_keyboard_mode(KeyboardMode::None);
+            o.window.set_keyboard_mode(KeyboardMode::OnDemand);
             o.window.set_visible(true);
             refresh_step(&mut o);
         }
@@ -167,7 +170,8 @@ fn show_at_step(initial_step: usize) {
     window.add_css_class("metis-onboarding-window");
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
-    window.set_keyboard_mode(KeyboardMode::None);
+    // OnDemand so search / Wi-Fi password fields can receive keys.
+    window.set_keyboard_mode(KeyboardMode::OnDemand);
     window.set_namespace("metis-onboarding");
     // Content-sized surface anchored top-left, centered via margins (splash pattern).
     window.set_anchor(Edge::Top, true);
@@ -399,10 +403,12 @@ fn refresh_step(o: &mut Onboarding) {
         3 => build_wallpaper(),
         4 => build_clock(),
         5 => build_edge_bar(),
-        6 => build_weather(),
-        7 => build_gaming(),
-        8 => build_optional_software(),
-        9 => build_finish(),
+        6 => build_network(),
+        7 => build_weather(),
+        8 => build_desktop_widgets(),
+        9 => build_gaming(),
+        10 => build_optional_software(),
+        11 => build_finish(),
         _ => gtk::Label::new(Some("")).upcast(),
     };
     o.body.append(&widget);
@@ -782,6 +788,326 @@ fn build_edge_bar() -> gtk::Widget {
     });
     blur.connect_active_notify(move |s| {
         update_bar(|c| c.blur = s.is_active());
+    });
+
+    col.upcast()
+}
+
+fn build_network() -> gtk::Widget {
+    use crate::services::WifiNetwork;
+
+    // Fixed-height overlay host so revealing the password sheet does not grow
+    // the onboarding card (same BODY_HEIGHT budget as other steps).
+    let overlay = gtk::Overlay::new();
+    overlay.set_size_request(BODY_INNER_WIDTH, BODY_HEIGHT);
+    overlay.set_hexpand(false);
+    overlay.set_vexpand(false);
+
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    col.set_size_request(BODY_INNER_WIDTH, BODY_HEIGHT);
+    col.set_hexpand(false);
+    col.set_vexpand(false);
+    col.set_overflow(gtk::Overflow::Hidden);
+
+    let status = gtk::Label::new(None);
+    status.add_css_class("metis-onboarding-subtitle");
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    status.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+    status.set_max_width_chars(42);
+    status.set_width_request(BODY_INNER_WIDTH);
+    col.append(&status);
+
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    list.add_css_class("metis-onboarding-wifi-list");
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .vexpand(true)
+        .hexpand(true)
+        .build();
+    scroll.set_size_request(BODY_INNER_WIDTH, 180);
+    scroll.set_child(Some(&list));
+    col.append(&scroll);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let refresh = gtk::Button::with_label(&metis_i18n::tr("Refresh"));
+    refresh.add_css_class("flat");
+    let skip_hint = gtk::Label::new(Some(&metis_i18n::tr(
+        "Already online? Continue — you can change this anytime in Settings.",
+    )));
+    skip_hint.add_css_class("metis-onboarding-hint");
+    skip_hint.set_xalign(0.0);
+    skip_hint.set_wrap(true);
+    skip_hint.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+    skip_hint.set_hexpand(true);
+    skip_hint.set_max_width_chars(36);
+    actions.append(&refresh);
+    actions.append(&skip_hint);
+    col.append(&actions);
+
+    overlay.set_child(Some(&col));
+
+    // Top-slide password sheet (overlays the list — does not resize the card).
+    let sheet = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    sheet.add_css_class("metis-onboarding-wifi-sheet");
+    sheet.set_margin_start(4);
+    sheet.set_margin_end(4);
+    sheet.set_margin_top(4);
+    let sheet_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let connect_title = gtk::Label::new(None);
+    connect_title.set_xalign(0.0);
+    connect_title.set_hexpand(true);
+    connect_title.add_css_class("metis-onboarding-wifi-sheet-title");
+    let cancel_sheet = gtk::Button::with_label(&metis_i18n::tr("Cancel"));
+    cancel_sheet.add_css_class("flat");
+    sheet_header.append(&connect_title);
+    sheet_header.append(&cancel_sheet);
+    sheet.append(&sheet_header);
+    let password = gtk::PasswordEntry::builder()
+        .show_peek_icon(true)
+        .placeholder_text(metis_i18n::tr("Password"))
+        .hexpand(true)
+        .build();
+    sheet.append(&password);
+    let connect_btn = gtk::Button::with_label(&metis_i18n::tr("Connect"));
+    connect_btn.add_css_class("suggested-action");
+    connect_btn.set_halign(gtk::Align::End);
+    sheet.append(&connect_btn);
+
+    let revealer = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .transition_duration(220)
+        .reveal_child(false)
+        .child(&sheet)
+        .build();
+    revealer.set_halign(gtk::Align::Fill);
+    revealer.set_valign(gtk::Align::Start);
+    revealer.set_hexpand(true);
+    overlay.add_overlay(&revealer);
+
+    let selected = Rc::new(RefCell::new(Option::<String>::None));
+    let nets = Rc::new(RefCell::new(Vec::<WifiNetwork>::new()));
+
+    let hide_sheet = {
+        let revealer = revealer.clone();
+        let password = password.clone();
+        let selected = selected.clone();
+        Rc::new(move || {
+            revealer.set_reveal_child(false);
+            password.set_text("");
+            *selected.borrow_mut() = None;
+        })
+    };
+
+    let show_sheet = {
+        let revealer = revealer.clone();
+        let connect_title = connect_title.clone();
+        let password = password.clone();
+        let selected = selected.clone();
+        Rc::new(move |ssid: String| {
+            *selected.borrow_mut() = Some(ssid.clone());
+            connect_title.set_text(&metis_i18n::tr("Password for %1").replace("%1", &ssid));
+            password.set_text("");
+            revealer.set_reveal_child(true);
+            let password = password.clone();
+            glib::timeout_add_local_once(Duration::from_millis(240), move || {
+                password.grab_focus();
+            });
+        })
+    };
+
+    {
+        let hide_sheet = hide_sheet.clone();
+        cancel_sheet.connect_clicked(move |_| hide_sheet());
+    }
+
+    let rebuild = {
+        let list = list.clone();
+        let status = status.clone();
+        let nets = nets.clone();
+        let show_sheet = show_sheet.clone();
+        let hide_sheet = hide_sheet.clone();
+        Rc::new(move || {
+            while let Some(child) = list.first_child() {
+                list.remove(&child);
+            }
+            let (wifi_on, eth, networks) = crate::services::network_snapshot_for_ui();
+            *nets.borrow_mut() = networks.clone();
+
+            let mut lines = Vec::new();
+            if eth.present {
+                if eth.connected {
+                    lines.push(metis_i18n::tr("Wired: connected (%1)").replace("%1", &eth.label));
+                } else {
+                    lines.push(metis_i18n::tr("Wired: available"));
+                }
+            }
+            if !wifi_on {
+                lines.push(metis_i18n::tr("Wi-Fi radio is off"));
+            } else if networks.is_empty() {
+                lines.push(metis_i18n::tr("Scanning for Wi-Fi networks…"));
+            } else if let Some(active) = networks.iter().find(|n| n.active) {
+                lines.push(metis_i18n::tr("Wi-Fi: connected to %1").replace("%1", &active.ssid));
+            } else {
+                lines.push(metis_i18n::tr("Select a network to connect"));
+            }
+            status.set_text(&lines.join("\n"));
+
+            if !wifi_on {
+                return;
+            }
+            for (i, net) in networks.iter().take(12).enumerate() {
+                let row = gtk::Button::builder().has_frame(false).build();
+                row.add_css_class("metis-onboarding-wifi-row");
+                if i % 2 == 1 {
+                    row.add_css_class("metis-onboarding-wifi-row-alt");
+                }
+                let h = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                let name = gtk::Label::new(Some(&net.ssid));
+                name.set_xalign(0.0);
+                name.set_hexpand(true);
+                name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                h.append(&name);
+                if net.secured {
+                    let lock = gtk::Label::new(Some(&metis_i18n::tr("secured")));
+                    lock.add_css_class("metis-onboarding-hint");
+                    h.append(&lock);
+                }
+                if net.active {
+                    let check = gtk::Label::new(Some(&metis_i18n::tr("connected")));
+                    check.add_css_class("metis-onboarding-optional-title");
+                    h.append(&check);
+                }
+                row.set_child(Some(&h));
+                let ssid = net.ssid.clone();
+                let secured = net.secured;
+                let active = net.active;
+                let show_sheet = show_sheet.clone();
+                let hide_sheet = hide_sheet.clone();
+                row.connect_clicked(move |_| {
+                    if active {
+                        return;
+                    }
+                    if secured {
+                        show_sheet(ssid.clone());
+                    } else {
+                        hide_sheet();
+                        crate::services::wifi_connect(ssid.clone(), None);
+                    }
+                });
+                list.append(&row);
+            }
+        })
+    };
+
+    {
+        let rebuild = rebuild.clone();
+        let hide_sheet = hide_sheet.clone();
+        refresh.connect_clicked(move |_| {
+            hide_sheet();
+            crate::services::wifi_ensure_radio_on();
+            crate::services::wifi_scan();
+            rebuild();
+        });
+    }
+    {
+        let selected = selected.clone();
+        let password = password.clone();
+        let hide_sheet = hide_sheet.clone();
+        let rebuild = rebuild.clone();
+        let submit = {
+            let selected = selected.clone();
+            let password = password.clone();
+            let hide_sheet = hide_sheet.clone();
+            let rebuild = rebuild.clone();
+            Rc::new(move || {
+                let Some(ssid) = selected.borrow().clone() else {
+                    return;
+                };
+                let pw = password.text().to_string();
+                if pw.is_empty() {
+                    return;
+                }
+                crate::services::wifi_connect(ssid, Some(pw));
+                hide_sheet();
+                rebuild();
+            })
+        };
+        let submit_btn = submit.clone();
+        connect_btn.connect_clicked(move |_| submit_btn());
+        password.connect_activate(move |_| submit());
+    }
+
+    crate::services::wifi_ensure_radio_on();
+    crate::services::wifi_scan();
+    rebuild();
+
+    let rebuild_later = rebuild.clone();
+    glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+        rebuild_later();
+    });
+
+    overlay.upcast()
+}
+
+fn build_desktop_widgets() -> gtk::Widget {
+    use metis_config::{
+        load_desktop_widgets_config, save_desktop_widgets_config, DesktopWidgetInstance,
+        DesktopWidgetKind,
+    };
+
+    let col = step_shell();
+
+    let hint = gtk::Label::new(Some(&metis_i18n::tr(
+        "Optional panels on your wallpaper — Folders, Clock, Weather, and more. \
+         Off by default so the desktop stays clean.",
+    )));
+    hint.add_css_class("metis-onboarding-subtitle");
+    hint.set_xalign(0.0);
+    hint.set_wrap(true);
+    hint.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+    hint.set_width_request(BODY_INNER_WIDTH);
+    hint.set_max_width_chars(42);
+    col.append(&hint);
+
+    let enabled = gtk::Switch::new();
+    let cfg = load_desktop_widgets_config();
+    enabled.set_active(cfg.enabled);
+    enabled.set_halign(gtk::Align::End);
+    col.append(&labeled_row(
+        &metis_i18n::tr("Show desktop widgets"),
+        &enabled,
+    ));
+
+    let detail = gtk::Label::new(Some(&metis_i18n::tr(
+        "Turning this on places a Clock and Folders widget you can move later \
+         (Settings → Desktop widgets → Edit mode).",
+    )));
+    detail.add_css_class("metis-onboarding-hint");
+    detail.set_xalign(0.0);
+    detail.set_wrap(true);
+    detail.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+    detail.set_width_request(BODY_INNER_WIDTH);
+    detail.set_max_width_chars(42);
+    col.append(&detail);
+
+    enabled.connect_active_notify(move |sw| {
+        let on = sw.is_active();
+        let mut cfg = load_desktop_widgets_config();
+        cfg.enabled = on;
+        if on && cfg.instances.is_empty() {
+            let mut clock = DesktopWidgetInstance::new(DesktopWidgetKind::Clock);
+            clock.x = 48;
+            clock.y = 48;
+            let mut folders = DesktopWidgetInstance::new(DesktopWidgetKind::Folders);
+            folders.x = 48;
+            folders.y = 220;
+            cfg.instances = vec![clock, folders];
+        }
+        if let Err(err) = save_desktop_widgets_config(&cfg) {
+            tracing::warn!(%err, "failed to save desktop-widgets.json");
+        }
     });
 
     col.upcast()

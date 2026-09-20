@@ -42,11 +42,12 @@ pub use notifications::{
 };
 pub use notify_dbus::{spawn_notification_service, NotifyChannels, NotifyIncoming};
 pub use poll::{
-    arm_user_wifi_radio_toggle, bluetooth_set_powered, set_mic_mute, set_mic_volume_absolute,
-    set_mute, set_volume_absolute, set_volume_relative, spawn_bar_pollers,
+    arm_user_wifi_radio_toggle, bluetooth_set_powered, network_snapshot_for_ui, set_mic_mute,
+    set_mic_volume_absolute, set_mute, set_volume_absolute, set_volume_relative, spawn_bar_pollers,
     suppress_wifi_radio_writes, vpn_clear_password_prompt, vpn_down, vpn_up, vpn_up_with_password,
-    wifi_connect, wifi_hotplug_suppressed, wifi_scan, wifi_set_radio, BarSnapshot, BluetoothDevice,
-    BluetoothStatus, EthernetStatus, VpnFeedback, VpnStatus, WifiNetwork,
+    wifi_connect, wifi_ensure_radio_on, wifi_hotplug_suppressed, wifi_scan, wifi_set_radio,
+    BarSnapshot, BluetoothDevice, BluetoothStatus, EthernetStatus, VpnFeedback, VpnStatus,
+    WifiNetwork,
 };
 pub use tray::{
     apply_event, register_context_menu_ready, register_refresh as register_tray_refresh,

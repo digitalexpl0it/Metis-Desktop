@@ -73,6 +73,7 @@ quits the app.
     ├── metis-grid/              # Window grid / tiling + scrolling layout (pure logic)
     ├── metis-i18n/              # gettext (shell/settings) + Fluent (compositor)
     ├── metis-portal/            # xdg-desktop-portal backend
+    ├── metis-polkit-agent/      # GTK4 PolicyKit auth agent (session password dialogs)
     ├── metis-protocol/          # Shared JSON IPC contracts + rate limits
     ├── metis-remote/            # Desktop sharing + Polkit privileged helpers
     ├── metis-screenshot/        # Native screenshot / recording helpers
@@ -274,6 +275,7 @@ Other files are created on demand:
 | `input.json`           | You configure input devices        | Mouse, touchpad, keyboard (compositor live-reload)                                                |
 | `keybinds.json`        | You edit Shortcuts                 | Desktop chords → actions (Settings → Keyboard)                                                    |
 | `power.json`           | You configure power settings       | Power profile (`powerprofilesctl`), idle blank/suspend, lid-close                                 |
+| `datetime.json`        | You configure Date & Time          | 12/24h preference, first day of week (system time via `timedatectl` / Polkit)                     |
 | `remote.json`          | You configure Remote access        | Live-session RDP sharing via gnome-remote-desktop                                                 |
 | `dashboard.json`       | You configure Control Center       | Enable, widget order, max height %, refresh interval, confirm-before-kill                         |
 | `gaming.json`          | You configure gaming               | Graphics mode, auto performance/GameMode, Flatpak GPU env, library paths, Metis launch tweaks     |
@@ -318,7 +320,8 @@ reference.
 - **Phase 8 — Internationalization:** **complete** (2026-07-24). Hybrid gettext
   (shell/settings) + Fluent (compositor); Settings Language & region; onboarding
   language step; live Apply rebuilds. See [`docs/I18N.md`](docs/I18N.md).
-- **Phase 9 — Onboarding:** **complete** (2026-07-04); language step with Phase 8.
+- **Phase 9 — Onboarding:** **complete** (2026-07-04; Network + Desktop widgets
+  steps 2026-09-20); language step with Phase 8.
 - **Phase 10 — Control Center:** **complete** (2026-07-07; process tree + monitor
   picker 2026-07-11).
 - **Phase 11 — Gaming Platform 2.0:** **complete** (2026-07-07).

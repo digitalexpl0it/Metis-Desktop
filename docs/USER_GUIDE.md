@@ -48,15 +48,16 @@ your settings).
 
 **First-run setup.** On a fresh install (when `onboarding_complete` is false in
 `config.json`), the shell shows an onboarding wizard after the startup splash:
-theme, wallpaper, clock format, edge bar, weather, gaming, **optional software**
-(Remote desktop, Flatpak, GameMode, Bluetooth, printers, and keyring if missing),
-and a finish screen with keybind tips. Already-installed optionals are greyed out;
-use toggles and **Install selected** to install the rest in one `pkexec apt-get`
-pass (or skip and install later). Progress is saved as `onboarding_step` so a
-session restart mid-wizard resumes where you left off. Skip or Finish marks setup
-complete so it does not appear again. Reopen it anytime from **Settings →
-Appearance → Run setup again**, or with `metis-cmd.sh show-onboarding`. Disable
-for dev with `METIS_NO_ONBOARDING=1`.
+theme, wallpaper, clock format, edge bar, **network** (Wi-Fi / wired), weather,
+**desktop widgets**, gaming, **optional software** (Remote desktop, Flatpak,
+GameMode, Bluetooth, printers, and keyring if missing), and a finish screen with
+keybind tips. Already-installed optionals are greyed out; use toggles and
+**Install selected** to install the rest in one `pkexec apt-get` pass (or skip
+and install later). Progress is saved as `onboarding_step` so a session restart
+mid-wizard resumes where you left off. Skip or Finish marks setup complete so it
+does not appear again. Reopen it anytime from **Settings → Appearance → Run setup
+again**, or with `metis-cmd.sh show-onboarding`. Disable for dev with
+`METIS_NO_ONBOARDING=1`.
 
 **Install Metis.** Prefer the Ubuntu `.deb` from GitHub Releases when available
 ([`docs/PACKAGING.md`](PACKAGING.md)); developers can still use

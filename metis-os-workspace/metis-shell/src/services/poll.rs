@@ -1008,6 +1008,19 @@ fn nmcli_split(line: &str) -> Vec<String> {
     fields
 }
 
+/// One-shot Wi-Fi / ethernet read for onboarding (and other UI that is not on
+/// the bar poll tick). Prefer the poller's cached snapshot when possible.
+pub fn network_snapshot_for_ui() -> (bool, EthernetStatus, Vec<WifiNetwork>) {
+    let wifi_enabled = read_wifi_radio_enabled();
+    let ethernet = read_ethernet_status().unwrap_or_default();
+    let wifi = if wifi_enabled {
+        read_wifi_networks().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    (wifi_enabled, ethernet, wifi)
+}
+
 fn read_wifi_radio_enabled() -> bool {
     let mut cmd = std::process::Command::new("nmcli");
     cmd.args(["-t", "-f", "WIFI", "radio"]);

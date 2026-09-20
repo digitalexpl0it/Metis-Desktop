@@ -278,8 +278,10 @@ pub fn ignore_params_event(
 /// Helper so callers can match on `WEnum` modifier arrays from the session.
 pub fn modifiers_from_array(array: &[u8]) -> Vec<u64> {
     array
-        .chunks_exact(8)
-        .map(|c| u64::from_ne_bytes(c.try_into().unwrap_or([0; 8])))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| u64::from_ne_bytes(*c))
         .collect()
 }
 
