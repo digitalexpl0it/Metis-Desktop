@@ -42,9 +42,7 @@ pub fn build(
     heading.add_css_class("metis-settings-home-title");
     inner.append(&heading);
 
-    let sub = gtk::Label::new(Some(&tr(
-        "Choose a category, or search for a setting.",
-    )));
+    let sub = gtk::Label::new(Some(&tr("Choose a category, or search for a setting.")));
     sub.set_xalign(0.0);
     sub.add_css_class("metis-settings-home-subtitle");
     sub.set_wrap(true);
@@ -128,13 +126,7 @@ pub fn build(
                 let show = !searching || nav::category_matches(cat, &q);
                 tile_buttons[i].set_visible(show);
                 if show {
-                    tiles.attach(
-                        &tile_buttons[i],
-                        (slot % 2) as i32,
-                        (slot / 2) as i32,
-                        1,
-                        1,
-                    );
+                    tiles.attach(&tile_buttons[i], (slot % 2) as i32, (slot / 2) as i32, 1, 1);
                     slot += 1;
                 }
             }

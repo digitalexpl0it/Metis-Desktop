@@ -75,7 +75,6 @@ pub fn build() -> gtk::Widget {
     let browser = WallpaperBrowser::new(gallery, bgcfg.clone(), current_wp.as_deref());
     browser.render();
 
-
     // -- Solid colour controls --
     let solid_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
     let solid_btn = color_dialog_button();
@@ -921,9 +920,7 @@ impl WallpaperBrowser {
             let Ok(texture) = gdk::Texture::from_bytes(&bytes) else {
                 continue;
             };
-            self.thumb_cache
-                .borrow_mut()
-                .insert(path.clone(), texture);
+            self.thumb_cache.borrow_mut().insert(path.clone(), texture);
             if self.load_gen.get() == gen {
                 self.apply_thumb(&path);
             }
@@ -974,8 +971,8 @@ impl WallpaperBrowser {
 }
 
 fn decode_thumb_png(path: &Path) -> Result<Vec<u8>, ()> {
-    let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(path, THUMB_W, THUMB_H, true)
-        .map_err(|_| ())?;
+    let pixbuf =
+        gdk_pixbuf::Pixbuf::from_file_at_scale(path, THUMB_W, THUMB_H, true).map_err(|_| ())?;
     pixbuf.save_to_bufferv("png", &[]).map_err(|_| ())
 }
 

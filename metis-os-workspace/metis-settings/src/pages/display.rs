@@ -679,8 +679,7 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
                         }
                         let old_names: Vec<String> =
                             outputs.borrow().iter().map(|o| o.name.clone()).collect();
-                        let new_names: Vec<String> =
-                            fresh.iter().map(|o| o.name.clone()).collect();
+                        let new_names: Vec<String> = fresh.iter().map(|o| o.name.clone()).collect();
                         let names_changed = old_names != new_names;
                         let geometry_changed = !names_changed
                             && outputs.borrow().iter().zip(fresh.iter()).any(|(a, b)| {

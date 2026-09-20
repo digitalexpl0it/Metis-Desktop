@@ -1039,7 +1039,10 @@ fn render_firewall_status(sections: &Sections, snap: &RemoteSnapshot) {
 
 /// Top-slide sheet for session sharing username + password (same host as
 /// color/font pickers).
-fn show_password_sheet(cred_tx: mpsc::Sender<Result<(), String>>, password_ui_open: Rc<Cell<bool>>) {
+fn show_password_sheet(
+    cred_tx: mpsc::Sender<Result<(), String>>,
+    password_ui_open: Rc<Cell<bool>>,
+) {
     if password_ui_open.get() || dialog::is_open() {
         return;
     }
@@ -1157,16 +1160,12 @@ fn show_password_sheet(cred_tx: mpsc::Sender<Result<(), String>>, password_ui_op
         }
     });
 
-    let opened = dialog::present(
-        &tr("Session sharing password"),
-        &wrap,
-        {
-            let password_ui_open = password_ui_open.clone();
-            Rc::new(move || {
-                password_ui_open.set(false);
-            })
-        },
-    );
+    let opened = dialog::present(&tr("Session sharing password"), &wrap, {
+        let password_ui_open = password_ui_open.clone();
+        Rc::new(move || {
+            password_ui_open.set(false);
+        })
+    });
     if !opened {
         password_ui_open.set(false);
         return;

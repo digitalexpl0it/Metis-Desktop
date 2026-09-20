@@ -219,11 +219,7 @@ pub fn pick_color(initial: gdk::RGBA, on_done: Rc<dyn Fn(Option<gdk::RGBA>)>) {
         }
     });
 
-    show_sheet(
-        &tr("Pick a Color"),
-        &wrap,
-        Rc::new(move || on_done(None)),
-    );
+    show_sheet(&tr("Pick a Color"), &wrap, Rc::new(move || on_done(None)));
 }
 
 /// Open a top-slide font picker. `on_done(None)` = cancelled.
@@ -267,21 +263,13 @@ pub fn pick_font(
         }
     });
 
-    show_sheet(
-        &tr("Pick a Font"),
-        &wrap,
-        Rc::new(move || on_done(None)),
-    );
+    show_sheet(&tr("Pick a Font"), &wrap, Rc::new(move || on_done(None)));
 }
 
 /// Present arbitrary content in the top-slide sheet. Caller owns actions and
 /// dismisses via [`dismiss`] / [`dismiss_silent`]. Returns false if the host
 /// is not installed.
-pub fn present(
-    title: &str,
-    content: &impl IsA<gtk::Widget>,
-    on_cancel: Rc<dyn Fn()>,
-) -> bool {
+pub fn present(title: &str, content: &impl IsA<gtk::Widget>, on_cancel: Rc<dyn Fn()>) -> bool {
     let ready = HOST.with(|slot| slot.borrow().is_some());
     if !ready {
         return false;

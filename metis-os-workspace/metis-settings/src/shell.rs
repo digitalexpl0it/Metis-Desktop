@@ -194,12 +194,7 @@ fn build(app: &gtk::Application, launch: PageLaunch) {
 
     let mini_cat_btns: Vec<(&'static str, gtk::Button)> = CATEGORIES
         .iter()
-        .map(|cat| {
-            (
-                cat.id,
-                mini_button(cat.icon, &tr(cat.title), Some(cat.hue)),
-            )
-        })
+        .map(|cat| (cat.id, mini_button(cat.icon, &tr(cat.title), Some(cat.hue))))
         .collect();
 
     let sync_mini = {

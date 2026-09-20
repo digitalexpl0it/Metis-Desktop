@@ -438,9 +438,7 @@ fn render<F: Fn() + 'static>(sections: &Rc<Sections>, snap: &NetSnapshot, refres
         let n = snap.saved.len();
         *sections.last_saved.borrow_mut() = snap.saved.clone();
         if n == 0 {
-            sections
-                .known_btn
-                .set_label(&tr("Known Wi-Fi networks…"));
+            sections.known_btn.set_label(&tr("Known Wi-Fi networks…"));
             sections.known_btn.set_sensitive(false);
         } else {
             sections
@@ -1177,11 +1175,7 @@ fn show_openvpn_sheet(status: gtk::Label, refresh: Rc<impl Fn() + 'static>) {
     }
 
     if !dialog::present(&tr("Add OpenVPN"), &wrap, Rc::new(|| {})) {
-        set_vpn_status(
-            &status,
-            &tr("Could not open OpenVPN sheet."),
-            true,
-        );
+        set_vpn_status(&status, &tr("Could not open OpenVPN sheet."), true);
         return;
     }
     let focus = name.clone();
@@ -1289,11 +1283,7 @@ fn show_wireguard_sheet(status: gtk::Label, refresh: Rc<impl Fn() + 'static>) {
     }
 
     if !dialog::present(&tr("Add WireGuard"), &wrap, Rc::new(|| {})) {
-        set_vpn_status(
-            &status,
-            &tr("Could not open WireGuard sheet."),
-            true,
-        );
+        set_vpn_status(&status, &tr("Could not open WireGuard sheet."), true);
         return;
     }
     let focus_entry = name.clone();
@@ -1522,11 +1512,7 @@ fn show_known_wifi_sheet<F: Fn() + 'static>(saved: Vec<SavedConn>, refresh: Rc<F
     wrap.append(&empty);
 
     if saved.is_empty() {
-        let _ = dialog::present(
-            &tr("Known Wi-Fi networks"),
-            &wrap,
-            Rc::new(|| {}),
-        );
+        let _ = dialog::present(&tr("Known Wi-Fi networks"), &wrap, Rc::new(|| {}));
         return;
     }
 
@@ -1570,11 +1556,7 @@ fn show_known_wifi_sheet<F: Fn() + 'static>(saved: Vec<SavedConn>, refresh: Rc<F
                 let info_tx = info_tx.clone();
                 std::thread::spawn(move || {
                     let ipv4 = net::read_ipv4(&name);
-                    let mut body = format!(
-                        "{}: {uuid}\n{}: {ctype}",
-                        tr("UUID"),
-                        tr("Type")
-                    );
+                    let mut body = format!("{}: {uuid}\n{}: {ctype}", tr("UUID"), tr("Type"));
                     if !ipv4.method.is_empty() {
                         body.push_str(&format!("\n{}: {}", tr("IPv4 method"), ipv4.method));
                     }
