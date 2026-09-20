@@ -28,20 +28,20 @@ pub fn present_auth_dialog(
         return;
     }
 
+    // Metis draws the window titlebar; hide GTK CSD so we don't get a second
+    // header + close button stacked under the compositor chrome.
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Authentication Required")
         .resizable(false)
         .modal(true)
+        .decorated(false)
         .default_width(420)
         .build();
     window.add_css_class("metis-polkit-window");
+    window.set_deletable(true);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 14);
-    root.set_margin_top(20);
-    root.set_margin_bottom(20);
-    root.set_margin_start(20);
-    root.set_margin_end(20);
     root.add_css_class("metis-polkit-dialog");
 
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -50,16 +50,14 @@ pub fn present_auth_dialog(
     icon.add_css_class("metis-polkit-icon");
     header.append(&icon);
 
+    // Body uses the polkit message as the only heading — window title already
+    // says "Authentication Required".
     let titles = gtk::Box::new(gtk::Orientation::Vertical, 4);
     titles.set_hexpand(true);
-    let title = gtk::Label::new(Some("Authentication Required"));
-    title.set_xalign(0.0);
-    title.add_css_class("metis-polkit-title");
     let msg = gtk::Label::new(Some(&message));
     msg.set_xalign(0.0);
     msg.set_wrap(true);
-    msg.add_css_class("metis-polkit-message");
-    titles.append(&title);
+    msg.add_css_class("metis-polkit-title");
     titles.append(&msg);
     if !action_id.is_empty() {
         let action = gtk::Label::new(Some(&action_id));

@@ -55,11 +55,8 @@ fn stylesheet(tokens: &ThemeTokens) -> String {
     let surface = &tokens.surface;
     let text = &tokens.text;
     let muted = &tokens.text_muted;
-    let accent = tokens
-        .accent
-        .first()
-        .map(String::as_str)
-        .unwrap_or("#3b82f6");
+    let accent = tokens.accent_primary();
+    let on_accent = tokens.on_accent_ink();
     let danger = &tokens.semantic.error;
     format!(
         r#"
@@ -69,15 +66,14 @@ fn stylesheet(tokens: &ThemeTokens) -> String {
         }}
         .metis-polkit-dialog {{
             background-color: {surface};
+            border-radius: 12px;
+            margin: 16px;
+            padding: 20px;
         }}
         .metis-polkit-title {{
             font-weight: 600;
-            font-size: 1.15em;
+            font-size: 1.1em;
             color: {text};
-        }}
-        .metis-polkit-message {{
-            color: {text};
-            opacity: 0.92;
         }}
         .metis-polkit-action {{
             color: {muted};
@@ -91,12 +87,27 @@ fn stylesheet(tokens: &ThemeTokens) -> String {
         .metis-polkit-icon {{
             color: {accent};
         }}
-        button.suggested-action {{
+        window.metis-polkit-window button.suggested-action {{
             background-color: {accent};
-            color: {bg};
+            background: {accent};
             border: none;
             border-radius: 8px;
             padding: 8px 16px;
+            color: {on_accent};
+        }}
+        window.metis-polkit-window button.suggested-action:hover {{
+            background-color: color-mix(in srgb, {accent} 82%, white);
+            background: color-mix(in srgb, {accent} 82%, white);
+            color: {on_accent};
+        }}
+        window.metis-polkit-window button.suggested-action label,
+        window.metis-polkit-window button.suggested-action:hover label {{
+            color: {on_accent};
+            opacity: 1;
+        }}
+        window.metis-polkit-window button.suggested-action:disabled,
+        window.metis-polkit-window button.suggested-action:disabled label {{
+            opacity: 0.55;
         }}
         entry, entry.metis-polkit-password {{
             border-radius: 8px;
