@@ -10,6 +10,7 @@ use gtk::prelude::*;
 
 use metis_config::{AccountKind, CalendarAccount, CalendarsConfig};
 
+use crate::dialog;
 use crate::{msauth, runtime, ui};
 use metis_i18n::tr;
 
@@ -23,6 +24,7 @@ pub fn build() -> gtk::Widget {
 
     let (list_card, list_body) = ui::section(&tr("Accounts"));
     let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    list.add_css_class("metis-settings-inset");
     list_body.append(&list);
     content.append(&list_card);
 
@@ -31,14 +33,37 @@ pub fn build() -> gtk::Widget {
         list,
     });
 
-    content.append(&build_add_form(&inner));
+    let add_btn = gtk::Button::with_label(&tr("Add account…"));
+    add_btn.add_css_class("suggested-action");
+    add_btn.set_halign(gtk::Align::Start);
+    add_btn.set_margin_top(4);
+    {
+        let inner = inner.clone();
+        add_btn.connect_clicked(move |_| show_add_account_sheet(inner.clone()));
+    }
+    list_body.append(&add_btn);
+
     inner.rebuild();
 
     scroller.upcast()
 }
 
-fn build_add_form(inner: &Rc<Inner>) -> gtk::Widget {
-    let (card, body) = ui::section(&tr("Add account"));
+/// Top-slide: pick a provider, fill fields, add the account.
+fn show_add_account_sheet(inner: Rc<Inner>) {
+    if dialog::is_open() {
+        return;
+    }
+
+    let wrap = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    wrap.add_css_class("metis-settings-top-sheet-body");
+
+    let intro = gtk::Label::new(Some(&tr(
+        "Choose what to connect, then fill in the details for that provider.",
+    )));
+    intro.set_xalign(0.0);
+    intro.set_wrap(true);
+    intro.add_css_class("metis-settings-top-dialog-body");
+    wrap.append(&intro);
 
     let kind_labels = [
         tr("CalDAV"),
@@ -48,7 +73,7 @@ fn build_add_form(inner: &Rc<Inner>) -> gtk::Widget {
     ];
     let kind_refs: Vec<&str> = kind_labels.iter().map(|s| s.as_str()).collect();
     let kind_dd = gtk::DropDown::from_strings(&kind_refs);
-    body.append(&ui::row(&tr("Type"), &kind_dd));
+    wrap.append(&ui::row(&tr("Connect to"), &kind_dd));
 
     let name = entry(&tr("Display name"));
     let url = entry(&tr("CalDAV URL (server, calendar, or principal)"));
@@ -57,13 +82,15 @@ fn build_add_form(inner: &Rc<Inner>) -> gtk::Widget {
     let client_id = entry(&tr("MS application (client) id"));
     let color = entry(&tr("Color (e.g. #22d3ee) — optional"));
     for e in [&name, &url, &username, &tenant, &client_id, &color] {
-        body.append(e);
+        wrap.append(e);
     }
 
-    let add_btn = gtk::Button::with_label(&tr("Add account"));
-    add_btn.add_css_class("suggested-action");
-    add_btn.set_halign(gtk::Align::End);
-    body.append(&add_btn);
+    let err = gtk::Label::new(None);
+    err.set_xalign(0.0);
+    err.set_wrap(true);
+    err.add_css_class("metis-settings-error");
+    err.set_visible(false);
+    wrap.append(&err);
 
     let update_visibility = {
         let url = url.clone();
@@ -85,8 +112,23 @@ fn build_add_form(inner: &Rc<Inner>) -> gtk::Widget {
         kind_dd.connect_selected_notify(move |dd| update_visibility(dd.selected()));
     }
 
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.set_halign(gtk::Align::End);
+    let add_btn = gtk::Button::with_label(&tr("Add account"));
+    add_btn.add_css_class("suggested-action");
+    actions.append(&add_btn);
+    wrap.append(&actions);
+
     {
         let inner = inner.clone();
+        let err = err.clone();
+        let name = name.clone();
+        let url = url.clone();
+        let username = username.clone();
+        let tenant = tenant.clone();
+        let client_id = client_id.clone();
+        let color = color.clone();
+        let kind_dd = kind_dd.clone();
         add_btn.connect_clicked(move |_| {
             let kind = match kind_dd.selected() {
                 0 => AccountKind::Caldav,
@@ -94,9 +136,26 @@ fn build_add_form(inner: &Rc<Inner>) -> gtk::Widget {
                 2 => AccountKind::Ms365,
                 _ => AccountKind::Local,
             };
+            if matches!(kind, AccountKind::Caldav) && opt(&url).is_none() {
+                err.set_text(&tr("Enter a CalDAV URL."));
+                err.set_visible(true);
+                return;
+            }
+            if matches!(kind, AccountKind::Ms365) && opt(&client_id).is_none() {
+                err.set_text(&tr("Enter the Microsoft application (client) id."));
+                err.set_visible(true);
+                return;
+            }
+            err.set_visible(false);
+
             let display = name.text().trim().to_string();
             let display = if display.is_empty() {
-                format!("{kind:?}")
+                match kind {
+                    AccountKind::Caldav => tr("CalDAV"),
+                    AccountKind::Thunderbird => tr("Thunderbird"),
+                    AccountKind::Ms365 => tr("Microsoft 365"),
+                    AccountKind::Local => tr("Local"),
+                }
             } else {
                 display
             };
@@ -113,13 +172,15 @@ fn build_add_form(inner: &Rc<Inner>) -> gtk::Widget {
                 read_only: false,
             };
             inner.add_account(account);
-            for e in [&name, &url, &username, &tenant, &client_id, &color] {
-                e.set_text(&tr(""));
-            }
+            dialog::dismiss_silent();
         });
     }
 
-    card.upcast()
+    let _ = dialog::present(&tr("Add account"), &wrap, Rc::new(|| {}));
+    let focus = name.clone();
+    glib::idle_add_local_once(move || {
+        focus.grab_focus();
+    });
 }
 
 impl Inner {
@@ -260,7 +321,8 @@ fn caldav_password_row(account: &CalendarAccount) -> gtk::Widget {
                     }
                 }
             });
-            entry.set_text(&tr(""));
+            // Never `tr("")` — gettext maps empty msgid to the PO file header.
+            entry.set_text("");
             poll_status(&status, shared, || runtime::send("reload-calendars"));
         });
     }
@@ -330,7 +392,9 @@ fn ms_login_row(account: &CalendarAccount) -> gtk::Widget {
 }
 
 fn entry(placeholder: &str) -> gtk::Entry {
-    gtk::Entry::builder().placeholder_text(placeholder).build()
+    let e = gtk::Entry::builder().placeholder_text(placeholder).build();
+    ui::swallow_empty_backspace(&e);
+    e
 }
 
 fn opt(entry: &gtk::Entry) -> Option<String> {

@@ -416,7 +416,9 @@ Created later, on demand:
 
 - `config.json` — active theme, onboarding state, briefing-on-login (written when you change a preference)
 - `menu.json` — app launcher terminal / file-manager defaults and pinned apps
-- `wallpaper.json` — background picture / colour / gradient (and per-output overrides)
+- `wallpaper.json` — background picture / colour / gradient (and per-output overrides).
+  Settings → Background also offers system images from `/usr/share/backgrounds`
+  (paginated; not copied into the Metis store unless imported).
 - `weather.json` — bar weather unit, auto-detect / IP-geolocation, saved locations
 - `dismissed.json` — dismissed calendar reminders
 - `desk.json` — compositor window-grid layout (written by the compositor, same directory)
@@ -431,6 +433,10 @@ Created later, on demand:
 | Missing layer-shell | Install `libgtk4-layer-shell-dev` (26.04 / Debian 13), or build from source on 24.04 |
 | Shell hangs on startup | Rebuild compositor + shell (`./run-metis.sh --build --session`) |
 | Theme not applied | Delete `~/.config/metis/themes/*.json` and restart to regenerate |
+| Settings scroll freezes on Windows/Display (26.04 / hybrid GPU) | Rebuild/reinstall `metis-settings` (2026-09-19 Cairo GSK default). Test GPU GSK with `METIS_SETTINGS_GSK_RENDERER=gl` |
+| Settings closes but process stays (`pgrep metis-settings`) | Rebuild/reinstall `metis-settings` (2026-09-19 quit-on-close). Sheet **X** returns to Home; window close exits the app |
+| Gtk theme parser warnings on Settings open | Expected noise from the shared shell stylesheet (unsupported CSS props / `color-mix`). Harmless — ignore unless the UI looks wrong |
+| Bottom edge bar freezes with maximized Settings open | Rebuild/reinstall compositor (2026-09-19 maximized reclamp geometry-only fix) |
 | DRM session: black screen / no input | Run from a VT you own (or via the display-manager entry) so libseat can take DRM master; check the log and SSH in to `Ctrl+Alt+Backspace` is unavailable — `pkill metis-compositor`. |
 | DRM session: "no GPU found for seat" | Ensure you are in the `video`/`render`/`input` groups and `seatd`/logind is running; try `METIS_DRM_DEVICE=/dev/dri/card0`. |
 | Screenshot / Flameshot fails | `./run-metis.sh --install-session`, log out and back in, then `metis-portal --capture-test /tmp/test.png`; install `xdg-desktop-portal` + `xdg-desktop-portal-gtk` if missing |

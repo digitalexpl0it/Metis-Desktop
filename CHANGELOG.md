@@ -5,6 +5,44 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-09-19]
+
+### Added
+
+- **Settings UI 2.0** — Home overview with category tiles, a compact icon
+  sidebar, and category panels via a GtkStack slide (not an Overlay — GTK 4.22
+  overlays were eating pointer events). Search on Home filters tiles and lists
+  matching pages. Confirmations and pickers (colour / font, Keep display
+  settings, Wi‑Fi password, Known Wi‑Fi, OpenVPN / WireGuard add, Calendars add
+  account, Remote password) drop in from the **top** as in-window sheets.
+  Network adds a dedicated **DNS** tab; Wi‑Fi and Bluetooth lists use zebra
+  rows. `--page` still deep-links into the right category.
+- **System wallpapers in Settings → Background** — the picture picker lists
+  distro/DE backgrounds from `/usr/share/backgrounds` (and related data dirs)
+  after Your pictures and Metis bundles, without copying them into the Metis
+  store. Paginated grid (9 per page) with All / Metis / System filters; thumbs
+  decode off-thread at preview size with caching and next/prev preload so page
+  flips stay responsive.
+
+### Fixed
+
+- **Settings stays running after close** — closing the Settings window now tears
+  down chrome state, hides leftover dialogs, quits the unique-instance
+  `GtkApplication`, and hard-exits so perpetual page timers (network / Bluetooth
+  / power polls) cannot leave a zombie `metis-settings` process.
+- **Bottom edge bar freezes Settings / bar** — maximized windows (including
+  Settings) no longer enter a configure storm when the bar is on the bottom.
+  `reclamp_maximized_geometry` was treating CSD shadow `bbox` overflow past the
+  reserved strip as a permanent mismatch and re-sending configures on every
+  commit. It now compares client geometry only.
+- **Settings scroll freezes (Windows / Display)** — multi-second “lock then
+  catch-up” on tall pages under GTK 4.22 / hybrid NVIDIA. Settings defaults to
+  `GSK_RENDERER=cairo` (override with `METIS_SETTINGS_GSK_RENDERER`); strips
+  touchpad kinetic flags on scrollers; Display hotplug/`list_outputs` no longer
+  blocks the GTK thread; compositor IPC connect is timed out; `reload-bar` is
+  debounced. Arrangement preview no longer uses a nested `ScrolledWindow` that
+  ate wheel events.
+
 ## [2026-08-08]
 
 ### Fixed

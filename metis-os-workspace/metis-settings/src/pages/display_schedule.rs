@@ -124,6 +124,8 @@ pub fn build_schedule_time_picker(
     scrolled.set_margin_start(8);
     scrolled.set_margin_end(8);
     scrolled.set_margin_bottom(10);
+    scrolled.set_kinetic_scrolling(false);
+    crate::ui::wire_vertical_scroll(&scrolled);
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
     list.add_css_class("metis-settings-schedule-list");

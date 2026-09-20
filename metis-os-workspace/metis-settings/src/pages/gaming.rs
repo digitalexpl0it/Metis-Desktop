@@ -50,7 +50,7 @@ struct Sections {
     xwayland_isolated: gtk::Switch,
     steam_paths_list: gtk::Box,
     reboot_banner: gtk::Box,
-    health_list: gtk::Box,
+    health_list: gtk::Grid,
     gamepad_list: gtk::Box,
     touch_list: gtk::Box,
     status_box: gtk::Box,
@@ -227,7 +227,13 @@ pub fn build() -> gtk::Widget {
     content.append(&paths_card);
 
     let (health_card, health_body) = ui::section(&tr("Health check"));
-    let health_list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let health_list = gtk::Grid::new();
+    health_list.add_css_class("metis-settings-health-grid");
+    health_list.set_column_spacing(12);
+    health_list.set_row_spacing(2);
+    health_list.set_column_homogeneous(true);
+    health_list.set_hexpand(true);
+    health_list.set_halign(gtk::Align::Fill);
     health_body.append(&health_list);
     content.append(&health_card);
 
@@ -235,7 +241,7 @@ pub fn build() -> gtk::Widget {
         ui::section_with_icon(&tr("Session"), "applications-games-symbolic");
     let steam = value_label(&tr("Checking…"));
     session_body.append(&readout_row(&tr("Steam"), &steam));
-    let gpu = value_label(&tr(""));
+    let gpu = value_label("");
     gpu.set_wrap(true);
     gpu.add_css_class("metis-settings-hint");
     session_body.append(&readout_row(&tr("GPU"), &gpu));
@@ -1199,9 +1205,12 @@ fn apply_health_check(
     while let Some(child) = sections.health_list.first_child() {
         sections.health_list.remove(&child);
     }
-    for item in &check.items {
+    for (i, item) in check.items.iter().enumerate() {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.add_css_class("metis-settings-row");
+        row.add_css_class("metis-settings-health-item");
+        row.set_hexpand(true);
+        row.set_halign(gtk::Align::Fill);
         let icon = match item.severity {
             HealthSeverity::Ok => "emblem-ok-symbolic",
             HealthSeverity::Info => "dialog-information-symbolic",
@@ -1210,12 +1219,16 @@ fn apply_health_check(
         };
         row.append(&gtk::Image::from_icon_name(icon));
         let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        text.set_hexpand(true);
         let title = gtk::Label::new(Some(&item.label));
         title.set_xalign(0.0);
         title.set_hexpand(true);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         let detail = gtk::Label::new(Some(&item.detail));
         detail.set_xalign(0.0);
         detail.set_wrap(true);
+        detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        detail.set_max_width_chars(28);
         detail.add_css_class("metis-settings-hint");
         text.append(&title);
         text.append(&detail);
@@ -1301,7 +1314,9 @@ fn apply_health_check(
         if actions.first_child().is_some() {
             row.append(&actions);
         }
-        sections.health_list.append(&row);
+        let col = (i % 2) as i32;
+        let row_i = (i / 2) as i32;
+        sections.health_list.attach(&row, col, row_i, 1, 1);
     }
     update_health_summary(sections, check);
 }

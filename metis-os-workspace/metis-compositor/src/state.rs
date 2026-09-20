@@ -871,11 +871,24 @@ fn apply_spawned_client_env(
     }
     // Shell always prefers Cairo for layer-shell stability unless overridden.
     // Compatibility mode also forces Cairo for every other GTK client (VMs).
+    // Settings: GTK 4.22+ defaults to GskVulkanRenderer, which hitch-scrolls on
+    // hybrid NVIDIA under Metis (pause then catch-up). Pin GL unless overridden;
+    // do not inherit the session's shell Cairo `GSK_RENDERER`.
     if program.contains("metis-shell") {
         let renderer = std::env::var("METIS_SHELL_GSK_RENDERER")
             .or_else(|_| std::env::var("GSK_RENDERER"))
             .unwrap_or_else(|_| "cairo".into());
         cmd.env("GSK_RENDERER", renderer);
+    } else if program.contains("metis-settings") {
+        if compat {
+            cmd.env("GSK_RENDERER", "cairo");
+        } else if let Ok(renderer) = std::env::var("METIS_SETTINGS_GSK_RENDERER") {
+            cmd.env("GSK_RENDERER", renderer);
+        } else {
+            // Cairo: GL/Vulkan hitch-scroll for seconds on tall Settings pages
+            // under hybrid NVIDIA. Users can opt back into gl via the env var.
+            cmd.env("GSK_RENDERER", "cairo");
+        }
     } else if compat {
         cmd.env("GSK_RENDERER", "cairo");
     } else {
@@ -5646,9 +5659,10 @@ impl MetisState {
     /// windows, so this runs on commit instead.
     ///
     /// Critical for bottom edge bars: clients often keep a full-output height
-    /// while accepting the correct `y`, which paints under the bar. We also treat
-    /// bbox overflow past the expected bottom as a mismatch (geometry size can
-    /// already look correct while the surface still covers the bar).
+    /// while accepting the correct `y`, which paints under the bar. Detect that
+    /// via `geometry().size` (not `bbox()` — shadows/subsurfaces routinely extend
+    /// past the reserved bottom and would otherwise reconfigure forever, freezing
+    /// the session while Settings or other maximized windows are open).
     pub fn reclamp_maximized_geometry(&mut self, id: u32) {
         if !self
             .windows
@@ -5671,13 +5685,12 @@ impl MetisState {
         };
         let expected_loc = Point::from((expected.x, expected.y));
         let current_size = record.window.geometry().size;
-        let bbox = record.window.bbox();
-        let mapped_bottom = loc.y + bbox.loc.y + bbox.size.h;
+        // Geometry bottom (not bbox): bbox includes CSD shadows that intentionally
+        // spill a few pixels past the client edge.
+        let mapped_bottom = loc.y + current_size.h;
         let expected_bottom = expected.y + expected.height;
-        let overflows_bottom = mapped_bottom > expected_bottom;
         let already_ok = loc == expected_loc
             && current_size == expected_size
-            && !overflows_bottom
             && self.windows.target_rect(id) == Some(expected);
         if already_ok {
             return;
@@ -5697,7 +5710,7 @@ impl MetisState {
         self.windows.set_rect(id, expected);
         self.send_window_configure(&record, expected_loc, expected_size);
         self.schedule_redraw();
-        tracing::info!(
+        tracing::debug!(
             id,
             ?loc,
             ?expected_loc,
@@ -5707,7 +5720,6 @@ impl MetisState {
             expected_h = expected_size.h,
             mapped_bottom,
             expected_bottom,
-            overflows_bottom,
             "reclamped maximized geometry after client commit"
         );
     }

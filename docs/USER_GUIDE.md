@@ -800,17 +800,26 @@ logo / Windows key by default.
 
 ## 9. The Settings app
 
+Settings **2.0** opens on a **Home** overview with category tiles (Displays,
+Desktop, Connectivity, Input, System). A slim icon sidebar jumps to the same
+categories. Choosing a category (or a search hit) slides that category’s pages
+in from the **right** (GtkStack). Confirmations and pickers (colour / font,
+display keep/revert, Wi‑Fi password, Known Wi‑Fi, VPN add forms, Calendars add
+account, Remote password) drop in from the **top** as in-window sheets.
+
+Closing the Settings **window** fully quits the process (unique-instance
+`com.metis.Settings` does not linger for page timers). The sheet **X** on a
+category returns to Home; use the window close control to exit.
+
 Launch Settings from the app launcher's quick-launch rail, or from a terminal:
 
 ```bash
-metis-cmd settings            # open Settings
-metis-cmd settings appearance # open a specific page
+metis-cmd settings            # open Settings (Home)
+metis-cmd settings appearance # open a specific page in its category sheet
 ```
 
-Pages are grouped in the sidebar (Displays, Desktop, Connectivity, Input,
-System). Use the search field at the top of the sidebar to filter pages.
-Launch a specific page with `metis-cmd settings <page>` (e.g. `display`,
-`network`, `power`).
+Search on Home filters category tiles and lists matching pages. Deep-link with
+`metis-cmd settings <page>` (e.g. `display`, `network`, `power`).
 
 - **Display** — per-output scale, enable/disable, resolution & refresh (DRM mode
   list on real hardware), **Duplicate displays** (mirror clone with scale-to-fit
@@ -835,10 +844,15 @@ Launch a specific page with `metis-cmd settings <page>` (e.g. `display`,
   output so HDR content is not double-transformed (mixed SDR+HDR is approximate).
   Rotation is still upcoming.
 - **Appearance** — Light/Dark style; accent, secondary, and semantic status
-  colors; bar opacity and backdrop blur. A **background picker** with three
-  types: Picture (bundled + imported images, "Add Picture…"), Solid colour, and
-  Gradient (start/end + direction) — applied live and remembered, with per-output
-  overrides. The **Edge bar** card covers position (top/bottom/left/right),
+  colors; font. (Wallpaper, edge bar, and window chrome live on their own pages
+  below.)
+- **Background** — picture / solid colour / gradient, applied live and remembered
+  in `wallpaper.json`, with optional per-output picture overrides. The picture
+  picker groups **Your pictures** (imports under `~/.config/metis/wallpapers`),
+  **Metis** (bundled defaults), and **System** (e.g. Ubuntu/GNOME images under
+  `/usr/share/backgrounds`). Large libraries are paginated (9 thumbs per page)
+  with All / Metis / System filters; thumbnails load asynchronously.
+- **Edge bar** — position (top/bottom/left/right),
   distance from the edge, **bar length** (40–100%, centered), **bar background**
   (theme / solid / gradient + direction), **auto-hide** (slides to a peek and
   **overlays** maximized windows — peek/reveal does not resize them; move to the
@@ -846,7 +860,8 @@ Launch a specific page with `metis-cmd settings <page>` (e.g. `display`,
   the peek for window controls),
   the bar border, *Show bar on* (all displays / primary
   only), *Workspaces* (independent vs linked), and *New workspace layout* (grid
-  vs scrolling). The **Windows** card covers titlebar opacity, the title pill
+  vs scrolling).
+- **Windows** — titlebar opacity, the title pill
   border, the window frame border, and **window padding** around maximized /
   snapped windows.
 - **Desktop widgets** — optional wallpaper panels (Folders, Apps, Clock, System,
@@ -888,24 +903,27 @@ Launch a specific page with `metis-cmd settings <page>` (e.g. `display`,
   Saved to `menu.json`.
 - **Weather** — manual location override + search, multiple saved locations
   (reorder/remove), °F/°C unit, and an IP-geolocation toggle.
-- **Network** — Wireless / Wired / **VPN** / Proxy. Wi-Fi scan/connect/forget;
-  wired DHCP vs static; VPN import (OpenVPN `.ovpn`, WireGuard `.conf`) plus
-  simple **Add OpenVPN…** / **Add WireGuard…** forms, autoconnect toggle, and
-  connect/disconnect/delete for NetworkManager profiles. On Debian/Ubuntu/Mint
-  install `network-manager-openvpn` for OpenVPN; WireGuard is built into modern
-  NetworkManager. Edge-bar **VPN** icon toggles connect/disconnect.
+- **Network** — Wireless / Wired / **VPN** / **DNS** / Proxy. Wi-Fi
+  scan/connect/forget with zebra rows; **Known Wi‑Fi** and Wi‑Fi password as
+  top-slide sheets; wired DHCP vs static; VPN import (OpenVPN `.ovpn`,
+  WireGuard `.conf`) plus **Add OpenVPN…** / **Add WireGuard…** top-slide forms,
+  autoconnect toggle, and connect/disconnect/delete for NetworkManager profiles.
+  On Debian/Ubuntu/Mint install `network-manager-openvpn` for OpenVPN; WireGuard
+  is built into modern NetworkManager. Edge-bar **VPN** icon toggles
+  connect/disconnect.
 - **Calendars** — calendar accounts (local / CalDAV / Thunderbird / Microsoft
-  365) used by the Notification Center calendar. Account metadata lives in
-  `calendars.json`; **passwords and M365 refresh tokens** are stored in the
-  freedesktop Secret Service (`metis-secrets` / oo7), not in the JSON file.
-  Removing an account also deletes its keyring entries.
+  365) used by the Notification Center calendar. **Add account** uses a
+  top-slide sheet. Account metadata lives in `calendars.json`; **passwords and
+  M365 refresh tokens** are stored in the freedesktop Secret Service
+  (`metis-secrets` / oo7), not in the JSON file. Removing an account also
+  deletes its keyring entries.
 - **Input** — mouse, touchpad, and keyboard layout/repeat settings (`input.json`),
   plus **Keyboard → Shortcuts** to edit desktop keybinds (`keybinds.json`, live
   reload). **Shortcuts** (sidebar) is a searchable read-only chord guide with a
   jump to the editor; System VT/quit chords are listed but not editable.
 - **Bluetooth** — adapter on/off, scan for devices (toggle stop, auto-stops after
-  30s), pair / connect / trust / remove. Battery percentage and charging state
-  appear when the device or driver reports them.
+  30s), pair / connect / trust / remove. Device list uses zebra rows. Battery
+  percentage and charging state appear when the device or driver reports them.
 - **Printers** — list CUPS queues; open the system printer config when needed.
 - **Gaming** — graphics mode (auto / iGPU / dGPU), battery and performance
   toggles, health checklist with Fix buttons, **Optimize now** (permission dialog
@@ -928,10 +946,10 @@ Launch a specific page with `metis-cmd settings <page>` (e.g. `display`,
   starts them ~2 seconds after the session begins (skipped during onboarding
   or while the session is locked). Changes apply on the next login.
 - **Remote access** — GNOME-style desktop sharing toggle: enable RDP to your
-  **live** Metis session via `gnome-remote-desktop` (headless). Set credentials,
-  copy the connection address, or open **Metis Viewer** / connect with Remmina /
-  FreeRDP. Requires a real (DRM) session — not nested dev. Open with
-  `metis-cmd settings remote` or `metis-cmd viewer`.
+  **live** Metis session via `gnome-remote-desktop` (headless). Set credentials
+  via a top-slide password sheet, copy the connection address, or open **Metis
+  Viewer** / connect with Remmina / FreeRDP. Requires a real (DRM) session — not
+  nested dev. Open with `metis-cmd settings remote` or `metis-cmd viewer`.
 - **Sound** — default output and input device selection (bar volume widget
   unchanged).
 
@@ -1245,6 +1263,11 @@ changes live.
 | Symptom | Try |
 |---------|-----|
 | Settings window shows desktop wallpaper through the body, or scrolling hitchs | Rebuild/restart Settings — page chrome is opaque; see [`CHANGELOG.md`](../CHANGELOG.md) 2026-07-26. Modal password/widget sheets intentionally stay transparent outside the rounded card. |
+| Settings scroll locks for seconds on Windows / Display (GTK 4.22, hybrid NVIDIA) | Reopen Settings after a rebuild (2026-09-19): Settings defaults to Cairo GSK; Display IPC is async. Override renderer with `METIS_SETTINGS_GSK_RENDERER=gl` only for testing |
+| Settings window closes but `metis-settings` still runs | Rebuild/reinstall Settings (2026-09-19 quit-on-close). Closing the window should exit the process; confirm with `pgrep metis-settings`. Category sheet **X** only returns to Home |
+| Terminal floods with Gtk theme parser warnings when Settings opens | Harmless: Settings loads the shared shell stylesheet, which uses some CSS GTK’s engine skips (`max-width`, `color-mix`, etc.). UI still works |
+| Background picker feels sluggish with many system wallpapers | Use the page controls / filters (2026-09-19); thumbs load async and cache. Prefer **Metis** or **Your pictures** if you do not need distro images |
+| Bottom edge bar freezes while Settings (or another maximized window) is open | Rebuild/reinstall compositor (2026-09-19): maximized reclamp no longer storms configures from CSD shadow bbox overflow |
 | Missing layer-shell | Install `libgtk4-layer-shell-dev` (26.04 / Debian 13), or build from source on 24.04 |
 | Maximized title controls unusable (top auto-hide bar) | Move the pointer just **below** the thin peek strip to reveal the titlebar; the absolute screen edge opens the edge bar instead |
 | Bar or popovers don't appear | Confirm a Wayland session (`echo $WAYLAND_DISPLAY`) and that `libgtk4-layer-shell` is installed |

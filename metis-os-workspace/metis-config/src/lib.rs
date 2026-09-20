@@ -513,9 +513,10 @@ pub use viewer::{
 };
 pub use wallpaper::{
     bundled_wallpaper_dir, bundled_wallpaper_dirs, collect_wallpaper_images,
-    default_wallpaper_path, list_bundled_wallpapers, load_wallpaper_config, parse_hex_rgb,
-    save_wallpaper_config, wallpaper_config_path, wallpaper_store_dir, BackgroundKind,
-    GradientDirection, WallpaperConfig, WALLPAPER_IMAGE_EXTS,
+    collect_wallpaper_images_depth, default_wallpaper_path, list_bundled_wallpapers,
+    load_wallpaper_config, parse_hex_rgb, save_wallpaper_config, system_wallpaper_dirs,
+    wallpaper_config_path, wallpaper_store_dir, BackgroundKind, GradientDirection, WallpaperConfig,
+    WALLPAPER_IMAGE_EXTS,
 };
 pub use weather::{
     load_weather_config, save_weather_config, weather_config_path, TempUnit, WeatherConfig,

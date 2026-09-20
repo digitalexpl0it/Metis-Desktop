@@ -328,6 +328,9 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
                 &rebuild_arrangement_slot,
                 &parent,
             ));
+            // Detail scales/dropdowns are rebuilt after the page `map` hook, so
+            // re-install wheel forwards or scroll sticks on those controls.
+            ui::install_range_wheel_forwards(&detail_host);
         })
     };
 
@@ -645,39 +648,72 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
         let refresh_detected_outputs = refresh_detected_outputs.clone();
         let rebuild_detail = rebuild_detail.clone();
         let canvas_slot = canvas_slot.clone();
+        // Never call `list_outputs` on the GTK thread — a stalled compositor
+        // connect/read blocks the whole Settings UI (scroll “locks” for seconds).
+        let poll_busy = Rc::new(Cell::new(false));
         glib::timeout_add_local(Duration::from_secs(2), move || {
-            if !page_mapped.get() {
+            if !page_mapped.get() || poll_busy.get() {
                 return glib::ControlFlow::Continue;
             }
             if canvas_slot.borrow().as_ref().is_some_and(|c| c.in_trial()) {
                 return glib::ControlFlow::Continue;
             }
-            let fresh = runtime::list_outputs();
-            let old_names: Vec<String> = outputs.borrow().iter().map(|o| o.name.clone()).collect();
-            let new_names: Vec<String> = fresh.iter().map(|o| o.name.clone()).collect();
-            let names_changed = old_names != new_names;
-            let geometry_changed = !names_changed
-                && outputs.borrow().iter().zip(fresh.iter()).any(|(a, b)| {
-                    a.rect.width != b.rect.width
-                        || a.rect.height != b.rect.height
-                        || a.rect.x != b.rect.x
-                        || a.rect.y != b.rect.y
-                        || (a.scale - b.scale).abs() > f64::EPSILON
-                        || a.enabled != b.enabled
-                });
-            if names_changed {
-                modes_cache.borrow_mut().clear();
-                *outputs.borrow_mut() = fresh;
-                refresh_detected_outputs();
-            } else if geometry_changed {
-                // Invalidate mode lists so resolution reflects the live connector.
-                modes_cache.borrow_mut().clear();
-                *outputs.borrow_mut() = fresh;
-                if let Some(canvas) = canvas_slot.borrow().as_ref().cloned() {
-                    canvas.sync_positions();
+            poll_busy.set(true);
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(runtime::list_outputs());
+            });
+            let page_mapped = page_mapped.clone();
+            let outputs = outputs.clone();
+            let modes_cache = modes_cache.clone();
+            let refresh_detected_outputs = refresh_detected_outputs.clone();
+            let rebuild_detail = rebuild_detail.clone();
+            let canvas_slot = canvas_slot.clone();
+            let poll_busy = poll_busy.clone();
+            glib::timeout_add_local(Duration::from_millis(50), move || {
+                match rx.try_recv() {
+                    Ok(fresh) => {
+                        poll_busy.set(false);
+                        if !page_mapped.get() {
+                            return glib::ControlFlow::Break;
+                        }
+                        let old_names: Vec<String> =
+                            outputs.borrow().iter().map(|o| o.name.clone()).collect();
+                        let new_names: Vec<String> =
+                            fresh.iter().map(|o| o.name.clone()).collect();
+                        let names_changed = old_names != new_names;
+                        let geometry_changed = !names_changed
+                            && outputs.borrow().iter().zip(fresh.iter()).any(|(a, b)| {
+                                a.rect.width != b.rect.width
+                                    || a.rect.height != b.rect.height
+                                    || a.rect.x != b.rect.x
+                                    || a.rect.y != b.rect.y
+                                    || (a.scale - b.scale).abs() > 0.001
+                                    || a.enabled != b.enabled
+                            });
+                        if names_changed {
+                            modes_cache.borrow_mut().clear();
+                            *outputs.borrow_mut() = fresh;
+                            refresh_detected_outputs();
+                        } else if geometry_changed {
+                            // Keep the mode cache — clearing it forces sync
+                            // ListOutputModes IPC on the GTK thread and freezes
+                            // scroll for seconds while Display is open.
+                            *outputs.borrow_mut() = fresh;
+                            if let Some(canvas) = canvas_slot.borrow().as_ref().cloned() {
+                                canvas.sync_positions();
+                            }
+                            rebuild_detail();
+                        }
+                        glib::ControlFlow::Break
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        poll_busy.set(false);
+                        glib::ControlFlow::Break
+                    }
                 }
-                rebuild_detail();
-            }
+            });
             glib::ControlFlow::Continue
         });
     }
@@ -1185,10 +1221,19 @@ fn save_and_apply(cfg: &metis_config::OutputsConfig) {
 fn refresh_outputs(outputs: &Rc<RefCell<Vec<OutputInfo>>>, rebuild: &Rc<dyn Fn()>) {
     let outputs = outputs.clone();
     let rebuild = rebuild.clone();
-    // Defer IPC + UI refresh so the click handler returns before compositor I/O.
-    glib::idle_add_local_once(move || {
-        *outputs.borrow_mut() = runtime::list_outputs();
-        rebuild();
+    // IPC off the GTK thread — a blocked compositor must not freeze Detect.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(runtime::list_outputs());
+    });
+    glib::timeout_add_local(Duration::from_millis(50), move || match rx.try_recv() {
+        Ok(fresh) => {
+            *outputs.borrow_mut() = fresh;
+            rebuild();
+            glib::ControlFlow::Break
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
     });
 }
 

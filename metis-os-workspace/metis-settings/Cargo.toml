@@ -3,7 +3,7 @@ name = "metis-settings"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Metis Settings — appearance, weather, network, and calendar configuration"
+description = "Metis Settings 2.0 — Home overview, category sheets, appearance, network, and system configuration"
 
 [dependencies]
 gtk = { package = "gtk4", version = "0.8", features = ["v4_10"] }

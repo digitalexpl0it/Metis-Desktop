@@ -1,10 +1,10 @@
-//! Sidebar structure — single source of truth for nav order, icons, and page metadata.
+//! Sidebar / category structure — single source of truth for Settings v2 nav.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-/// Accent hue for the macOS-style icon badge in the sidebar.
+/// Accent hue for icon badges (home tiles, mini sidebar, page headers).
 #[derive(Clone, Copy)]
 pub enum NavHue {
     Blue,
@@ -33,6 +33,55 @@ impl NavHue {
     }
 }
 
+/// Top-level Settings category (Home tile + mini-sidebar entry).
+#[derive(Clone, Copy)]
+pub struct Category {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub icon: &'static str,
+    pub hue: NavHue,
+    /// Short blurb on the Home tile.
+    pub blurb: &'static str,
+}
+
+pub const CATEGORIES: &[Category] = &[
+    Category {
+        id: "displays",
+        title: "Displays",
+        icon: "video-display-symbolic",
+        hue: NavHue::Blue,
+        blurb: "Arrangement, resolution, scale, and night light",
+    },
+    Category {
+        id: "desktop",
+        title: "Desktop",
+        icon: "preferences-desktop-wallpaper-symbolic",
+        hue: NavHue::Purple,
+        blurb: "Appearance, wallpaper, edge bar, windows, and briefing",
+    },
+    Category {
+        id: "connectivity",
+        title: "Connectivity",
+        icon: "network-wireless-symbolic",
+        hue: NavHue::Blue,
+        blurb: "Wi-Fi, Ethernet, VPN, and Bluetooth",
+    },
+    Category {
+        id: "input",
+        title: "Input",
+        icon: "input-keyboard-symbolic",
+        hue: NavHue::Gray,
+        blurb: "Mouse, touchpad, keyboard, and shortcuts",
+    },
+    Category {
+        id: "system",
+        title: "System",
+        icon: "preferences-system-symbolic",
+        hue: NavHue::Green,
+        blurb: "Sound, power, locale, remote access, and more",
+    },
+];
+
 pub struct NavItem {
     pub page_id: Option<&'static str>,
     pub title: &'static str,
@@ -40,6 +89,8 @@ pub struct NavItem {
     pub hue: Option<NavHue>,
     /// Shown under the page title in the content area.
     pub subtitle: Option<&'static str>,
+    /// Category id this page belongs to (`None` for section headers).
+    pub category: Option<&'static str>,
 }
 
 pub const NAV: &[NavItem] = &[
@@ -49,6 +100,7 @@ pub const NAV: &[NavItem] = &[
         icon: None,
         hue: None,
         subtitle: None,
+        category: None,
     },
     NavItem {
         page_id: Some("display"),
@@ -56,6 +108,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("video-display-symbolic"),
         hue: Some(NavHue::Blue),
         subtitle: Some("Graphics profile, arrangement, resolution, scale, and night light"),
+        category: Some("displays"),
     },
     NavItem {
         page_id: None,
@@ -63,6 +116,7 @@ pub const NAV: &[NavItem] = &[
         icon: None,
         hue: None,
         subtitle: None,
+        category: None,
     },
     NavItem {
         page_id: Some("appearance"),
@@ -70,6 +124,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("preferences-desktop-appearance-symbolic"),
         hue: Some(NavHue::Pink),
         subtitle: Some("Theme mode, accent colours, and interface font"),
+        category: Some("desktop"),
     },
     NavItem {
         page_id: Some("background"),
@@ -77,6 +132,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("preferences-desktop-wallpaper-symbolic"),
         hue: Some(NavHue::Purple),
         subtitle: Some("Desktop wallpaper: picture, solid colour, or gradient"),
+        category: Some("desktop"),
     },
     NavItem {
         page_id: Some("edgebar"),
@@ -84,6 +140,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("preferences-system-symbolic"),
         hue: Some(NavHue::Teal),
         subtitle: Some("Position, opacity, blur, workspaces, and the bar border"),
+        category: Some("desktop"),
     },
     NavItem {
         page_id: Some("desktop_widgets"),
@@ -91,6 +148,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("view-grid-symbolic"),
         hue: Some(NavHue::Purple),
         subtitle: Some("Optional wallpaper widgets: folders, apps, clock, and more"),
+        category: Some("desktop"),
     },
     NavItem {
         page_id: Some("windows"),
@@ -98,6 +156,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("window-new-symbolic"),
         hue: Some(NavHue::Blue),
         subtitle: Some("Animations, titlebar opacity, and window borders"),
+        category: Some("desktop"),
     },
     NavItem {
         page_id: Some("titlebars"),
@@ -105,6 +164,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("window-new-symbolic"),
         hue: Some(NavHue::Blue),
         subtitle: Some("Override Metis vs app titlebars per application"),
+        category: Some("desktop"),
     },
     NavItem {
         page_id: Some("menu"),
@@ -112,6 +172,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("view-app-grid-symbolic"),
         hue: Some(NavHue::Purple),
         subtitle: Some("Launcher apps and menu panel look"),
+        category: Some("desktop"),
     },
     NavItem {
         page_id: Some("weather"),
@@ -119,6 +180,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("weather-few-clouds-symbolic"),
         hue: Some(NavHue::Teal),
         subtitle: Some("Briefing weather card on the edge bar"),
+        category: Some("desktop"),
     },
     NavItem {
         page_id: Some("calendars"),
@@ -126,6 +188,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("x-office-calendar-symbolic"),
         hue: Some(NavHue::Orange),
         subtitle: Some("Calendar accounts for the briefing"),
+        category: Some("desktop"),
     },
     NavItem {
         page_id: None,
@@ -133,13 +196,15 @@ pub const NAV: &[NavItem] = &[
         icon: None,
         hue: None,
         subtitle: None,
+        category: None,
     },
     NavItem {
         page_id: Some("network"),
         title: "Network",
         icon: Some("network-wireless-symbolic"),
         hue: Some(NavHue::Blue),
-        subtitle: Some("Wi-Fi, Ethernet, DNS, and proxy"),
+        subtitle: Some("Wi-Fi, Ethernet, DNS, VPN, and proxy"),
+        category: Some("connectivity"),
     },
     NavItem {
         page_id: Some("bluetooth"),
@@ -147,6 +212,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("bluetooth-symbolic"),
         hue: Some(NavHue::Blue),
         subtitle: Some("Pair and manage Bluetooth devices"),
+        category: Some("connectivity"),
     },
     NavItem {
         page_id: None,
@@ -154,6 +220,7 @@ pub const NAV: &[NavItem] = &[
         icon: None,
         hue: None,
         subtitle: None,
+        category: None,
     },
     NavItem {
         page_id: Some("mouse"),
@@ -161,6 +228,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("input-mouse-symbolic"),
         hue: Some(NavHue::Gray),
         subtitle: Some("Pointer speed, acceleration, and scrolling"),
+        category: Some("input"),
     },
     NavItem {
         page_id: Some("touchpad"),
@@ -168,6 +236,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("input-touchpad-symbolic"),
         hue: Some(NavHue::Gray),
         subtitle: Some("Gestures, tap-to-click, and natural scroll"),
+        category: Some("input"),
     },
     NavItem {
         page_id: Some("keyboard"),
@@ -175,6 +244,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("input-keyboard-symbolic"),
         hue: Some(NavHue::Gray),
         subtitle: Some("Repeat rate and layout preferences"),
+        category: Some("input"),
     },
     NavItem {
         page_id: Some("shortcuts"),
@@ -182,6 +252,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("preferences-desktop-keyboard-shortcuts-symbolic"),
         hue: Some(NavHue::Gray),
         subtitle: Some("Search and browse current desktop shortcuts"),
+        category: Some("input"),
     },
     NavItem {
         page_id: None,
@@ -189,6 +260,7 @@ pub const NAV: &[NavItem] = &[
         icon: None,
         hue: None,
         subtitle: None,
+        category: None,
     },
     NavItem {
         page_id: Some("locale"),
@@ -196,6 +268,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("preferences-desktop-locale-symbolic"),
         hue: Some(NavHue::Blue),
         subtitle: Some("Session language and number/date formats"),
+        category: Some("system"),
     },
     NavItem {
         page_id: Some("control_center"),
@@ -203,6 +276,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("utilities-system-monitor-symbolic"),
         hue: Some(NavHue::Green),
         subtitle: Some("System monitor panel, refresh rate, and process controls"),
+        category: Some("system"),
     },
     NavItem {
         page_id: Some("sound"),
@@ -210,6 +284,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("audio-volume-high-symbolic"),
         hue: Some(NavHue::Pink),
         subtitle: Some("Output and input audio devices"),
+        category: Some("system"),
     },
     NavItem {
         page_id: Some("power"),
@@ -217,6 +292,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("battery-level-100-symbolic"),
         hue: Some(NavHue::Green),
         subtitle: Some("Battery, profiles, and idle behaviour"),
+        category: Some("system"),
     },
     NavItem {
         page_id: Some("startup"),
@@ -224,6 +300,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("system-run-symbolic"),
         hue: Some(NavHue::Gray),
         subtitle: Some("Applications that launch after you sign in"),
+        category: Some("system"),
     },
     NavItem {
         page_id: Some("remote"),
@@ -231,6 +308,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("network-transmit-receive-symbolic"),
         hue: Some(NavHue::Blue),
         subtitle: Some("Share your logged-in session over the network"),
+        category: Some("system"),
     },
     NavItem {
         page_id: Some("gaming"),
@@ -238,6 +316,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("applications-games-symbolic"),
         hue: Some(NavHue::Orange),
         subtitle: Some("Gamepads, touchscreens, Steam, and GPU hints"),
+        category: Some("system"),
     },
     NavItem {
         page_id: Some("printers"),
@@ -245,6 +324,7 @@ pub const NAV: &[NavItem] = &[
         icon: Some("printer-symbolic"),
         hue: Some(NavHue::Gray),
         subtitle: Some("Installed printers and system print settings"),
+        category: Some("system"),
     },
     NavItem {
         page_id: Some("screenshot"),
@@ -252,11 +332,31 @@ pub const NAV: &[NavItem] = &[
         icon: Some("camera-photo-symbolic"),
         hue: Some(NavHue::Blue),
         subtitle: Some("Capture defaults, editor, and save location"),
+        category: Some("system"),
     },
 ];
 
 pub fn page_ids() -> Vec<&'static str> {
     NAV.iter().filter_map(|item| item.page_id).collect()
+}
+
+pub fn category_by_id(id: &str) -> Option<&'static Category> {
+    CATEGORIES.iter().find(|c| c.id == id)
+}
+
+pub fn category_for_page(page_id: &str) -> Option<&'static Category> {
+    let cat_id = NAV
+        .iter()
+        .find(|item| item.page_id == Some(page_id))?
+        .category?;
+    category_by_id(cat_id)
+}
+
+/// Pages belonging to a category, in nav order.
+pub fn pages_in_category(category_id: &str) -> Vec<&'static NavItem> {
+    NAV.iter()
+        .filter(|item| item.page_id.is_some() && item.category == Some(category_id))
+        .collect()
 }
 
 use crate::gtk_cb::OptFnStrRef;
@@ -300,7 +400,8 @@ fn lowercase_titles() -> &'static [String] {
     })
 }
 
-/// Whether a sidebar row at `index` should stay visible for `query`.
+/// Whether a nav row at `index` should stay visible for `query` (legacy full sidebar).
+#[allow(dead_code)]
 pub fn row_visible_for_search(index: usize, query: &str) -> bool {
     if query.is_empty() {
         return true;
@@ -315,6 +416,7 @@ pub fn row_visible_for_search(index: usize, query: &str) -> bool {
     section_visible_for_search(index, query, titles)
 }
 
+#[allow(dead_code)]
 fn section_visible_for_search(section_index: usize, query: &str, titles: &[String]) -> bool {
     for (index, item) in NAV.iter().enumerate().skip(section_index + 1) {
         if item.page_id.is_none() {
@@ -325,4 +427,40 @@ fn section_visible_for_search(section_index: usize, query: &str, titles: &[Strin
         }
     }
     false
+}
+
+/// Page ids whose title matches `query` (lowercase).
+pub fn matching_page_ids(query: &str) -> Vec<&'static str> {
+    if query.is_empty() {
+        return page_ids();
+    }
+    let q = query.to_ascii_lowercase();
+    NAV.iter()
+        .filter_map(|item| {
+            let id = item.page_id?;
+            if item.title.to_ascii_lowercase().contains(&q)
+                || item
+                    .subtitle
+                    .is_some_and(|s| s.to_ascii_lowercase().contains(&q))
+            {
+                Some(id)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Category whose title/blurb matches, or that contains a matching page.
+pub fn category_matches(cat: &Category, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let q = query.to_ascii_lowercase();
+    if cat.title.to_ascii_lowercase().contains(&q) || cat.blurb.to_ascii_lowercase().contains(&q) {
+        return true;
+    }
+    pages_in_category(cat.id)
+        .iter()
+        .any(|p| p.title.to_ascii_lowercase().contains(&q))
 }

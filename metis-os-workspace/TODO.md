@@ -109,8 +109,25 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 - [x] Light-mode bar popover styling — theme-token entries, buttons, and icon
       actions in dropdown panels (clock calendar, clipboard, network, notifications)
 - [x] Bundled default wallpapers (`default.png` … `default9.png`) listed in
-      Settings → Appearance background picker
-- [x] Bar symbolic icons — bluetooth, clipboard, and notifications match other bar
+      Settings → Background picture picker
+- [x] **System wallpapers** (2026-09-19) — Settings → Background also lists
+      `/usr/share/backgrounds` (and related data dirs) under a System section;
+      paginated grid with async thumb decode/cache so large libraries stay
+      responsive
+- [x] **Settings scroll polish** (2026-09-19) — Cairo GSK default for
+      `metis-settings`, strip touchpad kinetic scroll hitch, async Display
+      `list_outputs`, timed compositor IPC connect (fixes multi-second freezes
+      on Windows/Display under GTK 4.22 / hybrid NVIDIA)
+- [x] **Settings UI 2.0** (2026-09-19) — Home overview + mini sidebar; category
+      panels via GtkStack slide (not Overlay); top-drop confirm / colour / font /
+      Wi‑Fi / VPN / Calendars / Remote password sheets; Network **DNS** tab;
+      Wi‑Fi + Bluetooth zebra rows; Home search
+- [x] **Settings quit-on-close** (2026-09-19) — window close clears chrome,
+      quits unique-instance `GtkApplication`, hard-exits so page poll timers
+      cannot leave a zombie `metis-settings`
+- [x] **Bottom-bar + maximized freeze** (2026-09-19) — compositor
+      `reclamp_maximized_geometry` compares client geometry only (CSD bbox
+      overflow no longer configure-storms Settings / the bar)- [x] Bar symbolic icons — bluetooth, clipboard, and notifications match other bar
       icons (GTK symbolic + theme text color)
 - [x] Theme file watcher (live `themes/*.json` reload)
 - [x] Freedesktop notification D-Bus daemon (`org.freedesktop.Notifications`)
@@ -158,6 +175,9 @@ decorations so it (and every app) gets a real titlebar.
       imported grid, "Add Picture…"), Solid colour, and Gradient (start/end +
       direction); live switch via `ApplyBackground` IPC, persisted to
       `wallpaper.json`
+- [x] Background picture sources (2026-09-19) — Your pictures → Metis → System
+      (`system_wallpaper_dirs` / `/usr/share/backgrounds`); pagination + async
+      thumbs in Settings → Background
 - [x] Network page — wired/NIC config (DHCP vs static), Wi-Fi scan/connect/forget;
       bar "wired-only" network click opens this page
 - [x] Network page — **VPN** tab (OpenVPN `.ovpn` + WireGuard `.conf` import,
@@ -1511,7 +1531,8 @@ big-bang `state.rs` rewrite; Sober/Flatpak app bugs unrelated to Metis portals.
 - [x] **D-Bus-driven network dirty flag** — NetworkManager `StateChanged` →
       immediate refresh; slower battery/BT ticks; adaptive sleep
 - [x] **GSK env documented** — `METIS_SHELL_GSK_RENDERER=gl` opt-in; Cairo default
-
+      for shell. Settings defaults to Cairo too (`METIS_SETTINGS_GSK_RENDERER`,
+      2026-09-19)
 ### G. Lint policy (follow-on)
 
 - [x] **`clippy::unwrap_used` deny** on `metis-protocol` and `metis-config`

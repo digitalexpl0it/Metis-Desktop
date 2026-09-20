@@ -407,7 +407,7 @@ fn editable_row(
             capture.set_visible(false);
             change_btn.set_sensitive(true);
             reset_btn.set_sensitive(true);
-            listen.set_text(&tr(""));
+            listen.set_text("");
             *candidate.borrow_mut() = None;
             runtime::set_keybind_capture_async(false);
         })
@@ -428,7 +428,7 @@ fn editable_row(
             capture.set_visible(true);
             change_btn.set_sensitive(false);
             reset_btn.set_sensitive(false);
-            listen.set_text(&tr(""));
+            listen.set_text("");
             listen.set_placeholder_text(Some(&tr("Press a shortcut…")));
             save.set_sensitive(false);
             *candidate.borrow_mut() = None;
@@ -541,7 +541,7 @@ fn editable_row(
                     status.set_visible(false);
                 }
                 Err(err) => {
-                    listen.set_text(&tr(""));
+                    listen.set_text("");
                     listen.set_placeholder_text(Some(err.as_str()));
                     save.set_sensitive(false);
                     *candidate.borrow_mut() = None;

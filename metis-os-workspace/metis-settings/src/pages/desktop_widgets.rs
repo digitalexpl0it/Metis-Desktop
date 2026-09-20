@@ -25,7 +25,9 @@ use metis_config::{
 };
 
 use crate::gtk_cb::OptFn0Cell;
-use crate::pages::appearance_common::{color_dialog_button, hex_to_rgba, rgba_to_hex};
+use crate::pages::appearance_common::{
+    color_dialog_button, font_picker_button, hex_to_rgba, rgba_to_hex,
+};
 use crate::ui;
 use metis_i18n::tr;
 
@@ -98,7 +100,7 @@ pub fn build() -> gtk::Widget {
         bg_color.set_sensitive(!chrome.background_color.is_empty());
         let bg_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         bg_row.append(&bg_theme);
-        bg_row.append(&bg_color);
+        bg_row.append(bg_color.upcast_ref());
         chrome_body.append(&ui::row_with_icon(
             "color-select-symbolic",
             &tr("Background colour"),
@@ -126,7 +128,7 @@ pub fn build() -> gtk::Widget {
         border_color.set_sensitive(!chrome.border_color.is_empty());
         let border_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         border_row.append(&border_theme);
-        border_row.append(&border_color);
+        border_row.append(border_color.upcast_ref());
         chrome_body.append(&ui::row_with_icon(
             "color-select-symbolic",
             &tr("Border colour"),
@@ -1385,7 +1387,7 @@ fn text_style_options(
             });
         }
         row.append(&use_theme);
-        row.append(&color);
+        row.append(color.upcast_ref());
         col.append(&ui::row_with_icon(
             "color-select-symbolic",
             &tr("Text colour"),
@@ -1442,7 +1444,7 @@ fn text_style_options(
             });
         }
         row.append(&use_theme);
-        row.append(&color);
+        row.append(color.upcast_ref());
         let accent_label = match inst.kind {
             DesktopWidgetKind::System => "Bar accent",
             _ => "Accent colour",
@@ -1472,7 +1474,7 @@ fn font_row(inst: &DesktopWidgetInstance, cfg: Rc<RefCell<DesktopWidgetsConfig>>
     let use_theme = gtk::CheckButton::with_label(&tr("Theme font"));
     use_theme.set_active(inst.font.trim().is_empty());
 
-    let font_btn = gtk::FontDialogButton::new(Some(gtk::FontDialog::new()));
+    let font_btn = font_picker_button();
     if !inst.font.trim().is_empty() {
         font_btn.set_font_desc(&gtk::pango::FontDescription::from_string(&inst.font));
     }
@@ -1516,7 +1518,7 @@ fn font_row(inst: &DesktopWidgetInstance, cfg: Rc<RefCell<DesktopWidgetsConfig>>
     }
 
     row.append(&use_theme);
-    row.append(&font_btn);
+    row.append(font_btn.upcast_ref());
     ui::row_with_icon("font-x-generic-symbolic", &tr("Font"), &row).upcast()
 }
 
@@ -1670,7 +1672,7 @@ fn instance_chrome_overrides(
             });
         }
         row.append(&enable);
-        row.append(&color);
+        row.append(color.upcast_ref());
         body.append(&row);
     }
 
@@ -1773,7 +1775,7 @@ fn instance_chrome_overrides(
             });
         }
         row.append(&enable);
-        row.append(&color);
+        row.append(color.upcast_ref());
         body.append(&row);
     }
 

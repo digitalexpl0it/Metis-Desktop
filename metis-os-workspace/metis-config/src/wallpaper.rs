@@ -174,6 +174,33 @@ pub fn bundled_wallpaper_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Distro / desktop environment wallpaper trees (Ubuntu GNOME, KDE extras, …).
+///
+/// These are read in place — Metis never copies them into its store unless the
+/// user explicitly imports a file.
+pub fn system_wallpaper_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let push = |p: PathBuf, dirs: &mut Vec<PathBuf>| {
+        if p.is_dir() && !dirs.iter().any(|d| d == &p) {
+            dirs.push(p);
+        }
+    };
+    push(PathBuf::from("/usr/share/backgrounds"), &mut dirs);
+    push(PathBuf::from("/usr/local/share/backgrounds"), &mut dirs);
+    push(PathBuf::from("/usr/share/pixmaps/backgrounds"), &mut dirs);
+    // Honour extra data dirs (Flatpak host, custom prefixes).
+    let data_dirs = std::env::var_os("XDG_DATA_DIRS")
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    for raw in data_dirs.split(':') {
+        if raw.is_empty() {
+            continue;
+        }
+        push(PathBuf::from(raw).join("backgrounds"), &mut dirs);
+    }
+    dirs
+}
+
 fn is_wallpaper_image(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -185,10 +212,22 @@ fn is_wallpaper_image(path: &Path) -> bool {
 /// (by canonical path **or** lowercase basename so FHS + build-tree copies of
 /// `default.png` are not both listed).
 pub fn collect_wallpaper_images(dir: &Path, out: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>) {
+    collect_wallpaper_images_depth(dir, out, seen, 0);
+}
+
+/// Like [`collect_wallpaper_images`], but also walks immediate subdirectories
+/// up to `max_depth` (e.g. Ubuntu's `/usr/share/backgrounds/contest`).
+pub fn collect_wallpaper_images_depth(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    seen: &mut HashSet<PathBuf>,
+    max_depth: u32,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     let mut found = Vec::new();
+    let mut subdirs = Vec::new();
     let mut seen_names: HashSet<String> = seen
         .iter()
         .filter_map(|p| {
@@ -205,6 +244,12 @@ pub fn collect_wallpaper_images(dir: &Path, out: &mut Vec<PathBuf>, seen: &mut H
     }
     for entry in entries.flatten() {
         let path = entry.path();
+        if path.is_dir() {
+            if max_depth > 0 {
+                subdirs.push(path);
+            }
+            continue;
+        }
         if !path.is_file() || !is_wallpaper_image(&path) {
             continue;
         }
@@ -223,6 +268,10 @@ pub fn collect_wallpaper_images(dir: &Path, out: &mut Vec<PathBuf>, seen: &mut H
     }
     found.sort();
     out.extend(found);
+    subdirs.sort();
+    for sub in subdirs {
+        collect_wallpaper_images_depth(&sub, out, seen, max_depth - 1);
+    }
 }
 
 /// All bundled wallpaper images, sorted by filename.
@@ -282,6 +331,30 @@ mod tests {
         assert!(names.iter().any(|n| n == "extra.png"));
         // First dir wins for the duplicate name.
         assert_eq!(out[0].parent().unwrap(), a.as_path());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn collect_depth_walks_one_subdir() {
+        let root =
+            std::env::temp_dir().join(format!("metis-wallpaper-depth-{}", std::process::id()));
+        let contest = root.join("contest");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&contest).unwrap();
+        std::fs::write(root.join("top.png"), b"a").unwrap();
+        std::fs::write(contest.join("nested.png"), b"b").unwrap();
+
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        collect_wallpaper_images_depth(&root, &mut out, &mut seen, 1);
+
+        let names: Vec<_> = out
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_string))
+            .collect();
+        assert!(names.iter().any(|n| n == "top.png"));
+        assert!(names.iter().any(|n| n == "nested.png"));
 
         let _ = std::fs::remove_dir_all(&root);
     }

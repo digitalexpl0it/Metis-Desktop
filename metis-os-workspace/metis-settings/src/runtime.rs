@@ -203,8 +203,25 @@ pub fn activate_settings_window() {
 
 fn send_command(cmd: CompositorCommand) -> std::io::Result<CompositorEvent> {
     let path = metis_protocol::ipc_socket_path();
-    let mut stream = UnixStream::connect(&path)?;
+    // Connect on a helper thread so a wedged compositor cannot block the GTK
+    // main loop indefinitely (UnixStream::connect has no timeout).
+    let path_for_connect = path.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(UnixStream::connect(&path_for_connect));
+    });
+    let mut stream = match rx.recv_timeout(Duration::from_millis(600)) {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(err)) => return Err(err),
+        Err(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "compositor IPC connect timed out",
+            ));
+        }
+    };
     stream.set_read_timeout(Some(Duration::from_millis(600)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(600)))?;
     let payload = serde_json::to_string(&cmd).map_err(std::io::Error::other)?;
     writeln!(stream, "{payload}")?;
     stream.flush()?;

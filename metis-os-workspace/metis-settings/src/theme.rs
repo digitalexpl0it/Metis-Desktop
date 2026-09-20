@@ -108,12 +108,25 @@ fn reapply_tokens(tokens: &ThemeTokens, dark: bool) {
             // the *same* provider; dialog sheets re-assert transparent in settings_css.
             let mut css = metis_config::build_stylesheet(tokens);
             css.push_str(&format!(
-                "\nwindow, window.background {{ background-color: {} !important; }}\n\
+                "\nwindow, window.background, window.dialog, window.csd,\n\
+                 colorchooser, fontchooser {{\n\
+                     background-color: {bg} !important;\n\
+                     color: {text};\n\
+                 }}\n\
                  window.metis-settings-password-dialog,\n\
                  window.metis-settings-widget-dialog {{\n\
                      background-color: transparent !important;\n\
+                 }}\n\
+                 colorchooser scrolledwindow, colorchooser viewport,\n\
+                 colorchooser grid, colorchooser box,\n\
+                 fontchooser scrolledwindow, fontchooser viewport,\n\
+                 fontchooser listview, fontchooser listview > row {{\n\
+                     background-color: {surface} !important;\n\
+                     color: {text};\n\
                  }}\n",
-                tokens.bg
+                bg = tokens.bg,
+                text = tokens.text,
+                surface = tokens.surface,
             ));
             base.load_from_data(&css);
             extra.load_from_data(&settings_css(tokens));
@@ -139,7 +152,8 @@ fn settings_css(t: &ThemeTokens) -> String {
     let text = &t.text;
     let muted = &t.text_muted;
     let accent = t.accent_primary();
-    let on_accent = &t.text_on_accent;
+    // Derive live so cyan/white accents never keep a stale white `text_on_accent`.
+    let on_accent = t.on_accent_ink();
     let error = &t.semantic.error;
     let warning = &t.semantic.warning;
     let success = &t.semantic.success;
@@ -153,7 +167,16 @@ fn settings_css(t: &ThemeTokens) -> String {
            layer-shell overlays; in the settings app we want solid windows so
            spawned dialogs (e.g. the colour picker) aren't see-through. */
         window {{ background-color: {bg} !important; color: {text}; }}
-        window.dialog, window.csd, .colorchooser {{ background-color: {bg} !important; color: {text}; }}
+        window.dialog,
+        window.csd,
+        window.aboutdialog,
+        .colorchooser,
+        colorchooser,
+        fontchooser,
+        .fontchooser {{
+            background-color: {bg} !important;
+            color: {text};
+        }}
 
         /* Window + CSD titlebar so the whole frame tracks the active theme. */
         .metis-settings-window {{ background-color: {bg} !important; color: {text}; }}
@@ -171,6 +194,109 @@ fn settings_css(t: &ThemeTokens) -> String {
         window.metis-settings-window.metis-settings-password-dialog,
         window.metis-settings-window.metis-settings-widget-dialog {{
             background-color: transparent !important;
+            color: {text};
+        }}
+
+        /* In-window color/font choosers (top-slide sheet) — force opaque chrome. */
+        colorchooser,
+        colorchooser > box,
+        colorchooser grid,
+        colorchooser scrolledwindow,
+        colorchooser scrolledwindow > viewport,
+        colorchooser viewport,
+        .metis-settings-color-chooser,
+        .metis-settings-color-chooser > box,
+        .metis-settings-color-chooser grid,
+        .metis-settings-color-chooser scrolledwindow,
+        .metis-settings-color-chooser scrolledwindow > viewport,
+        .metis-settings-color-chooser viewport {{
+            background-color: {surface};
+            color: {text};
+        }}
+        colorchooser listview,
+        colorchooser listview > row,
+        .metis-settings-color-chooser listview,
+        .metis-settings-color-chooser listview > row {{
+            background-color: {raised};
+            color: {text};
+        }}
+        fontchooser,
+        fontchooser > box,
+        fontchooser scrolledwindow,
+        fontchooser scrolledwindow > viewport,
+        fontchooser viewport,
+        .metis-settings-font-chooser,
+        .metis-settings-font-chooser > box,
+        .metis-settings-font-chooser scrolledwindow,
+        .metis-settings-font-chooser scrolledwindow > viewport,
+        .metis-settings-font-chooser viewport {{
+            background-color: {surface};
+            color: {text};
+        }}
+        fontchooser listview,
+        fontchooser listview > row,
+        fontchooser listview > row:hover,
+        fontchooser listview > row:selected,
+        .metis-settings-font-chooser listview,
+        .metis-settings-font-chooser listview > row,
+        .metis-settings-font-chooser listview > row:hover,
+        .metis-settings-font-chooser listview > row:selected {{
+            background-color: {raised};
+            color: {text};
+        }}
+        fontchooser listview > row:selected,
+        .metis-settings-font-chooser listview > row:selected {{
+            background-color: color-mix(in srgb, {accent} 22%, {raised});
+            color: {text};
+        }}
+        fontchooser listview > row label,
+        .metis-settings-font-chooser listview > row label {{
+            color: {text};
+        }}
+        .metis-settings-font-chooser scale {{
+            min-height: 22px;
+            color: {text};
+        }}
+        .metis-settings-font-chooser scale trough,
+        fontchooser scale trough {{
+            min-height: 6px;
+            background-color: {border};
+        }}
+        /* FontChooser uses a teardrop mark icon — keep the thumb chrome transparent
+           so we don't get a solid square (global scale slider uses {accent}). */
+        .metis-settings-font-chooser scale slider,
+        fontchooser scale slider {{
+            background-color: transparent;
+            background-image: none;
+            border: none;
+            box-shadow: none;
+            border-radius: 0;
+            min-width: 18px;
+            min-height: 18px;
+            padding: 0;
+            color: {accent};
+            -gtk-icon-filter: none;
+        }}
+        .metis-settings-font-chooser scale slider:hover,
+        fontchooser scale slider:hover,
+        .metis-settings-font-chooser scale slider:active,
+        fontchooser scale slider:active {{
+            background-color: transparent;
+            background-image: none;
+            box-shadow: none;
+        }}
+        .metis-settings-font-chooser scale marks,
+        fontchooser scale marks {{
+            color: {muted};
+        }}
+        window.dialog scrolledwindow,
+        window.dialog scrolledwindow > viewport,
+        window.dialog listview,
+        window.dialog listview > row {{
+            background-color: {surface};
+            color: {text};
+        }}
+        window.dialog listview > row label {{
             color: {text};
         }}
         .metis-settings-dialog-sheet {{
@@ -203,7 +329,6 @@ fn settings_css(t: &ThemeTokens) -> String {
             margin: 0 12px 12px;
             border: 1px solid {border};
             border-radius: {rl}px;
-            overflow: hidden;
             background-color: {raised};
         }}
         .metis-widget-list-row {{
@@ -260,8 +385,6 @@ fn settings_css(t: &ThemeTokens) -> String {
         windowcontrols button image {{ color: {text}; }}
 
         .metis-settings-root {{ background-color: {bg}; }}
-        /* Logical spacing hints for RTL (GTK mirrors margin-inline automatically). */
-        .metis-settings-nav-row-inner {{ margin-inline: 0; }}
 
         /* Dividers between sidebar/content + any separators: theme-coloured, flat. */
         separator {{
@@ -278,16 +401,31 @@ fn settings_css(t: &ThemeTokens) -> String {
             background-color: {surface};
             padding-bottom: 12px;
             min-width: 248px;
-            max-width: 248px;
         }}
-        /* Kill GTK's dark scroll edge fades (undershoot) and bounce glows
-           (overshoot) on every edge — they don't suit the light theme. */
+        /* Kill GTK's scroll edge fades (undershoot) and bounce glows
+           (overshoot) — and strip any transition so a late overshoot frame
+           cannot hitch the GL renderer when the scrollbar hits top/bottom. */
         undershoot.top, undershoot.bottom, undershoot.left, undershoot.right,
         overshoot.top, overshoot.bottom, overshoot.left, overshoot.right {{
             background-color: transparent;
             background-image: none;
             box-shadow: none;
             border: none;
+            opacity: 0;
+            min-width: 0;
+            min-height: 0;
+            padding: 0;
+            margin: 0;
+            transition: none;
+            animation: none;
+        }}
+        .metis-settings-scroller overshoot,
+        .metis-settings-scroller undershoot,
+        .metis-settings-nav-scroll overshoot,
+        .metis-settings-nav-scroll undershoot {{
+            opacity: 0;
+            transition: none;
+            animation: none;
         }}
 
         /* Tokenized scrollbars — Adwaita prefer-dark alone leaves dark chrome
@@ -471,7 +609,6 @@ fn settings_css(t: &ThemeTokens) -> String {
             font-size: 13px;
             color: {muted};
             line-height: 1.35;
-            max-width: 36em;
         }}
         .metis-settings-section {{
             background-color: {surface};
@@ -528,13 +665,28 @@ fn settings_css(t: &ThemeTokens) -> String {
             font-weight: 600;
         }}
         .metis-settings-section-body {{
-            padding: 0 0 4px;
+            padding: 0 0 12px;
         }}
         .metis-settings-section-body > .metis-settings-section {{
             margin: 4px 12px 10px;
         }}
         .metis-settings-section-body > .metis-settings-list {{
             margin: 0 12px 12px;
+        }}
+        .metis-settings-section-body > .metis-settings-inset {{
+            margin: 4px 16px 12px;
+        }}
+        .metis-settings-section-body > .metis-settings-list + .metis-settings-inset {{
+            margin-top: 10px;
+        }}
+        .metis-settings-section-body > .metis-settings-inset + .metis-settings-list {{
+            margin-top: 0;
+        }}
+        .metis-settings-section-body > button {{
+            margin: 8px 16px 12px;
+        }}
+        .metis-settings-section-body > .metis-settings-actions {{
+            margin: 8px 16px 12px;
         }}
         .metis-settings-section-body > .metis-settings-hint,
         .metis-settings-section-body > label.metis-settings-hint {{
@@ -543,6 +695,18 @@ fn settings_css(t: &ThemeTokens) -> String {
         .metis-settings-section-body > label.metis-settings-error {{
             padding: 10px 16px 8px;
             margin: 0;
+        }}
+        .metis-settings-inset .metis-settings-hint {{
+            padding-left: 0;
+            padding-right: 0;
+        }}
+        .metis-settings-inset .metis-settings-row {{
+            padding-left: 0;
+            padding-right: 0;
+        }}
+        .metis-settings-inset .metis-settings-actions {{
+            margin-top: 4px;
+            padding: 0;
         }}
         .metis-settings-banner {{
             margin: 0 16px 12px;
@@ -558,10 +722,8 @@ fn settings_css(t: &ThemeTokens) -> String {
         }}
         .metis-settings-actions {{
             padding: 4px 16px 14px;
-            gap: 8px;
         }}
         .metis-settings-actions button {{
-            align-self: start;
         }}
         .metis-settings-actions > .metis-settings-hint,
         .metis-settings-actions > label.metis-settings-hint {{
@@ -573,7 +735,6 @@ fn settings_css(t: &ThemeTokens) -> String {
             border-radius: {rs}px;
             background-color: color-mix(in srgb, {raised} 80%, transparent);
             border: 1px solid color-mix(in srgb, {border} 70%, transparent);
-            gap: 10px;
         }}
         .metis-settings-gaming-status.metis-settings-gaming-status-ok {{
             background-color: color-mix(in srgb, {success} 12%, {surface});
@@ -595,6 +756,17 @@ fn settings_css(t: &ThemeTokens) -> String {
             font-size: 13px;
             font-weight: 600;
         }}
+        .metis-settings-health-grid {{
+            padding: 4px 8px 8px;
+        }}
+        .metis-settings-health-grid .metis-settings-health-item {{
+            border-top: none;
+            padding: 8px 10px;
+            border-radius: {rs}px;
+        }}
+        .metis-settings-health-grid .metis-settings-health-item .metis-settings-hint {{
+            padding: 0;
+        }}
         .metis-display-arrangement {{
             padding: 8px 12px 12px;
         }}
@@ -615,7 +787,6 @@ fn settings_css(t: &ThemeTokens) -> String {
             color: {muted};
             font-size: 12px;
             padding: 0 16px 12px;
-            max-width: 42em;
         }}
         .metis-keybind-chord {{
             font-family: monospace;
@@ -661,7 +832,6 @@ fn settings_css(t: &ThemeTokens) -> String {
             background-color: {raised};
             border: 1px solid {border};
             border-radius: {rl}px;
-            overflow: hidden;
         }}
         .metis-display-arrangement-viewport {{
             min-width: 200px;
@@ -670,23 +840,21 @@ fn settings_css(t: &ThemeTokens) -> String {
            lock the Settings window from shrinking. */
         .metis-settings-shrink-dropdown {{
             min-width: 140px;
-            max-width: 320px;
         }}
         .metis-display-block {{
             border-radius: {rs}px;
             border: 2px solid transparent;
             background-color: {surface};
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-            /* No transform transition — it fights GtkFixed::move_ and rubber-bands. */
-            transition: border-color 160ms ease, box-shadow 160ms ease;
+            /* Flat tiles — box-shadows hitch the GL scroller when this card
+               is in the damaged region (Display page scroll lock-up). */
+            box-shadow: none;
+            transition: border-color 120ms ease;
         }}
         .metis-display-block-dragging {{
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
             opacity: 0.96;
         }}
         .metis-display-block-selected {{
             border-color: {accent};
-            box-shadow: 0 4px 16px color-mix(in srgb, {accent} 28%, transparent);
         }}
         .metis-display-block-menubar {{
             background-color: rgba(255, 255, 255, 0.92);
@@ -716,6 +884,37 @@ fn settings_css(t: &ThemeTokens) -> String {
         .metis-settings-list row,
         .metis-settings-list label {{ color: {text}; }}
         .metis-settings-list row:hover {{ background-color: {surface}; }}
+
+        /* Zebra lists (Wi-Fi scan, Bluetooth devices) — text-mix works in light + dark. */
+        .metis-settings-zebra-list,
+        .metis-settings-wifi-list {{
+            padding: 6px;
+        }}
+        .metis-settings-zebra-list > box.metis-settings-zebra-row,
+        .metis-settings-wifi-list > box.metis-settings-wifi-row {{
+            padding: 8px 10px;
+            border-radius: {rs}px;
+            border-top: none;
+            background-color: transparent;
+            min-height: 36px;
+        }}
+        .metis-settings-zebra-list > box.metis-settings-zebra-row-alt,
+        .metis-settings-wifi-list > box.metis-settings-wifi-row-alt {{
+            background-color: color-mix(in srgb, {text} 7%, {raised});
+        }}
+        .metis-settings-zebra-list > box.metis-settings-zebra-row:hover,
+        .metis-settings-wifi-list > box.metis-settings-wifi-row:hover {{
+            background-color: color-mix(in srgb, {accent} 14%, {raised});
+        }}
+        .metis-settings-zebra-list > box.metis-settings-zebra-row label,
+        .metis-settings-wifi-list > box.metis-settings-wifi-row label {{
+            color: {text};
+        }}
+        .metis-settings-zebra-list > box.metis-settings-zebra-row .metis-settings-hint,
+        .metis-settings-wifi-list > box.metis-settings-wifi-row .metis-settings-hint {{
+            color: {muted};
+            padding: 0;
+        }}
 
         /* App titlebars — virtualized ListView; only visible rows exist. */
         .metis-settings-app-scroll {{
@@ -837,12 +1036,55 @@ fn settings_css(t: &ThemeTokens) -> String {
             border: 1px solid {border};
             border-radius: {rs}px;
         }}
-        popover listview, popover row, popover label {{
+        popover listview,
+        popover listview row,
+        popover.menu listview,
+        popover.menu listview row,
+        popover row {{
             background-color: transparent;
             color: {text};
         }}
-        popover row:selected, popover row:hover {{
+        popover listview row label,
+        popover.menu listview row label,
+        popover row label,
+        popover label {{
+            color: {text};
+        }}
+        /* Solid accent selection — force label/image ink to contrast (the plain
+           `popover label {{ color: text }}` rule otherwise keeps white on cyan). */
+        popover listview row:selected,
+        popover listview row:selected:hover,
+        popover.menu listview row:selected,
+        popover.menu listview row:selected:hover,
+        popover row:selected,
+        popover row:selected:hover {{
             background-color: {accent};
+            color: {on_accent};
+        }}
+        popover listview row:selected label,
+        popover listview row:selected cell,
+        popover listview row:selected image,
+        popover.menu listview row:selected label,
+        popover.menu listview row:selected image,
+        popover row:selected label,
+        popover row:selected image {{
+            color: {on_accent};
+        }}
+        /* Hover (not selected): soft tint + normal text — always readable. */
+        popover listview row:hover,
+        popover.menu listview row:hover,
+        popover row:hover {{
+            background-color: color-mix(in srgb, {accent} 22%, {raised});
+            color: {text};
+        }}
+        popover listview row:hover label,
+        popover.menu listview row:hover label,
+        popover row:hover label {{
+            color: {text};
+        }}
+        popover listview row:selected:hover label,
+        popover.menu listview row:selected:hover label,
+        popover row:selected:hover label {{
             color: {on_accent};
         }}
 
@@ -850,7 +1092,14 @@ fn settings_css(t: &ThemeTokens) -> String {
         scale trough {{ background-color: {border}; }}
         scale highlight {{ background-color: {accent}; }}
         scale value {{ color: {muted}; }}
-        scale slider {{ background-color: {text}; }}
+        scale slider {{
+            background-color: {accent};
+            border-radius: 999px;
+            min-width: 16px;
+            min-height: 16px;
+            border: none;
+            box-shadow: none;
+        }}
         switch {{
             background-color: rgba({text_rgb}, 0.14);
             border: none;
@@ -872,7 +1121,6 @@ fn settings_css(t: &ThemeTokens) -> String {
             transition: none;
         }}
         label.metis-settings-switch-label {{
-            cursor: pointer;
         }}
 
         /* Text inputs (search boxes, CalDAV fields, etc.). */
@@ -884,6 +1132,8 @@ fn settings_css(t: &ThemeTokens) -> String {
             border-radius: {rs}px;
             box-shadow: none;
             caret-color: {text};
+            padding: 6px 10px;
+            min-height: 32px;
         }}
         entry text, spinbutton text {{ color: {text}; background-color: transparent; }}
         entry text placeholder, entry > text > placeholder {{ color: {muted}; opacity: 1; }}
@@ -1002,6 +1252,9 @@ fn settings_css(t: &ThemeTokens) -> String {
         .metis-wallpaper-thumb:hover {{ border-color: {border}; background-color: transparent; }}
         .metis-wallpaper-thumb.selected {{ border-color: {accent}; }}
         .metis-wallpaper-image {{ border-radius: 8px; }}
+        .metis-wallpaper-thumb-spinner {{
+            color: {accent};
+        }}
         .metis-wallpaper-check {{
             color: {on_accent};
             background-color: {accent};
@@ -1009,7 +1262,52 @@ fn settings_css(t: &ThemeTokens) -> String {
             padding: 4px;
         }}
 
-        .metis-settings-row colorswatch {{ border-radius: 6px; }}
+        .metis-settings-row colorswatch {{
+            border-radius: 6px;
+            min-width: 48px;
+            min-height: 22px;
+            border: 1px solid {border};
+            box-shadow: none;
+            padding: 0;
+        }}
+        /* Compact ColorDialogButton — default Adwaita chrome is oversized and
+           stacks a second frame around the swatch. */
+        colordialogbutton,
+        .metis-settings-row colordialogbutton {{
+            min-width: 56px;
+            min-height: 28px;
+            padding: 0;
+            border-radius: {rs}px;
+            background-color: {raised};
+            background-image: none;
+            border: 1px solid {border};
+            box-shadow: none;
+        }}
+        colordialogbutton > button,
+        .metis-settings-row colordialogbutton > button {{
+            min-width: 0;
+            min-height: 0;
+            padding: 3px;
+            background-color: transparent;
+            background-image: none;
+            border: none;
+            box-shadow: none;
+            transform: none;
+        }}
+        colordialogbutton > button:hover,
+        colordialogbutton > button:active,
+        colordialogbutton > button:checked {{
+            background-color: transparent;
+            transform: none;
+            box-shadow: none;
+        }}
+        colordialogbutton colorswatch {{
+            min-width: 48px;
+            min-height: 22px;
+            border-radius: 4px;
+            border: 1px solid {border};
+            box-shadow: none;
+        }}
         button.metis-accent2-hint {{ color: {accent2}; }}
 
         /* Segmented pill tabs (e.g. Network: Wireless / Wired / Proxy). */
@@ -1040,6 +1338,298 @@ fn settings_css(t: &ThemeTokens) -> String {
             color: {on_accent};
         }}
         button.metis-settings-tab:checked label {{ color: {on_accent}; font-weight: 700; }}
+
+        /* ---- Settings UI 2.0: Home + mini sidebar + sheets + top dialogs ---- */
+        .metis-settings-mini-sidebar {{
+            background-color: {surface};
+            min-width: 64px;
+            padding: 4px 0;
+        }}
+        .metis-settings-mini-btn {{
+            background-color: transparent;
+            background-image: none;
+            background: transparent;
+            border: none;
+            border-radius: 12px;
+            padding: 4px;
+            min-width: 0;
+            min-height: 0;
+            box-shadow: none;
+            transform: none;
+        }}
+        .metis-settings-mini-btn:hover {{
+            background-color: color-mix(in srgb, {accent} 12%, {raised});
+            background: color-mix(in srgb, {accent} 12%, {raised});
+        }}
+        .metis-settings-window button.metis-settings-mini-btn:active,
+        .metis-settings-window button.metis-settings-mini-btn:focus,
+        button.metis-settings-mini-btn:active,
+        button.metis-settings-mini-btn:focus {{
+            background-color: color-mix(in srgb, {accent} 16%, {raised});
+            background: color-mix(in srgb, {accent} 16%, {raised});
+            transform: none;
+            outline: none;
+            box-shadow: none;
+        }}
+        .metis-settings-mini-btn.metis-settings-mini-active {{
+            background-color: color-mix(in srgb, {accent} 20%, {raised});
+            background: color-mix(in srgb, {accent} 20%, {raised});
+        }}
+        .metis-settings-mini-badge {{
+            border-radius: 10px;
+            padding: 8px;
+        }}
+        .metis-settings-mini-icon {{
+            color: {text};
+            -gtk-icon-style: symbolic;
+        }}
+        .metis-settings-mini-home .metis-settings-mini-badge {{
+            background-color: color-mix(in srgb, {muted} 18%, {raised});
+        }}
+
+        .metis-settings-home {{
+            background-color: {bg};
+        }}
+        .metis-settings-home-title {{
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            color: {text};
+        }}
+        .metis-settings-home-subtitle {{
+            font-size: 14px;
+            color: {muted};
+        }}
+        .metis-settings-home-search {{
+        }}
+        .metis-settings-home-section {{
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: {muted};
+            margin-top: 8px;
+        }}
+        .metis-settings-home-tile {{
+            background-color: {surface};
+            background-image: none;
+            background: {surface};
+            border: 1px solid {border};
+            border-radius: {rl}px;
+            box-shadow: 0 1px 2px alpha(black, 0.06);
+            transition: border-color 140ms ease, box-shadow 140ms ease;
+            padding: 0;
+            transform: none;
+        }}
+        .metis-settings-home-tile:hover {{
+            border-color: color-mix(in srgb, {accent} 45%, {border});
+            box-shadow: 0 6px 18px alpha(black, 0.12);
+            background-color: {surface};
+            background: {surface};
+            transform: none;
+        }}
+        /* Kill the default GTK/Adwaita pressed flash (often reads as a solid
+           accent/pink block over the whole tile before the page slides). */
+        .metis-settings-window button.metis-settings-home-tile:active,
+        .metis-settings-window button.metis-settings-home-tile:checked,
+        .metis-settings-window button.metis-settings-home-tile:focus,
+        .metis-settings-window button.metis-settings-home-tile:focus-visible,
+        button.metis-settings-home-tile:active,
+        button.metis-settings-home-tile:checked,
+        button.metis-settings-home-tile:focus,
+        button.metis-settings-home-tile:focus-visible {{
+            background-color: {surface};
+            background-image: none;
+            background: {surface};
+            border-color: color-mix(in srgb, {accent} 45%, {border});
+            box-shadow: 0 1px 2px alpha(black, 0.06);
+            transform: none;
+            outline: none;
+        }}
+        .metis-settings-home-tile-badge {{
+            border-radius: 12px;
+            padding: 10px;
+        }}
+        .metis-settings-home-tile-icon {{
+            color: {text};
+            -gtk-icon-style: symbolic;
+        }}
+        .metis-settings-home-tile-title {{
+            font-size: 15px;
+            font-weight: 700;
+            color: {text};
+        }}
+        .metis-settings-home-tile-blurb {{
+            font-size: 12px;
+            color: {muted};
+        }}
+        .metis-settings-home-result {{
+            background-color: {surface};
+            background-image: none;
+            background: {surface};
+            border: 1px solid {border};
+            border-radius: {rl}px;
+            padding: 0;
+            box-shadow: none;
+            transform: none;
+        }}
+        .metis-settings-home-result:hover {{
+            border-color: color-mix(in srgb, {accent} 40%, {border});
+            background-color: color-mix(in srgb, {accent} 8%, {surface});
+            background: color-mix(in srgb, {accent} 8%, {surface});
+        }}
+        .metis-settings-window button.metis-settings-home-result:active,
+        .metis-settings-window button.metis-settings-home-result:focus,
+        button.metis-settings-home-result:active,
+        button.metis-settings-home-result:focus {{
+            background-color: {surface};
+            background: {surface};
+            transform: none;
+            outline: none;
+        }}
+        .metis-settings-home-result-title {{
+            font-size: 13px;
+            font-weight: 600;
+            color: {text};
+        }}
+        .metis-settings-home-result-sub {{
+            font-size: 11px;
+            color: {muted};
+        }}
+
+        .metis-settings-sheet-dimmer {{
+            background-color: alpha(black, 0.38);
+            background-image: none;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+            opacity: 1;
+        }}
+        .metis-settings-sheet-dimmer:hover {{
+            background-color: alpha(black, 0.38);
+        }}
+        .metis-settings-category-sheet {{
+            background-color: {bg};
+            border: none;
+            box-shadow: none;
+            min-width: 0;
+        }}
+        .metis-settings-sheet-title {{
+            font-size: 18px;
+            font-weight: 750;
+            color: {text};
+            letter-spacing: -0.02em;
+        }}
+        .metis-settings-sheet-close {{
+            min-width: 34px;
+            min-height: 34px;
+            padding: 0;
+            border-radius: 999px;
+        }}
+        .metis-settings-sheet-pages-scroll,
+        .metis-settings-sheet-pages-scroll > viewport,
+        .metis-settings-sheet-pages-scroll viewport {{
+            background-color: {surface};
+            color: {text};
+        }}
+        /* Class is on the ListBox itself (`list.metis-…`), not a child `list`. */
+        list.metis-settings-sheet-pages,
+        .metis-settings-sheet-pages {{
+            background-color: {surface};
+            background-image: none;
+            color: {text};
+            padding: 8px;
+            border: none;
+            box-shadow: none;
+        }}
+        list.metis-settings-sheet-pages > row,
+        .metis-settings-sheet-page-row {{
+            border-radius: {rl}px;
+            margin: 2px 0;
+            background-color: transparent;
+            color: {text};
+        }}
+        list.metis-settings-sheet-pages > row:hover,
+        .metis-settings-sheet-page-row:hover {{
+            background-color: {raised};
+        }}
+        list.metis-settings-sheet-pages > row:selected,
+        .metis-settings-sheet-page-row:selected {{
+            background-color: color-mix(in srgb, {accent} 18%, {raised});
+        }}
+        list.metis-settings-sheet-pages > row label,
+        .metis-settings-sheet-page-label {{
+            font-size: 12px;
+            font-weight: 550;
+            color: {text};
+        }}
+
+        .metis-settings-dialog-dimmer {{
+            background-color: alpha(black, 0.45);
+            background-image: none;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+        }}
+        .metis-settings-dialog-dimmer:hover {{
+            background-color: alpha(black, 0.45);
+        }}
+        .metis-settings-top-dialog {{
+            background-color: {surface};
+            border: 1px solid {border};
+            border-radius: 14px;
+            padding: 16px 18px 14px;
+            box-shadow: 0 12px 40px alpha(black, 0.35);
+            min-width: 400px;
+            max-width: 480px;
+        }}
+        .metis-settings-top-dialog-title {{
+            font-size: 16px;
+            font-weight: 700;
+            color: {text};
+        }}
+        .metis-settings-top-dialog-body {{
+            font-size: 13px;
+            color: {muted};
+            line-height: 1.45;
+        }}
+        .metis-settings-top-sheet-body {{
+            background-color: {surface};
+            color: {text};
+        }}
+        button.metis-color-swatch {{
+            min-width: 56px;
+            min-height: 28px;
+            padding: 3px;
+            border-radius: {rs}px;
+            background-color: {raised};
+            background-image: none;
+            border: 1px solid {border};
+            box-shadow: none;
+        }}
+        button.metis-color-swatch:hover {{
+            border-color: {accent};
+        }}
+        box.metis-color-swatch-chip {{
+            border: 1px solid {border};
+            border-radius: 4px;
+        }}
+        button.metis-font-picker {{
+            min-height: 28px;
+            padding: 4px 10px;
+            border-radius: {rs}px;
+            background-color: {raised};
+            background-image: none;
+            border: 1px solid {border};
+            box-shadow: none;
+            color: {text};
+        }}
+        button.metis-font-picker:hover {{
+            border-color: {accent};
+        }}
+        .metis-font-picker-label {{
+            color: {text};
+        }}
         "#
     )
 }

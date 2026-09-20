@@ -113,6 +113,13 @@ reliability on fresh DRM sessions.
 (or Flatpak override for GTK apps) when Mesa/NVIDIA drivers are stable. Games are
 unaffected either way.
 
+**Settings:** `metis-settings` defaults to `GSK_RENDERER=cairo` as well (2026-09-19)
+to avoid multi-second scroll stalls on GTK 4.22 / hybrid NVIDIA. Override with
+`METIS_SETTINGS_GSK_RENDERER=gl` (or `vulkan`) for experiments. The compositor
+passes the same default when spawning Settings. Closing the Settings window
+hard-exits the process (2026-09-19) so unique-instance + page poll timers cannot
+leave a background `metis-settings`.
+
 ### P5 — Dependency feature bloat
 
 | Crate | Issue | Action taken |

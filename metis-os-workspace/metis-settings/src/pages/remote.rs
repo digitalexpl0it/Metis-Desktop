@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 
+use crate::dialog;
 use crate::remote::{self, RemoteSnapshot};
 use crate::ui;
 use metis_i18n::tr;
@@ -239,7 +240,6 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     content.append(&login_card);
 
     let password_ui_open = Rc::new(Cell::new(false));
-    let password_dialog = Rc::new(RefCell::new(None::<gtk::Window>));
 
     let toggling = Rc::new(Cell::new(false));
     let lan_toggling = Rc::new(Cell::new(false));
@@ -507,17 +507,10 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     }
 
     let open_password = {
-        let parent = parent.clone();
         let cred_tx = cred_tx.clone();
         let password_ui_open = password_ui_open.clone();
-        let password_dialog = password_dialog.clone();
         Rc::new(move || {
-            show_password_dialog(
-                &parent,
-                cred_tx.clone(),
-                password_ui_open.clone(),
-                password_dialog.clone(),
-            );
+            show_password_sheet(cred_tx.clone(), password_ui_open.clone());
         })
     };
 
@@ -1044,58 +1037,24 @@ fn render_firewall_status(sections: &Sections, snap: &RemoteSnapshot) {
     sections.retry_fw_btn.set_visible(show_retry);
 }
 
-/// Centered modal sheet over Settings — undecorated so Metis does not add a
-/// second compositor titlebar; in-dialog header supplies title + close.
-fn show_password_dialog(
-    parent: &gtk::Window,
-    cred_tx: mpsc::Sender<Result<(), String>>,
-    password_ui_open: Rc<Cell<bool>>,
-    password_dialog: Rc<RefCell<Option<gtk::Window>>>,
-) {
-    if let Some(existing) = password_dialog.borrow().as_ref() {
-        existing.present();
+/// Top-slide sheet for session sharing username + password (same host as
+/// color/font pickers).
+fn show_password_sheet(cred_tx: mpsc::Sender<Result<(), String>>, password_ui_open: Rc<Cell<bool>>) {
+    if password_ui_open.get() || dialog::is_open() {
         return;
     }
-
     password_ui_open.set(true);
 
-    let dialog = gtk::Window::builder()
-        .title(tr("Session sharing password"))
-        .modal(true)
-        .transient_for(parent)
-        .decorated(false)
-        .resizable(false)
-        .default_width(440)
-        .build();
-    dialog.add_css_class("metis-settings-window");
-    dialog.add_css_class("metis-settings-password-dialog");
-
-    let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    outer.set_margin_top(16);
-    outer.set_margin_bottom(16);
-    outer.set_margin_start(20);
-    outer.set_margin_end(20);
-
-    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    header.set_margin_bottom(12);
-    let heading = gtk::Label::new(Some(&tr("Session sharing password")));
-    heading.set_xalign(0.0);
-    heading.set_hexpand(true);
-    heading.add_css_class("metis-settings-section-title");
-    header.append(&heading);
-    let close_btn = gtk::Button::with_label(&tr("Close"));
-    close_btn.add_css_class("metis-settings-secondary");
-    header.append(&close_btn);
-    outer.append(&header);
+    let wrap = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    wrap.add_css_class("metis-settings-top-sheet-body");
 
     let hint = gtk::Label::new(Some(&tr(
         "Choose the username and password RDP clients use to join this session.",
     )));
     hint.set_xalign(0.0);
     hint.set_wrap(true);
-    hint.add_css_class("metis-settings-hint");
-    hint.set_margin_bottom(12);
-    outer.append(&hint);
+    hint.add_css_class("metis-settings-top-dialog-body");
+    wrap.append(&hint);
 
     let user_entry = gtk::Entry::new();
     user_entry.set_placeholder_text(Some(&tr("Username")));
@@ -1104,68 +1063,38 @@ fn show_password_dialog(
         user_entry.set_text(&user);
     }
     ui::swallow_empty_backspace(&user_entry);
-    outer.append(&user_entry);
+    wrap.append(&user_entry);
 
     let pass_entry = gtk::Entry::new();
     pass_entry.set_placeholder_text(Some(&tr("Password")));
     pass_entry.set_visibility(false);
     pass_entry.set_input_purpose(gtk::InputPurpose::Password);
     pass_entry.set_hexpand(true);
-    pass_entry.set_margin_top(8);
     ui::swallow_empty_backspace(&pass_entry);
-    outer.append(&pass_entry);
+    wrap.append(&pass_entry);
 
     let confirm_entry = gtk::Entry::new();
     confirm_entry.set_placeholder_text(Some(&tr("Confirm password")));
     confirm_entry.set_visibility(false);
     confirm_entry.set_input_purpose(gtk::InputPurpose::Password);
     confirm_entry.set_hexpand(true);
-    confirm_entry.set_margin_top(8);
     ui::swallow_empty_backspace(&confirm_entry);
-    outer.append(&confirm_entry);
+    wrap.append(&confirm_entry);
 
     let err = gtk::Label::new(None);
     err.set_xalign(0.0);
     err.set_wrap(true);
     err.add_css_class("metis-settings-error");
-    err.set_margin_top(8);
     err.set_visible(false);
-    outer.append(&err);
+    wrap.append(&err);
 
     let btn_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     btn_row.set_halign(gtk::Align::End);
-    btn_row.set_margin_top(16);
-    let cancel = gtk::Button::with_label(&tr("Cancel"));
-    cancel.add_css_class("metis-settings-secondary");
+    // Header Cancel dismisses the sheet — only Save belongs in the body.
     let save = gtk::Button::with_label(&tr("Save"));
     save.add_css_class("suggested-action");
-    btn_row.append(&cancel);
     btn_row.append(&save);
-    outer.append(&btn_row);
-
-    dialog.set_child(Some(&ui::dialog_sheet(&outer)));
-
-    *password_dialog.borrow_mut() = Some(dialog.clone());
-
-    let dismiss = {
-        let dialog = dialog.clone();
-        let password_ui_open = password_ui_open.clone();
-        let password_dialog = password_dialog.clone();
-        Rc::new(move || {
-            password_ui_open.set(false);
-            *password_dialog.borrow_mut() = None;
-            dialog.destroy();
-        })
-    };
-
-    close_btn.connect_clicked({
-        let dismiss = dismiss.clone();
-        move |_| dismiss()
-    });
-    cancel.connect_clicked({
-        let dismiss = dismiss.clone();
-        move |_| dismiss()
-    });
+    wrap.append(&btn_row);
 
     let (save_tx, save_rx) = mpsc::channel::<Result<(), String>>();
 
@@ -1204,36 +1133,43 @@ fn show_password_dialog(
     });
 
     let cred_tx_done = cred_tx.clone();
-    let dismiss_done = dismiss.clone();
+    let password_ui_open_poll = password_ui_open.clone();
+    let save_btn = save.clone();
+    let err_poll = err.clone();
     glib::timeout_add_local(Duration::from_millis(100), move || {
         let Ok(result) = save_rx.try_recv() else {
             return glib::ControlFlow::Continue;
         };
-        save.set_sensitive(true);
-        save.set_label(&tr("Save"));
+        save_btn.set_sensitive(true);
+        save_btn.set_label(&tr("Save"));
         match result {
             Ok(()) => {
                 let _ = cred_tx_done.send(Ok(()));
-                dismiss_done();
+                password_ui_open_poll.set(false);
+                dialog::dismiss_silent();
                 glib::ControlFlow::Break
             }
             Err(e) => {
-                err.set_text(&e);
-                err.set_visible(true);
-                glib::ControlFlow::Break
+                err_poll.set_text(&e);
+                err_poll.set_visible(true);
+                glib::ControlFlow::Continue
             }
         }
     });
 
-    dialog.connect_destroy({
-        let password_ui_open = password_ui_open.clone();
-        let password_dialog = password_dialog.clone();
-        move |_| {
-            password_ui_open.set(false);
-            *password_dialog.borrow_mut() = None;
-        }
-    });
-
-    dialog.present();
+    let opened = dialog::present(
+        &tr("Session sharing password"),
+        &wrap,
+        {
+            let password_ui_open = password_ui_open.clone();
+            Rc::new(move || {
+                password_ui_open.set(false);
+            })
+        },
+    );
+    if !opened {
+        password_ui_open.set(false);
+        return;
+    }
     user_entry.grab_focus();
 }

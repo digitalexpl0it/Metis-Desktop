@@ -15,7 +15,8 @@ use gtk::prelude::*;
 use metis_config::ThemeMode;
 
 use crate::pages::appearance_common::{
-    color_dialog_button, current_wallpaper, hex_to_rgba, rgba_to_hex,
+    color_dialog_button, current_wallpaper, font_picker_button, hex_to_rgba, rgba_to_hex,
+    ColorSwatchButton,
 };
 use crate::{runtime, ui};
 use metis_i18n::tr;
@@ -27,14 +28,14 @@ struct State {
 
 #[derive(Clone)]
 struct ColorButtons {
-    accent: gtk::ColorDialogButton,
-    accent2: gtk::ColorDialogButton,
-    error: gtk::ColorDialogButton,
-    warning: gtk::ColorDialogButton,
-    success: gtk::ColorDialogButton,
-    info: gtk::ColorDialogButton,
-    payment: gtk::ColorDialogButton,
-    text: gtk::ColorDialogButton,
+    accent: ColorSwatchButton,
+    accent2: ColorSwatchButton,
+    error: ColorSwatchButton,
+    warning: ColorSwatchButton,
+    success: ColorSwatchButton,
+    info: ColorSwatchButton,
+    payment: ColorSwatchButton,
+    text: ColorSwatchButton,
 }
 
 pub fn build() -> gtk::Widget {
@@ -131,7 +132,7 @@ pub fn build() -> gtk::Widget {
     // re-derives the on-accent text color so labels stay readable on it (e.g. a
     // black accent flips on-accent text to white).
     wire_color(&buttons.accent, &state, &suppress, |t, hex| {
-        t.text_on_accent = contrast_on(&hex);
+        t.text_on_accent = metis_config::ThemeTokens::contrast_ink(&hex);
         set_accent(t, 0, hex);
     });
     wire_color(&buttons.accent2, &state, &suppress, |t, hex| {
@@ -158,7 +159,7 @@ pub fn build() -> gtk::Widget {
     wire_color(&buttons.text, &state, &suppress, |t, hex| t.text = hex);
 
     let (font_card, font_body) = ui::section_with_icon(&tr("Font"), "font-x-generic-symbolic");
-    let font_btn = gtk::FontDialogButton::new(Some(gtk::FontDialog::new()));
+    let font_btn = font_picker_button();
     {
         let st = state.borrow();
         let fam = st.tokens.font_family.trim();
@@ -326,7 +327,7 @@ fn set_accent(tokens: &mut metis_config::ThemeTokens, idx: usize, hex: String) {
 }
 
 fn wire_color<F>(
-    button: &gtk::ColorDialogButton,
+    button: &ColorSwatchButton,
     state: &Rc<RefCell<State>>,
     suppress: &Rc<Cell<bool>>,
     apply: F,
@@ -377,27 +378,6 @@ fn effective_name(mode: &ThemeMode) -> String {
                 .unwrap_or(true);
             if dark { "dark" } else { "light" }.to_string()
         }
-    }
-}
-
-/// Pick a readable text color (near-black or white) for content drawn on top of
-/// `hex`, using perceived luminance so dark accents get light text and vice versa.
-fn contrast_on(hex: &str) -> String {
-    let h = hex.trim_start_matches('#');
-    let (r, g, b) = if h.len() == 6 {
-        (
-            u8::from_str_radix(&h[0..2], 16).unwrap_or(0) as f32,
-            u8::from_str_radix(&h[2..4], 16).unwrap_or(0) as f32,
-            u8::from_str_radix(&h[4..6], 16).unwrap_or(0) as f32,
-        )
-    } else {
-        (0.0, 0.0, 0.0)
-    };
-    let luminance = 0.299 * r + 0.587 * g + 0.114 * b;
-    if luminance > 150.0 {
-        "#0a0e14".to_string()
-    } else {
-        "#ffffff".to_string()
     }
 }
 

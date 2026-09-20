@@ -27,8 +27,9 @@ list (Settings → Control Center to configure).
 
 ![Metis Control Center with CPU, memory, and process list](Screenshots/metis_control_center.png)
 
-**Settings** — grouped sidebar for display, appearance, connectivity, input, gaming,
-and system configuration.
+**Settings** — Home overview + mini sidebar (UI 2.0) for display, appearance,
+connectivity, input, gaming, and system configuration. Closing the window fully
+quits the app.
 
 ![Metis Settings control center](Screenshots/metis_settings.png)
 
@@ -203,12 +204,13 @@ Full walkthrough in the **[User Guide](docs/USER_GUIDE.md)**. The essentials:
   sends the focused window to the adjacent monitor.
 - **Scrolling layout** — toggle any workspace into a niri/PaperWM-style scrolling
   strip with `Super`+`\`; navigate with `Super`+arrows.
-- **Settings** — launch from the app launcher, or `metis-cmd settings`. Grouped
-  sidebar (Displays, Desktop, Connectivity, Input, System) with search. Pages
+- **Settings** — launch from the app launcher, or `metis-cmd settings`. **UI 2.0:**
+  Home overview + mini sidebar; category pages slide in; top-drop sheets for
+  pickers and confirmations. Closing the window fully quits the process. Pages
   include Display, Appearance, Background, Edge bar, Windows, **Desktop widgets**,
-  Metis Menu, Weather, Network, Calendars, Input, **Shortcuts** (read-only guide;
-  edit under Keyboard), Bluetooth, Printers, Power, Sound, **Gaming**,
-  **Control Center**, and **Remote access**.
+  Metis Menu, Weather, Network (incl. **DNS** / VPN), Calendars, Input,
+  **Shortcuts** (read-only guide; edit under Keyboard), Bluetooth, Printers,
+  Power, Sound, **Gaming**, **Control Center**, and **Remote access**.
 - **Gaming** — Settings → Gaming: graphics mode, health → Fix, guided **Run gaming
   setup** wizard (Steam / Vulkan / controllers / GameMode / NVIDIA consent),
   Flatpak optimize, Steam library path picker, Metis-owned MangoHud / Gamescope
@@ -262,7 +264,7 @@ Other files are created on demand:
 | ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `config.json`          | You change a preference            | Active theme (defaults to dark), graphics profile, onboarding state, briefing-on-login, XWayland mode |
 | `menu.json`            | You set launcher defaults / pins   | App launcher: terminal + file-manager choices (kitty preferred on auto-detect), pinned apps       |
-| `wallpaper.json`       | You pick a background              | Wallpaper picture / colour / gradient (+ per-output overrides)                                    |
+| `wallpaper.json`       | You pick a background              | Wallpaper picture / colour / gradient (+ per-output overrides). Settings → Background lists imports, Metis bundles, and system images under `/usr/share/backgrounds` |
 | `weather.json`         | You configure weather              | Bar weather: unit, auto-detect / IP-geolocation, saved locations                                  |
 | `desk.json`            | The compositor persists its layout | Compositor window-grid layout (app tiles)                                                         |
 | `desktop-widgets.json` | You enable Desktop widgets         | Wallpaper widgets: enable, edit mode, chrome, builtins + JSON extension instances                 |

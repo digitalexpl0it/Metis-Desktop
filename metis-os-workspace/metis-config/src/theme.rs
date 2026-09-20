@@ -170,6 +170,36 @@ impl ThemeTokens {
     pub fn bg_rgba(&self) -> String {
         rgba_from_hex(&self.bg, self.card_opacity)
     }
+
+    /// Near-black or white ink that stays readable on top of `hex` (WCAG-ish
+    /// luminance). Used for labels on solid accent fills (dropdown selection,
+    /// suggested-action buttons, etc.).
+    pub fn contrast_ink(hex: &str) -> String {
+        let h = hex.trim_start_matches('#');
+        let (r, g, b) = if h.len() == 6 {
+            (
+                u8::from_str_radix(&h[0..2], 16).unwrap_or(0) as f32,
+                u8::from_str_radix(&h[2..4], 16).unwrap_or(0) as f32,
+                u8::from_str_radix(&h[4..6], 16).unwrap_or(0) as f32,
+            )
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+        // Perceived luminance (0–255). Light accents (cyan, white, yellow) need
+        // dark ink; dark accents need white.
+        let luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+        if luminance > 150.0 {
+            "#0a0e14".to_string()
+        } else {
+            "#ffffff".to_string()
+        }
+    }
+
+    /// Ink colour for drawing on the primary accent, derived live from the
+    /// accent hex (ignores a stale `text_on_accent` in older theme files).
+    pub fn on_accent_ink(&self) -> String {
+        Self::contrast_ink(self.accent_primary())
+    }
 }
 
 /// Parse a `#rrggbb` string into a bare `r, g, b` triplet (for inlining into a

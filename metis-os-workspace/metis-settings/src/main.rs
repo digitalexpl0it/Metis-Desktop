@@ -2,12 +2,17 @@
 //! network, and calendars. Reads/writes the shared `~/.config/metis/*.json` via
 //! the `metis-config` crate; the running shell picks up changes through its file
 //! watchers (or an explicit `reload-*` runtime command).
+//!
+//! Settings UI 2.0: Home overview + mini sidebar + right-edge category sheets.
 
 mod apps;
 mod bluetooth;
+mod dialog;
 mod gaming;
 mod gtk_cb;
+mod home;
 mod i18n_gtk;
+mod motion;
 mod msauth;
 mod nav;
 mod net;
@@ -16,23 +21,16 @@ mod power;
 mod printers;
 mod remote;
 mod runtime;
+mod shell;
 mod sound;
 mod theme;
 mod ui;
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::time::Duration;
+use std::cell::RefCell;
 
 use gio::prelude::*;
-use gtk::glib;
-use gtk::prelude::*;
 
-use metis_i18n::tr;
-use nav::{NavHue, NAV};
-
-const SIDEBAR_WIDTH: i32 = 248;
-const APP_ICON_BYTES: &[u8] = include_bytes!("../../assets/metis-settings.png");
+pub(crate) const APP_ICON_BYTES: &[u8] = include_bytes!("../../assets/metis-settings.png");
 
 fn main() {
     tracing_subscriber::fmt()
@@ -43,15 +41,26 @@ fn main() {
         .init();
 
     metis_i18n::init();
+    eprintln!("metis-settings: ui=home-stack (no overlay)");
 
     // Prefer in-process file choosers so Import/Open dialogs follow Metis
     // light/dark (`gtk_application_prefer_dark_theme`). Portal FileChooser
     // (`xdg-desktop-portal-gtk`) often opens light Adwaita when gtk-theme is
     // plain "Adwaita". Honour an explicit override if the user set one.
+    //
+    // SAFETY: single-threaded before GTK init; no other threads read env yet.
     if std::env::var_os("GTK_USE_PORTAL").is_none() {
-        // SAFETY: single-threaded before GTK init; no other threads read env yet.
         unsafe {
             std::env::set_var("GTK_USE_PORTAL", "0");
+        }
+    }
+    if std::env::var_os("GSK_RENDERER").is_none() {
+        // Cairo avoids multi-second GL/Vulkan scroll stalls on hybrid NVIDIA
+        // (Windows / Display pages). Override with METIS_SETTINGS_GSK_RENDERER.
+        let renderer =
+            std::env::var("METIS_SETTINGS_GSK_RENDERER").unwrap_or_else(|_| "cairo".into());
+        unsafe {
+            std::env::set_var("GSK_RENDERER", renderer);
         }
     }
 
@@ -88,18 +97,18 @@ fn main() {
         let launch = PENDING_LAUNCH
             .with(|slot| slot.borrow_mut().take())
             .unwrap_or_default();
-        open_settings(app, launch, false);
+        shell::open(app, launch, false);
     });
 
     std::process::exit(app.run().into());
 }
 
 #[derive(Debug, Clone, Default)]
-struct PageLaunch {
-    /// Sidebar page id (`network`, `power`, …).
-    page: Option<String>,
+pub struct PageLaunch {
+    /// Settings page id (`network`, `power`, …).
+    pub page: Option<String>,
     /// Optional sub-tab within that page (`vpn` for Network).
-    tab: Option<String>,
+    pub tab: Option<String>,
 }
 
 fn launch_from_command_line(cmdline: &gio::ApplicationCommandLine) -> PageLaunch {
@@ -141,550 +150,6 @@ fn normalize_launch(raw: &str) -> PageLaunch {
 }
 
 thread_local! {
-    /// Kept across language Apply so we rebuild content in-place (no close/reopen).
-    static SETTINGS_WINDOW: RefCell<Option<gtk::ApplicationWindow>> = const { RefCell::new(None) };
     /// Pending `--page` from `command-line` until `activate` consumes it.
     static PENDING_LAUNCH: RefCell<Option<PageLaunch>> = const { RefCell::new(None) };
-    /// True after the first full chrome/page build (reuse path skips rebuild).
-    static UI_READY: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Open Settings once, or reuse the existing window (navigate + unminimize).
-fn open_settings(app: &gtk::Application, launch: PageLaunch, force_rebuild: bool) {
-    let window_alive = SETTINGS_WINDOW.with(|slot| slot.borrow().is_some());
-    if force_rebuild || !UI_READY.get() || !window_alive {
-        build_ui(app, launch);
-        UI_READY.set(true);
-    } else {
-        apply_launch(&launch);
-        present_settings_window();
-    }
-}
-
-fn apply_launch(launch: &PageLaunch) {
-    if let Some(page) = launch.page.as_deref() {
-        nav::request_page(page);
-        if page == "network" {
-            if let Some(tab) = launch.tab.as_deref() {
-                pages::network::request_tab(tab);
-            }
-        }
-    }
-}
-
-fn present_settings_window() {
-    SETTINGS_WINDOW.with(|slot| {
-        if let Some(window) = slot.borrow().as_ref() {
-            // Best-effort client hint; Metis still needs compositor ActivateWindow
-            // to restore a minimized tile (clients cannot unminimize on Wayland).
-            window.unminimize();
-            window.present();
-        }
-    });
-    runtime::activate_settings_window();
-}
-
-fn build_ui(app: &gtk::Application, launch: PageLaunch) {
-    // GTK is initialized by Application before activate — safe to set direction.
-    i18n_gtk::apply_gtk_direction();
-    theme::install();
-
-    let under_metis = std::env::var_os("METIS_SESSION").is_some();
-    let window = SETTINGS_WINDOW.with(|slot| {
-        if let Some(existing) = slot.borrow().as_ref() {
-            existing.set_title(Some(&tr("Settings")));
-            return existing.clone();
-        }
-        let window = gtk::ApplicationWindow::builder()
-            .application(app)
-            .title(tr("Settings"))
-            .default_width(960)
-            .default_height(680)
-            .decorated(!under_metis)
-            .build();
-        window.add_css_class("metis-settings-window");
-        window.connect_map(|win| {
-            apply_window_icon(win);
-        });
-        window.connect_close_request(|_| {
-            SETTINGS_WINDOW.with(|slot| {
-                *slot.borrow_mut() = None;
-            });
-            UI_READY.set(false);
-            glib::Propagation::Proceed
-        });
-        apply_window_icon(&window);
-        *slot.borrow_mut() = Some(window.clone());
-        window
-    });
-
-    let stack = gtk::Stack::new();
-    stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-    // Size to the visible page only — homogeneous stack min-width is the max of
-    // every page, which locks shrink after language Apply rebuilds all pages.
-    stack.set_hhomogeneous(false);
-    stack.set_vhomogeneous(false);
-    // Soft fade between sidebar pages. Skip when the user has animations off.
-    let fade_ms = if gtk::Settings::default().is_some_and(|s| s.is_gtk_enable_animations()) {
-        200
-    } else {
-        0
-    };
-    stack.set_transition_duration(fade_ms);
-    stack.set_hexpand(true);
-    stack.set_vexpand(true);
-
-    stack.add_titled(
-        &pages::appearance::build(),
-        Some("appearance"),
-        "Appearance",
-    );
-    stack.add_titled(
-        &pages::background::build(),
-        Some("background"),
-        "Background",
-    );
-    stack.add_titled(&pages::edgebar::build(), Some("edgebar"), "Edge bar");
-    stack.add_titled(
-        &pages::desktop_widgets::build(),
-        Some("desktop_widgets"),
-        "Desktop widgets",
-    );
-    stack.add_titled(&pages::windows::build(), Some("windows"), "Windows");
-    stack.add_titled(
-        &pages::titlebars::build(),
-        Some("titlebars"),
-        "App titlebars",
-    );
-    stack.add_titled(&pages::menu::build(), Some("menu"), "Metis Menu");
-    stack.add_titled(&pages::weather::build(), Some("weather"), "Weather");
-    stack.add_titled(
-        &pages::network::build(if launch.page.as_deref() == Some("network") {
-            launch.tab.as_deref()
-        } else {
-            None
-        }),
-        Some("network"),
-        "Network",
-    );
-    stack.add_titled(&pages::calendars::build(), Some("calendars"), "Calendars");
-    stack.add_titled(&pages::mouse::build(), Some("mouse"), "Mouse");
-    stack.add_titled(&pages::touchpad::build(), Some("touchpad"), "Touchpad");
-    stack.add_titled(&pages::keyboard::build(), Some("keyboard"), "Keyboard");
-    stack.add_titled(&pages::shortcuts::build(), Some("shortcuts"), "Shortcuts");
-    stack.add_titled(&pages::bluetooth::build(), Some("bluetooth"), "Bluetooth");
-    stack.add_titled(&pages::printers::build(), Some("printers"), "Printers");
-    stack.add_titled(
-        &pages::screenshot::build(),
-        Some("screenshot"),
-        "Screenshot",
-    );
-    stack.add_titled(
-        &pages::control_center::build(),
-        Some("control_center"),
-        "Control Center",
-    );
-    stack.add_titled(&pages::sound::build(), Some("sound"), "Sound");
-    stack.add_titled(&pages::power::build(), Some("power"), "Power");
-    stack.add_titled(&pages::locale::build(), Some("locale"), "Language & region");
-    stack.add_titled(&pages::startup::build(), Some("startup"), "Startup");
-    stack.add_titled(
-        &pages::remote::build(window.upcast_ref()),
-        Some("remote"),
-        "Remote access",
-    );
-    stack.add_titled(&pages::gaming::build(), Some("gaming"), "Gaming");
-    stack.add_titled(
-        &pages::display::build(window.upcast_ref()),
-        Some("display"),
-        "Display",
-    );
-
-    let nav = gtk::ListBox::new();
-    nav.add_css_class("metis-settings-nav");
-    nav.set_selection_mode(gtk::SelectionMode::Single);
-    for item in NAV {
-        let title = tr(item.title);
-        let row = if let Some(icon) = item.icon {
-            build_nav_row(&title, icon, item.hue)
-        } else {
-            let label = gtk::Label::new(Some(&title));
-            label.set_xalign(0.0);
-            label.add_css_class("metis-settings-nav-section");
-            let row = gtk::ListBoxRow::new();
-            row.add_css_class("metis-settings-nav-section-row");
-            row.set_selectable(false);
-            row.set_activatable(false);
-            row.set_child(Some(&label));
-            row
-        };
-        nav.append(&row);
-    }
-
-    let selecting = Rc::new(Cell::new(false));
-    let last_query = Rc::new(RefCell::new(String::new()));
-    let pending_query = Rc::new(RefCell::new(String::new()));
-    let filter_debounce = Rc::new(RefCell::new(None::<glib::SourceId>));
-
-    {
-        let stack = stack.clone();
-        let selecting = selecting.clone();
-        nav.connect_row_selected(move |list, row| {
-            if selecting.get() {
-                return;
-            }
-            let Some(row) = row else {
-                return;
-            };
-            let index = row.index() as usize;
-            let Some(item) = NAV.get(index) else {
-                return;
-            };
-            if let Some(id) = item.page_id {
-                if stack.visible_child_name().as_deref() != Some(id) {
-                    stack.set_visible_child_name(id);
-                }
-            } else if let Some(next) = list.row_at_index(row.index() + 1) {
-                selecting.set(true);
-                list.select_row(Some(&next));
-                selecting.set(false);
-            }
-        });
-    }
-
-    {
-        let nav = nav.clone();
-        let stack = stack.clone();
-        nav::set_page_request_handler(Rc::new(move |page_id: &str| {
-            let Some(index) = NAV.iter().position(|item| item.page_id == Some(page_id)) else {
-                return;
-            };
-            if let Some(id) = NAV[index].page_id {
-                if stack.visible_child_name().as_deref() != Some(id) {
-                    stack.set_visible_child_name(id);
-                }
-            }
-            if let Some(row) = nav.row_at_index(index as i32) {
-                nav.select_row(Some(&row));
-            }
-        }));
-    }
-
-    let nav_scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .vexpand(true)
-        .hexpand(true)
-        .overlay_scrolling(false)
-        .child(&nav)
-        .build();
-    nav_scroll.add_css_class("metis-settings-nav-scroll");
-    nav_scroll.set_kinetic_scrolling(false);
-    ui::wire_vertical_scroll(&nav_scroll);
-
-    let search = gtk::Entry::builder()
-        .placeholder_text(tr("Search"))
-        .hexpand(true)
-        .build();
-    search.add_css_class("metis-settings-search");
-    search.set_margin_start(14);
-    search.set_margin_end(14);
-    search.set_margin_bottom(8);
-
-    // Held backspace on an empty field still generates key-repeat events that can
-    // bubble to the sidebar list and flood the main loop — swallow them here.
-    {
-        let search_key = search.clone();
-        let key = gtk::EventControllerKey::new();
-        key.connect_key_pressed(move |_, key, _, _| {
-            if key == gtk::gdk::Key::BackSpace && search_key.text().is_empty() {
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
-        });
-        search.add_controller(key);
-    }
-
-    {
-        let nav = nav.clone();
-        let stack = stack.clone();
-        let selecting = selecting.clone();
-        let last_query = last_query.clone();
-        let pending_query = pending_query.clone();
-        let filter_debounce = filter_debounce.clone();
-        search.connect_changed(move |entry| {
-            *pending_query.borrow_mut() = entry.text().trim().to_ascii_lowercase();
-            schedule_nav_filter(
-                &nav,
-                &stack,
-                &selecting,
-                &last_query,
-                &pending_query,
-                &filter_debounce,
-            );
-        });
-    }
-
-    {
-        let nav = nav.clone();
-        let stack = stack.clone();
-        let selecting = selecting.clone();
-        let last_query = last_query.clone();
-        let pending_query = pending_query.clone();
-        let filter_debounce = filter_debounce.clone();
-        let search_key = search.clone();
-        let key = gtk::EventControllerKey::new();
-        key.connect_key_released(move |_, key, _, _| {
-            if key == gtk::gdk::Key::BackSpace || key == gtk::gdk::Key::Delete {
-                *pending_query.borrow_mut() = search_key.text().trim().to_ascii_lowercase();
-                flush_nav_filter(
-                    &nav,
-                    &stack,
-                    &selecting,
-                    &last_query,
-                    &pending_query,
-                    &filter_debounce,
-                );
-            }
-        });
-        search.add_controller(key);
-    }
-
-    let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    sidebar.add_css_class("metis-settings-sidebar");
-    sidebar.set_size_request(SIDEBAR_WIDTH, -1);
-    sidebar.set_hexpand(false);
-    sidebar.set_halign(gtk::Align::Start);
-    sidebar.set_vexpand(true);
-
-    let sidebar_title = gtk::Label::new(Some(&tr("Settings")));
-    sidebar_title.set_xalign(0.0);
-    sidebar_title.add_css_class("metis-settings-sidebar-title");
-    sidebar_title.set_hexpand(true);
-
-    let title_row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(10)
-        .margin_top(18)
-        .margin_bottom(10)
-        .margin_start(20)
-        .margin_end(16)
-        .build();
-    if let Some(icon) = load_app_icon() {
-        let title_icon = gtk::Image::new();
-        title_icon.set_paintable(Some(&icon));
-        title_icon.set_pixel_size(28);
-        title_icon.add_css_class("metis-settings-sidebar-icon");
-        title_row.append(&title_icon);
-    }
-    title_row.append(&sidebar_title);
-    sidebar.append(&title_row);
-    sidebar.append(&search);
-    sidebar.append(&nav_scroll);
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.add_css_class("metis-settings-content");
-    content.set_hexpand(true);
-    content.set_halign(gtk::Align::Fill);
-    content.set_vexpand(true);
-    content.append(&stack);
-
-    let layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    layout.append(&sidebar);
-    layout.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-    layout.append(&content);
-    layout.add_css_class("metis-settings-root");
-
-    let initial_row = launch
-        .page
-        .as_deref()
-        .and_then(|p| NAV.iter().position(|item| item.page_id == Some(p)))
-        .unwrap_or(1);
-    if let Some(row) = nav.row_at_index(initial_row as i32) {
-        nav.select_row(Some(&row));
-    }
-
-    // Swap content on the same window — language Apply must not close/reopen.
-    // Preserve the user's current size so rebuild does not grow the default and
-    // so wrapped labels cannot permanently raise the floor.
-    let (prev_w, prev_h) = (window.default_size().0, window.default_size().1);
-    let mapped_w = window.width();
-    let mapped_h = window.height();
-    window.set_child(Some(&layout));
-    let keep_w = if mapped_w > 1 {
-        mapped_w
-    } else if prev_w > 0 {
-        prev_w
-    } else {
-        960
-    };
-    let keep_h = if mapped_h > 1 {
-        mapped_h
-    } else if prev_h > 0 {
-        prev_h
-    } else {
-        680
-    };
-    window.set_default_size(keep_w, keep_h);
-    present_settings_window();
-
-    // Live Language & region Apply rebuilds chrome/pages with fresh `tr()` labels.
-    {
-        let app = app.clone();
-        i18n_gtk::register_ui_rebuild(Rc::new(move |page_id| {
-            open_settings(
-                &app,
-                PageLaunch {
-                    page: Some(page_id),
-                    tab: None,
-                },
-                true,
-            );
-        }));
-    }
-}
-
-fn load_app_icon() -> Option<gtk::gdk::Texture> {
-    let bytes = glib::Bytes::from_static(APP_ICON_BYTES);
-    match gtk::gdk::Texture::from_bytes(&bytes) {
-        Ok(texture) => Some(texture),
-        Err(err) => {
-            tracing::warn!(%err, "failed to decode embedded settings icon");
-            None
-        }
-    }
-}
-
-fn apply_window_icon(window: &gtk::ApplicationWindow) {
-    if let Some(texture) = load_app_icon() {
-        if let Some(surface) = window.surface() {
-            if let Some(toplevel) = surface.downcast_ref::<gtk::gdk::Toplevel>() {
-                toplevel.set_icon_list(&[texture]);
-                return;
-            }
-        }
-    }
-    window.set_icon_name(Some("metis-settings"));
-}
-
-const FILTER_DEBOUNCE_MS: u64 = 16;
-
-fn schedule_nav_filter(
-    nav: &gtk::ListBox,
-    stack: &gtk::Stack,
-    selecting: &Rc<Cell<bool>>,
-    last_query: &Rc<RefCell<String>>,
-    pending_query: &Rc<RefCell<String>>,
-    debounce: &Rc<RefCell<Option<glib::SourceId>>>,
-) {
-    let mut slot = debounce.borrow_mut();
-    if let Some(id) = slot.take() {
-        id.remove();
-    }
-    let nav = nav.clone();
-    let stack = stack.clone();
-    let selecting = selecting.clone();
-    let last_query = last_query.clone();
-    let pending_query = pending_query.clone();
-    let debounce = debounce.clone();
-    let id = glib::timeout_add_local(Duration::from_millis(FILTER_DEBOUNCE_MS), move || {
-        *debounce.borrow_mut() = None;
-        let query = pending_query.borrow().clone();
-        if *last_query.borrow() == query {
-            return glib::ControlFlow::Break;
-        }
-        *last_query.borrow_mut() = query.clone();
-        apply_nav_filter(&nav, &query, &selecting, &stack);
-        glib::ControlFlow::Break
-    });
-    *slot = Some(id);
-}
-
-fn flush_nav_filter(
-    nav: &gtk::ListBox,
-    stack: &gtk::Stack,
-    selecting: &Rc<Cell<bool>>,
-    last_query: &Rc<RefCell<String>>,
-    pending_query: &Rc<RefCell<String>>,
-    debounce: &Rc<RefCell<Option<glib::SourceId>>>,
-) {
-    if let Some(id) = debounce.borrow_mut().take() {
-        id.remove();
-    }
-    let query = pending_query.borrow().clone();
-    if *last_query.borrow() == query {
-        return;
-    }
-    *last_query.borrow_mut() = query.clone();
-    apply_nav_filter(nav, &query, selecting, stack);
-}
-
-/// Apply sidebar search by toggling row visibility (avoids ListBox filter/selection loops).
-fn apply_nav_filter(nav: &gtk::ListBox, query: &str, selecting: &Cell<bool>, stack: &gtk::Stack) {
-    selecting.set(true);
-
-    let mut first_visible_page: Option<usize> = None;
-
-    for (index, _item) in NAV.iter().enumerate() {
-        let Some(row) = nav.row_at_index(index as i32) else {
-            continue;
-        };
-        let visible = nav::row_visible_for_search(index, query);
-        if row.is_visible() != visible {
-            row.set_visible(visible);
-        }
-        if visible && NAV[index].page_id.is_some() && first_visible_page.is_none() {
-            first_visible_page = Some(index);
-        }
-    }
-
-    if let Some(selected) = nav.selected_row() {
-        if !selected.is_visible() {
-            if let Some(idx) = first_visible_page {
-                if let Some(row) = nav.row_at_index(idx as i32) {
-                    nav.select_row(Some(&row));
-                    if let Some(id) = NAV[idx].page_id {
-                        if stack.visible_child_name().as_deref() != Some(id) {
-                            stack.set_visible_child_name(id);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    selecting.set(false);
-}
-
-fn build_nav_row(title: &str, icon: &str, hue: Option<NavHue>) -> gtk::ListBoxRow {
-    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    row_box.add_css_class("metis-settings-nav-row-inner");
-
-    // Sized via CSS padding so the symbolic icon stays optically centered in the badge.
-    let icon_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    icon_wrap.set_valign(gtk::Align::Center);
-    icon_wrap.add_css_class("metis-settings-nav-icon-wrap");
-    if let Some(hue) = hue {
-        icon_wrap.add_css_class(hue.css_class());
-    } else {
-        icon_wrap.add_css_class(NavHue::Gray.css_class());
-    }
-    let img = gtk::Image::from_icon_name(icon);
-    img.set_pixel_size(16);
-    img.set_halign(gtk::Align::Center);
-    img.set_valign(gtk::Align::Center);
-    img.add_css_class("metis-settings-nav-icon");
-    icon_wrap.append(&img);
-    row_box.append(&icon_wrap);
-
-    let label = gtk::Label::new(Some(title));
-    label.set_xalign(0.0);
-    label.set_hexpand(true);
-    label.add_css_class("metis-settings-nav-label");
-    row_box.append(&label);
-
-    let row = gtk::ListBoxRow::new();
-    row.add_css_class("metis-settings-nav-row");
-    row.set_child(Some(&row_box));
-    row
 }

@@ -3,18 +3,31 @@
 //! output is connected. The compositor applies changes live via `ApplyBackground`
 //! and re-reads `wallpaper.json` on next start.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::time::Duration;
 
+use gtk::gdk;
+use gtk::gdk_pixbuf;
 use gtk::gio;
+use gtk::glib;
 use gtk::prelude::*;
 
 use crate::pages::appearance_common::{
-    color_dialog_button, current_wallpaper, hex_to_rgba, list_wallpapers, rgba_to_hex,
+    color_dialog_button, current_wallpaper, hex_to_rgba, list_wallpaper_sections, rgba_to_hex,
+    WallpaperSection,
 };
 use crate::{runtime, ui};
 use metis_i18n::tr;
+
+/// Thumbs per page — keeps Settings responsive when dozens of system
+/// wallpapers are available (full-res decode of every image was the stall).
+const WALLPAPER_PAGE_SIZE: usize = 9;
+const THUMB_W: i32 = 300;
+const THUMB_H: i32 = 184;
 
 pub fn build() -> gtk::Widget {
     let (scroller, content) = ui::page_for("background");
@@ -55,17 +68,13 @@ pub fn build() -> gtk::Widget {
     add_row.append(&add_btn);
     picture_box.append(&add_row);
 
-    let flow = gtk::FlowBox::new();
-    flow.set_selection_mode(gtk::SelectionMode::None);
-    flow.set_max_children_per_line(3);
-    flow.set_min_children_per_line(2);
-    flow.set_column_spacing(12);
-    flow.set_row_spacing(12);
-    flow.set_homogeneous(true);
-    flow.add_css_class("metis-wallpaper-grid");
-    picture_box.append(&flow);
+    let gallery = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    gallery.add_css_class("metis-wallpaper-gallery");
+    picture_box.append(&gallery);
     bg_body.append(&picture_box);
-    populate_wallpapers(&flow, current_wp.as_deref(), &bgcfg);
+    let browser = WallpaperBrowser::new(gallery, bgcfg.clone(), current_wp.as_deref());
+    browser.render();
+
 
     // -- Solid colour controls --
     let solid_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -274,15 +283,15 @@ pub fn build() -> gtk::Widget {
     }
     // Add Picture… → import + select.
     {
-        let flow = flow.clone();
+        let browser = browser.clone();
         let bgcfg = bgcfg.clone();
         add_btn.connect_clicked(move |btn| {
-            let flow = flow.clone();
+            let browser = browser.clone();
             let bgcfg = bgcfg.clone();
             let root = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok());
             pick_picture(root.as_ref(), move |path| {
                 select_picture(&bgcfg, &path);
-                populate_wallpapers(&flow, Some(&path), &bgcfg);
+                browser.reload(Some(&path));
             });
         });
     }
@@ -608,45 +617,408 @@ fn build_lock_card() -> gtk::Widget {
 
 // ---- Wallpaper discovery + selection --------------------------------------
 
-fn populate_wallpapers(
-    flow: &gtk::FlowBox,
-    selected: Option<&Path>,
-    bgcfg: &Rc<RefCell<metis_config::WallpaperConfig>>,
-) {
-    while let Some(child) = flow.first_child() {
-        flow.remove(&child);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WallpaperFilter {
+    All,
+    Section(WallpaperSection),
+}
+
+struct WallpaperBrowser {
+    root: gtk::Box,
+    bgcfg: Rc<RefCell<metis_config::WallpaperConfig>>,
+    /// Flat catalogue: (section, path). Rebuilt on import / explicit reload.
+    items: RefCell<Vec<(WallpaperSection, PathBuf)>>,
+    filter: Cell<WallpaperFilter>,
+    page: Cell<usize>,
+    selected: RefCell<Option<PathBuf>>,
+    /// Decoded thumb textures — revisiting a page is instant.
+    thumb_cache: RefCell<HashMap<PathBuf, gdk::Texture>>,
+    /// Pictures/spinners for the page currently on screen (filled by async loads).
+    page_widgets: RefCell<HashMap<PathBuf, (gtk::Picture, gtk::Spinner)>>,
+    /// Bumped on every `render` so in-flight decodes for a stale page are dropped.
+    load_gen: Cell<u64>,
+    /// Worker → UI: decoded PNG thumbs (path, png bytes, render generation).
+    thumb_tx: mpsc::Sender<(PathBuf, Vec<u8>, u64)>,
+    thumb_rx: RefCell<mpsc::Receiver<(PathBuf, Vec<u8>, u64)>>,
+}
+
+impl WallpaperBrowser {
+    fn new(
+        root: gtk::Box,
+        bgcfg: Rc<RefCell<metis_config::WallpaperConfig>>,
+        selected: Option<&Path>,
+    ) -> Rc<Self> {
+        let (thumb_tx, thumb_rx) = mpsc::channel();
+        let this = Rc::new(Self {
+            root,
+            bgcfg,
+            items: RefCell::new(Vec::new()),
+            filter: Cell::new(WallpaperFilter::All),
+            page: Cell::new(0),
+            selected: RefCell::new(selected.map(|p| p.to_path_buf())),
+            thumb_cache: RefCell::new(HashMap::new()),
+            page_widgets: RefCell::new(HashMap::new()),
+            load_gen: Cell::new(0),
+            thumb_tx,
+            thumb_rx: RefCell::new(thumb_rx),
+        });
+        this.rescan();
+        {
+            let weak = Rc::downgrade(&this);
+            glib::timeout_add_local(Duration::from_millis(16), move || {
+                let Some(this) = weak.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
+                this.drain_loaded_thumbs();
+                glib::ControlFlow::Continue
+            });
+        }
+        this
     }
-    let selected_canon = selected.and_then(|p| p.canonicalize().ok());
-    for path in list_wallpapers() {
-        let is_selected = path
-            .canonicalize()
-            .ok()
-            .zip(selected_canon.clone())
-            .map(|(a, b)| a == b)
-            .unwrap_or(false);
-        flow.insert(&wallpaper_thumb(&path, is_selected, flow, bgcfg), -1);
+
+    fn rescan(self: &Rc<Self>) {
+        let mut items = Vec::new();
+        for (section, paths) in list_wallpaper_sections() {
+            for path in paths {
+                items.push((section, path));
+            }
+        }
+        *self.items.borrow_mut() = items;
+        self.ensure_page_for_selection();
+    }
+
+    fn reload(self: &Rc<Self>, selected: Option<&Path>) {
+        if let Some(path) = selected {
+            *self.selected.borrow_mut() = Some(path.to_path_buf());
+        }
+        self.rescan();
+        self.render();
+    }
+
+    fn filtered(&self) -> Vec<(WallpaperSection, PathBuf)> {
+        let filter = self.filter.get();
+        self.items
+            .borrow()
+            .iter()
+            .filter(|(section, _)| match filter {
+                WallpaperFilter::All => true,
+                WallpaperFilter::Section(want) => *section == want,
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn ensure_page_for_selection(&self) {
+        let selected = self.selected.borrow().clone();
+        let Some(selected) = selected else {
+            self.page.set(0);
+            return;
+        };
+        let selected_canon = selected.canonicalize().ok();
+        let filtered = self.filtered();
+        let idx = filtered.iter().position(|(_, p)| {
+            p.canonicalize()
+                .ok()
+                .zip(selected_canon.clone())
+                .map(|(a, b)| a == b)
+                .unwrap_or_else(|| p == &selected)
+        });
+        if let Some(idx) = idx {
+            self.page.set(idx / WALLPAPER_PAGE_SIZE);
+        } else {
+            self.page.set(0);
+        }
+    }
+
+    fn available_filters(&self) -> Vec<WallpaperFilter> {
+        let mut out = vec![WallpaperFilter::All];
+        let mut seen = [false; 3];
+        for (section, _) in self.items.borrow().iter() {
+            let i = match section {
+                WallpaperSection::User => 0,
+                WallpaperSection::Metis => 1,
+                WallpaperSection::System => 2,
+            };
+            if !seen[i] {
+                seen[i] = true;
+                out.push(WallpaperFilter::Section(*section));
+            }
+        }
+        out
+    }
+
+    fn render(self: &Rc<Self>) {
+        while let Some(child) = self.root.first_child() {
+            self.root.remove(&child);
+        }
+        self.page_widgets.borrow_mut().clear();
+        let gen = self.load_gen.get().wrapping_add(1);
+        self.load_gen.set(gen);
+
+        let filters = self.available_filters();
+        if filters.len() > 2 {
+            // Only show the filter strip when there is more than one real source.
+            let filter_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            filter_row.add_css_class("metis-wallpaper-filters");
+            let group = gtk::ToggleButton::new(); // radio group anchor (hidden)
+            group.set_visible(false);
+            filter_row.append(&group);
+            for filter in filters {
+                let label = match filter {
+                    WallpaperFilter::All => tr("All"),
+                    WallpaperFilter::Section(s) => s.title(),
+                };
+                let btn = gtk::ToggleButton::with_label(&label);
+                btn.add_css_class("flat");
+                btn.add_css_class("metis-settings-secondary");
+                btn.set_group(Some(&group));
+                {
+                    let this = self.clone();
+                    btn.connect_toggled(move |b| {
+                        if !b.is_active() || this.filter.get() == filter {
+                            return;
+                        }
+                        this.filter.set(filter);
+                        this.page.set(0);
+                        this.ensure_page_for_selection();
+                        this.render();
+                    });
+                }
+                if self.filter.get() == filter {
+                    btn.set_active(true);
+                }
+                filter_row.append(&btn);
+            }
+            self.root.append(&filter_row);
+        }
+
+        let filtered = self.filtered();
+        let total = filtered.len();
+        let pages = total.div_ceil(WALLPAPER_PAGE_SIZE).max(1);
+        let page = self.page.get().min(pages - 1);
+        self.page.set(page);
+
+        let start = page * WALLPAPER_PAGE_SIZE;
+        let end = (start + WALLPAPER_PAGE_SIZE).min(total);
+        let page_items: Vec<(WallpaperSection, PathBuf)> = if start < total {
+            filtered[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        let selected = self.selected.borrow().clone();
+        let selected_canon = selected.as_ref().and_then(|p| p.canonicalize().ok());
+
+        let flow = gtk::FlowBox::new();
+        flow.set_selection_mode(gtk::SelectionMode::None);
+        flow.set_max_children_per_line(3);
+        flow.set_min_children_per_line(2);
+        flow.set_column_spacing(12);
+        flow.set_row_spacing(12);
+        flow.set_homogeneous(true);
+        flow.add_css_class("metis-wallpaper-grid");
+
+        let show_section =
+            matches!(self.filter.get(), WallpaperFilter::All) && self.available_filters().len() > 2;
+        let mut pending = Vec::new();
+        for (section, path) in &page_items {
+            let is_selected = path
+                .canonicalize()
+                .ok()
+                .zip(selected_canon.clone())
+                .map(|(a, b)| a == b)
+                .unwrap_or(false);
+            let (thumb, needs_load) =
+                wallpaper_thumb(self, path, *section, is_selected, show_section);
+            flow.insert(&thumb, -1);
+            if needs_load {
+                pending.push(path.clone());
+            }
+        }
+        self.root.append(&flow);
+
+        for path in pending {
+            self.queue_thumb_load(path, gen);
+        }
+        self.preload_adjacent(page, pages, &filtered, gen);
+
+        if total == 0 {
+            let empty = gtk::Label::new(Some(&tr("No pictures found. Add one above.")));
+            empty.set_xalign(0.0);
+            empty.add_css_class("metis-settings-hint");
+            self.root.append(&empty);
+            return;
+        }
+
+        if pages > 1 {
+            let nav = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            nav.add_css_class("metis-wallpaper-pager");
+            nav.set_halign(gtk::Align::Center);
+
+            let prev = gtk::Button::from_icon_name("go-previous-symbolic");
+            prev.add_css_class("flat");
+            prev.set_sensitive(page > 0);
+            prev.set_tooltip_text(Some(&tr("Previous page")));
+
+            let status = gtk::Label::new(Some(&format!("{}–{} of {}", start + 1, end, total)));
+            status.add_css_class("metis-settings-hint");
+            status.set_width_chars(14);
+            status.set_halign(gtk::Align::Center);
+
+            let next = gtk::Button::from_icon_name("go-next-symbolic");
+            next.add_css_class("flat");
+            next.set_sensitive(page + 1 < pages);
+            next.set_tooltip_text(Some(&tr("Next page")));
+
+            {
+                let this = self.clone();
+                prev.connect_clicked(move |_| {
+                    let p = this.page.get();
+                    if p > 0 {
+                        this.page.set(p - 1);
+                        this.render();
+                    }
+                });
+            }
+            {
+                let this = self.clone();
+                next.connect_clicked(move |_| {
+                    let p = this.page.get();
+                    if p + 1 < pages {
+                        this.page.set(p + 1);
+                        this.render();
+                    }
+                });
+            }
+
+            nav.append(&prev);
+            nav.append(&status);
+            nav.append(&next);
+            self.root.append(&nav);
+        }
+    }
+
+    fn queue_thumb_load(self: &Rc<Self>, path: PathBuf, gen: u64) {
+        if self.thumb_cache.borrow().contains_key(&path) {
+            self.apply_thumb(&path);
+            return;
+        }
+        let tx = self.thumb_tx.clone();
+        std::thread::spawn(move || {
+            if let Ok(png) = decode_thumb_png(&path) {
+                let _ = tx.send((path, png, gen));
+            }
+        });
+    }
+
+    fn drain_loaded_thumbs(&self) {
+        loop {
+            let next = self.thumb_rx.borrow().try_recv();
+            let Ok((path, png, gen)) = next else {
+                break;
+            };
+            let bytes = glib::Bytes::from_owned(png);
+            let Ok(texture) = gdk::Texture::from_bytes(&bytes) else {
+                continue;
+            };
+            self.thumb_cache
+                .borrow_mut()
+                .insert(path.clone(), texture);
+            if self.load_gen.get() == gen {
+                self.apply_thumb(&path);
+            }
+        }
+    }
+
+    fn apply_thumb(&self, path: &Path) {
+        let cache = self.thumb_cache.borrow();
+        let Some(texture) = cache.get(path) else {
+            return;
+        };
+        let widgets = self.page_widgets.borrow();
+        let Some((pic, spinner)) = widgets.get(path) else {
+            return;
+        };
+        pic.set_paintable(Some(texture));
+        spinner.set_visible(false);
+        spinner.stop();
+    }
+
+    fn preload_adjacent(
+        self: &Rc<Self>,
+        page: usize,
+        pages: usize,
+        filtered: &[(WallpaperSection, PathBuf)],
+        gen: u64,
+    ) {
+        let mut warm = Vec::new();
+        for adj in [page.checked_sub(1), Some(page + 1)].into_iter().flatten() {
+            if adj >= pages {
+                continue;
+            }
+            let start = adj * WALLPAPER_PAGE_SIZE;
+            let end = (start + WALLPAPER_PAGE_SIZE).min(filtered.len());
+            if start >= filtered.len() {
+                continue;
+            }
+            for (_, path) in &filtered[start..end] {
+                if !self.thumb_cache.borrow().contains_key(path) {
+                    warm.push(path.clone());
+                }
+            }
+        }
+        for path in warm {
+            self.queue_thumb_load(path, gen);
+        }
     }
 }
 
+fn decode_thumb_png(path: &Path) -> Result<Vec<u8>, ()> {
+    let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(path, THUMB_W, THUMB_H, true)
+        .map_err(|_| ())?;
+    pixbuf.save_to_bufferv("png", &[]).map_err(|_| ())
+}
+
 fn wallpaper_thumb(
+    browser: &Rc<WallpaperBrowser>,
     path: &Path,
+    section: WallpaperSection,
     selected: bool,
-    flow: &gtk::FlowBox,
-    bgcfg: &Rc<RefCell<metis_config::WallpaperConfig>>,
-) -> gtk::Widget {
+    show_section: bool,
+) -> (gtk::Widget, bool) {
     let btn = gtk::Button::new();
     btn.add_css_class("metis-wallpaper-thumb");
     btn.add_css_class("flat");
     if selected {
         btn.add_css_class("selected");
     }
+    if show_section {
+        btn.set_tooltip_text(Some(&section.title()));
+    }
 
     let overlay = gtk::Overlay::new();
-    let pic = gtk::Picture::for_filename(path);
+    let pic = gtk::Picture::new();
     pic.set_content_fit(gtk::ContentFit::Cover);
     pic.set_size_request(150, 92);
     pic.add_css_class("metis-wallpaper-image");
     overlay.set_child(Some(&pic));
+
+    let spinner = gtk::Spinner::new();
+    spinner.add_css_class("metis-wallpaper-thumb-spinner");
+    spinner.set_halign(gtk::Align::Center);
+    spinner.set_valign(gtk::Align::Center);
+    spinner.set_size_request(28, 28);
+    overlay.add_overlay(&spinner);
+
+    let mut needs_load = true;
+    if let Some(texture) = browser.thumb_cache.borrow().get(path) {
+        pic.set_paintable(Some(texture));
+        spinner.set_visible(false);
+        needs_load = false;
+    } else {
+        spinner.set_visible(true);
+        spinner.start();
+    }
 
     if selected {
         let check = gtk::Image::from_icon_name("emblem-ok-symbolic");
@@ -659,16 +1031,22 @@ fn wallpaper_thumb(
     }
     btn.set_child(Some(&overlay));
 
+    browser
+        .page_widgets
+        .borrow_mut()
+        .insert(path.to_path_buf(), (pic, spinner));
+
     {
         let path = path.to_path_buf();
-        let flow = flow.clone();
-        let bgcfg = bgcfg.clone();
+        let browser = browser.clone();
+        let bgcfg = browser.bgcfg.clone();
         btn.connect_clicked(move |_| {
             select_picture(&bgcfg, &path);
-            populate_wallpapers(&flow, Some(&path), &bgcfg);
+            *browser.selected.borrow_mut() = Some(path.clone());
+            browser.render();
         });
     }
-    btn.upcast()
+    (btn.upcast(), needs_load)
 }
 
 /// Switch the background to the given picture (preserving solid/gradient fields)

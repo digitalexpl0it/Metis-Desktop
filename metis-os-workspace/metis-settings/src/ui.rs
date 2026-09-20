@@ -136,6 +136,13 @@ pub fn page(header: PageHeader<'_>) -> (gtk::ScrolledWindow, gtk::Box) {
     wire_vertical_scroll(&scroller);
     scroller.add_css_class("metis-settings-scroller");
     wire_click_to_defocus(&content);
+    // After the page is filled and mapped, forward wheel on scales/spins/dropdowns
+    // so scrolling never gets stuck changing a control under the pointer.
+    scroller.connect_map(|sw| {
+        if let Some(child) = sw.child() {
+            install_range_wheel_forwards(&child);
+        }
+    });
     (scroller, content)
 }
 
@@ -183,8 +190,41 @@ fn wire_click_to_defocus(content: &gtk::Box) {
     content.add_controller(click);
 }
 
-/// Drive vertical scrolling from wheel events — re-exported for the sidebar scroller.
+/// `ScrolledWindow:kinetic-scrolling` only disables *touchscreen* kinetic
+/// scrolling. GTK 4.22 still sets `KINETIC` on its built-in touchpad
+/// `EventControllerScroll`s, which schedules overshoot→deceleration and feels
+/// like the page "locks up, then catches up".
+fn strip_touchpad_kinetic(scroller: &gtk::ScrolledWindow) {
+    let model = scroller.observe_controllers();
+    for i in 0..model.n_items() {
+        let Some(obj) = model.item(i) else {
+            continue;
+        };
+        let Ok(scroll) = obj.downcast::<gtk::EventControllerScroll>() else {
+            continue;
+        };
+        let flags = scroll.flags();
+        if flags.contains(gtk::EventControllerScrollFlags::KINETIC) {
+            scroll.set_flags(flags - gtk::EventControllerScrollFlags::KINETIC);
+        }
+    }
+}
+
+/// Drive vertical scrolling from wheel/touchpad events.
+///
+/// Capture-phase on the `ScrolledWindow` only (not its child). Attaching to the
+/// content box steals events from nested scrollers (Titlebars ListView, dialog
+/// lists, …) and makes those pages feel stuck. Always `Stop` once *this*
+/// scroller can scroll — including at clamp edges — so GTK 4.22 cannot schedule
+/// its overshoot→deceleration hitch.
+///
+/// Adjustment updates are applied immediately (not deferred to idle): coalescing
+/// behind `idle_add` made scroll look frozen whenever the main loop was busy
+/// (Display IPC poll, GL frame stalls), then “unlock” seconds later.
 pub fn wire_vertical_scroll(scroller: &gtk::ScrolledWindow) {
+    scroller.set_kinetic_scrolling(false);
+    strip_touchpad_kinetic(scroller);
+
     let ctrl = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
     let vadj = scroller.vadjustment();
@@ -192,8 +232,13 @@ pub fn wire_vertical_scroll(scroller: &gtk::ScrolledWindow) {
         let page = vadj.page_size();
         let upper = vadj.upper();
         let lower = vadj.lower();
+        // Non-scrolling wrapper (e.g. Titlebars outer page): let nested
+        // scrollers / children handle the event — including zero-delta ends.
         if upper - lower <= page {
             return glib::Propagation::Proceed;
+        }
+        if dy.abs() < f64::EPSILON {
+            return glib::Propagation::Stop;
         }
         // Discrete wheel notches report ±1; smooth trackpads report pixel deltas.
         let delta = if dy.abs() <= 3.0 {
@@ -205,17 +250,42 @@ pub fn wire_vertical_scroll(scroller: &gtk::ScrolledWindow) {
         let new_val = (vadj.value() + delta).clamp(lower, max);
         if (new_val - vadj.value()).abs() > f64::EPSILON {
             vadj.set_value(new_val);
-            return glib::Propagation::Stop;
         }
-        glib::Propagation::Proceed
+        glib::Propagation::Stop
     });
     scroller.add_controller(ctrl);
+
+    // GTK may recreate scroll controllers around map; strip kinetic again.
+    scroller.connect_map(|sw| {
+        sw.set_kinetic_scrolling(false);
+        strip_touchpad_kinetic(sw);
+    });
+
+    scroller.connect_edge_overshot(move |sw, _pos| {
+        let vadj = sw.vadjustment();
+        let max = (vadj.upper() - vadj.page_size()).max(vadj.lower());
+        let clamped = vadj.value().clamp(vadj.lower(), max);
+        if (clamped - vadj.value()).abs() > f64::EPSILON {
+            vadj.set_value(clamped);
+        }
+        sw.set_kinetic_scrolling(false);
+        strip_touchpad_kinetic(sw);
+    });
 }
 
-/// Keep wheel events on a GtkScale/GtkRange from adjusting the value; scroll the
-/// enclosing settings page instead (otherwise scrolling the Display page drags
-/// the night-light slider and spams compositor reload IPC).
+/// Keep wheel events on a GtkScale/GtkRange/DropDown from adjusting the control;
+/// scroll the nearest *scrollable* enclosing `ScrolledWindow` instead.
 pub fn forward_wheel_to_page_scroller(widget: &impl IsA<gtk::Widget>) {
+    // Avoid stacking duplicate controllers if called more than once (page map).
+    if widget
+        .css_classes()
+        .iter()
+        .any(|c| c.as_str() == "metis-settings-wheel-forwarded")
+    {
+        return;
+    }
+    widget.add_css_class("metis-settings-wheel-forwarded");
+
     let ctrl = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
     ctrl.connect_scroll(move |controller, _, dy| {
@@ -223,14 +293,27 @@ pub fn forward_wheel_to_page_scroller(widget: &impl IsA<gtk::Widget>) {
         while let Some(p) = parent {
             if let Ok(scroller) = p.clone().downcast::<gtk::ScrolledWindow>() {
                 let vadj = scroller.vadjustment();
+                let page = vadj.page_size();
+                let lower = vadj.lower();
+                let upper = vadj.upper();
+                // Skip non-scrolling wrappers and Never/Never viewports that
+                // still eat scroll events via GTK's built-in controller.
+                let never_never = scroller.hscrollbar_policy() == gtk::PolicyType::Never
+                    && scroller.vscrollbar_policy() == gtk::PolicyType::Never;
+                if never_never || upper - lower <= page {
+                    parent = p.parent();
+                    continue;
+                }
+                if dy.abs() < f64::EPSILON {
+                    return glib::Propagation::Stop;
+                }
                 let delta = if dy.abs() <= 3.0 {
                     dy * vadj.step_increment().max(48.0)
                 } else {
                     dy
                 };
-                let page = vadj.page_size();
-                let max = (vadj.upper() - page).max(vadj.lower());
-                let new_val = (vadj.value() + delta).clamp(vadj.lower(), max);
+                let max = (upper - page).max(lower);
+                let new_val = (vadj.value() + delta).clamp(lower, max);
                 if (new_val - vadj.value()).abs() > f64::EPSILON {
                     vadj.set_value(new_val);
                 }
@@ -238,9 +321,31 @@ pub fn forward_wheel_to_page_scroller(widget: &impl IsA<gtk::Widget>) {
             }
             parent = p.parent();
         }
-        glib::Propagation::Stop
+        glib::Propagation::Proceed
     });
     widget.add_controller(ctrl);
+}
+
+/// Walk a page subtree and forward wheel on scales / spins / closed dropdowns
+/// / colour buttons so scrolling the page never gets stuck on a control.
+pub fn install_range_wheel_forwards(root: &impl IsA<gtk::Widget>) {
+    fn walk(widget: &gtk::Widget) {
+        if widget.is::<gtk::Scale>()
+            || widget.is::<gtk::SpinButton>()
+            || widget.is::<gtk::DropDown>()
+            || widget.is::<gtk::ColorDialogButton>()
+            || widget.has_css_class("metis-color-swatch")
+            || widget.has_css_class("metis-font-picker")
+        {
+            forward_wheel_to_page_scroller(widget);
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            walk(&c);
+            child = c.next_sibling();
+        }
+    }
+    walk(root.upcast_ref());
 }
 
 /// A titled card grouping related controls. Returns the body box to fill.
@@ -297,7 +402,7 @@ pub fn section_with_icon(title: &str, icon: &str) -> (gtk::Box, gtk::Box) {
 }
 
 /// A leading-icon + label + trailing control row.
-pub fn row_with_icon(icon: &str, label: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+pub fn row_with_icon(icon: &str, label: &str, control: &impl AsRef<gtk::Widget>) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.add_css_class("metis-settings-row");
     let img = gtk::Image::from_icon_name(icon);
@@ -308,19 +413,19 @@ pub fn row_with_icon(icon: &str, label: &str, control: &impl IsA<gtk::Widget>) -
     lbl.set_xalign(0.0);
     lbl.set_hexpand(true);
     row.append(&lbl);
-    row.append(control);
+    row.append(control.as_ref());
     row
 }
 
 /// A label + trailing control row.
-pub fn row(label: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+pub fn row(label: &str, control: &impl AsRef<gtk::Widget>) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.add_css_class("metis-settings-row");
     let lbl = gtk::Label::new(Some(label));
     lbl.set_xalign(0.0);
     lbl.set_hexpand(true);
     row.append(&lbl);
-    row.append(control);
+    row.append(control.as_ref());
     row
 }
 

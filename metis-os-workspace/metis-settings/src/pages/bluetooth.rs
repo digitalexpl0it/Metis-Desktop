@@ -41,8 +41,9 @@ pub fn build() -> gtk::Widget {
     content.append(&adapter_card);
 
     let (dev_card, dev_body) = ui::section(&tr("Devices"));
-    let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
     list.add_css_class("metis-settings-list");
+    list.add_css_class("metis-settings-zebra-list");
     dev_body.append(&list);
     content.append(&dev_card);
 
@@ -156,8 +157,8 @@ fn render(sections: &Sections, snap: &BluetoothSnapshot, refresh: &Rc<impl Fn() 
         sections.list.append(&empty);
         return;
     }
-    for dev in &snap.devices {
-        let row = device_row(dev, refresh);
+    for (i, dev) in snap.devices.iter().enumerate() {
+        let row = device_row(dev, refresh, i % 2 == 1);
         sections.list.append(&row);
     }
 }
@@ -179,9 +180,16 @@ fn sync_power_switch(sections: &Sections, adapter_powered: bool) {
     }
 }
 
-fn device_row(dev: &crate::bluetooth::BtDevice, refresh: &Rc<impl Fn() + 'static>) -> gtk::Box {
+fn device_row(
+    dev: &crate::bluetooth::BtDevice,
+    refresh: &Rc<impl Fn() + 'static>,
+    alt: bool,
+) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    row.add_css_class("metis-settings-row");
+    row.add_css_class("metis-settings-zebra-row");
+    if alt {
+        row.add_css_class("metis-settings-zebra-row-alt");
+    }
 
     let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
     text.set_hexpand(true);

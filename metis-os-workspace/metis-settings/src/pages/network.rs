@@ -1,7 +1,7 @@
-//! Network: a pill-tabbed page splitting Wireless (Wi-Fi scan/connect/known
-//! networks + DNS override), Wired (per-NIC IPv4 DHCP/static + DNS override),
-//! VPN (NetworkManager OpenVPN / WireGuard), and Proxy (system proxy via GNOME
-//! gsettings). All `nmcli`/`gsettings` work runs off the GTK main thread;
+//! Network: a pill-tabbed page splitting Wireless (Wi-Fi scan/connect + known
+//! networks sheet), DNS (Wi-Fi DNS override), Wired (per-NIC IPv4 DHCP/static +
+//! DNS), VPN (NetworkManager OpenVPN / WireGuard), and Proxy (system proxy via
+//! GNOME gsettings). All `nmcli`/`gsettings` work runs off the GTK main thread;
 //! results arrive over an mpsc channel drained on a timeout.
 
 use std::cell::{Cell, RefCell};
@@ -12,9 +12,10 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 
+use crate::dialog;
 use crate::gtk_cb::{OptFnStrRef, TabBarHandler};
 use crate::net::{
-    self, ActiveConn, EthDev, NetSnapshot, OpenVpnCreate, ProxyConfig, VpnConn, VpnKind,
+    self, ActiveConn, EthDev, NetSnapshot, OpenVpnCreate, ProxyConfig, SavedConn, VpnConn, VpnKind,
     WireGuardCreate, WireGuardProfile,
 };
 use crate::ui;
@@ -46,7 +47,8 @@ struct Sections {
     /// `set_radio` (a flaky read during DRM modeset would permanently kill Wi‑Fi).
     syncing_radio: Cell<bool>,
     wifi: gtk::Box,
-    saved: gtk::Box,
+    known_btn: gtk::Button,
+    last_saved: RefCell<Vec<SavedConn>>,
     wifi_dns: gtk::Box,
     eth: gtk::Box,
     vpn: gtk::Box,
@@ -60,8 +62,8 @@ struct Sections {
     last_vpn: RefCell<Option<Vec<VpnConn>>>,
 }
 
-/// Build the Network page. `initial_tab` selects Wireless / Wired / VPN / Proxy
-/// (`Some("vpn")` from `--page network/vpn`).
+/// Build the Network page. `initial_tab` selects Wireless / DNS / Wired / VPN /
+/// Proxy (`Some("vpn")` from `--page network/vpn`).
 pub fn build(initial_tab: Option<&str>) -> gtk::Widget {
     let (scroller, content) = ui::page_for("network");
 
@@ -72,6 +74,7 @@ pub fn build(initial_tab: Option<&str>) -> gtk::Widget {
 
     let tabs = [
         ("wireless", "Wireless"),
+        ("dns", "DNS"),
         ("wired", "Wired"),
         ("vpn", "VPN"),
         ("proxy", "Proxy"),
@@ -95,17 +98,31 @@ pub fn build(initial_tab: Option<&str>) -> gtk::Widget {
     let rescan = gtk::Button::with_label(&tr("Rescan"));
     radio_row.append(&rescan);
     wifi_body.append(&radio_row);
-    let wifi_list = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let wifi_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
     wifi_list.add_css_class("metis-settings-list");
+    wifi_list.add_css_class("metis-settings-zebra-list");
+    wifi_list.add_css_class("metis-settings-wifi-list");
     wifi_body.append(&wifi_list);
+
+    let known_btn = gtk::Button::with_label(&tr("Known Wi-Fi networks…"));
+    known_btn.add_css_class("metis-settings-secondary");
+    known_btn.set_halign(gtk::Align::Start);
+    known_btn.set_sensitive(false);
+    known_btn.set_tooltip_text(Some(&tr(
+        "Forget saved networks or view connection details",
+    )));
+    wifi_body.append(&known_btn);
     wireless.append(&wifi_card);
-
-    let (saved_card, saved_body) = ui::section(&tr("Known Wi-Fi networks"));
-    wireless.append(&saved_card);
-
-    let (wdns_card, wdns_body) = ui::section(&tr("DNS"));
-    wireless.append(&wdns_card);
     stack.add_named(&wireless, Some("wireless"));
+
+    // ---- DNS page (Wi-Fi override; Ethernet DNS lives under Wired) ----
+    let dns_page = page_box();
+    let (wdns_card, wdns_body) = ui::section(&tr("DNS"));
+    dns_page.append(&wdns_card);
+    dns_page.append(&hint(&tr(
+        "Override DNS for the active Wi-Fi connection. Ethernet DNS is configured under Wired.",
+    )));
+    stack.add_named(&dns_page, Some("dns"));
 
     // ---- Wired page ----
     let wired = page_box();
@@ -172,7 +189,8 @@ pub fn build(initial_tab: Option<&str>) -> gtk::Widget {
         radio: radio.clone(),
         syncing_radio: Cell::new(false),
         wifi: wifi_list,
-        saved: saved_body,
+        known_btn: known_btn.clone(),
+        last_saved: RefCell::new(Vec::new()),
         wifi_dns: wdns_body,
         eth: eth_body,
         vpn: vpn_list,
@@ -242,6 +260,14 @@ pub fn build(initial_tab: Option<&str>) -> gtk::Widget {
         });
     }
     {
+        let sections = sections.clone();
+        let refresh = refresh.clone();
+        known_btn.connect_clicked(move |_| {
+            let saved = sections.last_saved.borrow().clone();
+            show_known_wifi_sheet(saved, refresh.clone());
+        });
+    }
+    {
         let refresh = refresh.clone();
         let status = vpn_status.clone();
         import_btn.connect_clicked(move |btn| {
@@ -252,17 +278,15 @@ pub fn build(initial_tab: Option<&str>) -> gtk::Widget {
     {
         let refresh = refresh.clone();
         let status = vpn_status.clone();
-        add_ovpn_btn.connect_clicked(move |btn| {
-            let parent = btn.root().and_downcast::<gtk::Window>();
-            show_openvpn_dialog(parent.as_ref(), status.clone(), refresh.clone());
+        add_ovpn_btn.connect_clicked(move |_| {
+            show_openvpn_sheet(status.clone(), refresh.clone());
         });
     }
     {
         let refresh = refresh.clone();
         let status = vpn_status.clone();
-        add_wg_btn.connect_clicked(move |btn| {
-            let parent = btn.root().and_downcast::<gtk::Window>();
-            show_wireguard_dialog(parent.as_ref(), status.clone(), refresh.clone());
+        add_wg_btn.connect_clicked(move |_| {
+            show_wireguard_sheet(status.clone(), refresh.clone());
         });
     }
 
@@ -369,8 +393,14 @@ fn render<F: Fn() + 'static>(sections: &Rc<Sections>, snap: &NetSnapshot, refres
     } else if snap.wifi.is_empty() {
         sections.wifi.append(&hint(&tr("No networks found.")));
     } else {
-        for n in &snap.wifi {
+        for (i, n) in snap.wifi.iter().enumerate() {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.add_css_class("metis-settings-zebra-row");
+            row.add_css_class("metis-settings-wifi-row");
+            if i % 2 == 1 {
+                row.add_css_class("metis-settings-zebra-row-alt");
+                row.add_css_class("metis-settings-wifi-row-alt");
+            }
             let lock = if n.secured { "🔒 " } else { "" };
             let label = gtk::Label::new(Some(&format!("{lock}{}  ·  {}%", n.ssid, n.signal)));
             label.set_xalign(0.0);
@@ -403,38 +433,24 @@ fn render<F: Fn() + 'static>(sections: &Rc<Sections>, snap: &NetSnapshot, refres
         }
     }
 
-    // ---- Known networks ----
-    clear(&sections.saved);
-    let saved_list = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    saved_list.add_css_class("metis-settings-list");
-    if snap.saved.is_empty() {
-        sections
-            .saved
-            .append(&hint(&tr("No saved Wi-Fi networks.")));
-    } else {
-        for c in &snap.saved {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            let label = gtk::Label::new(Some(&c.name));
-            label.set_xalign(0.0);
-            label.set_hexpand(true);
-            let forget = gtk::Button::with_label(&tr("Forget"));
-            forget.add_css_class("destructive-action");
-            {
-                let refresh = refresh.clone();
-                let uuid = c.uuid.clone();
-                forget.connect_clicked(move |_| {
-                    net::forget(&uuid);
-                    schedule_refresh(&refresh, 1200);
-                });
-            }
-            row.append(&label);
-            row.append(&forget);
-            saved_list.append(&row);
+    // ---- Known networks (button + top-slide sheet; list lives off Wireless) ----
+    {
+        let n = snap.saved.len();
+        *sections.last_saved.borrow_mut() = snap.saved.clone();
+        if n == 0 {
+            sections
+                .known_btn
+                .set_label(&tr("Known Wi-Fi networks…"));
+            sections.known_btn.set_sensitive(false);
+        } else {
+            sections
+                .known_btn
+                .set_label(&tr(&format!("Known Wi-Fi networks ({n})…")));
+            sections.known_btn.set_sensitive(true);
         }
-        sections.saved.append(&saved_list);
     }
 
-    // ---- Wi-Fi DNS override ----
+    // ---- Wi-Fi DNS override (DNS tab) ----
     {
         let same = sections
             .last_active_wifi
@@ -1001,19 +1017,10 @@ fn import_vpn_file(path: &str) -> Result<String, String> {
     }
 }
 
-fn show_openvpn_dialog(
-    parent: Option<&gtk::Window>,
-    status: gtk::Label,
-    refresh: Rc<impl Fn() + 'static>,
-) {
-    let Some(parent) = parent else {
-        set_vpn_status(
-            &status,
-            &tr("Could not open OpenVPN dialog (no parent window)."),
-            true,
-        );
+fn show_openvpn_sheet(status: gtk::Label, refresh: Rc<impl Fn() + 'static>) {
+    if dialog::is_open() {
         return;
-    };
+    }
     if !net::openvpn_plugin_present() {
         set_vpn_status(
             &status,
@@ -1023,35 +1030,16 @@ fn show_openvpn_dialog(
         return;
     }
 
-    let dialog = gtk::Window::builder()
-        .title(tr("Add OpenVPN"))
-        .modal(true)
-        .transient_for(parent)
-        .decorated(false)
-        .resizable(false)
-        .default_width(480)
-        .build();
-    dialog.add_css_class("metis-settings-window");
-    dialog.add_css_class("metis-settings-password-dialog");
-
-    let outer = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    outer.set_margin_top(16);
-    outer.set_margin_bottom(16);
-    outer.set_margin_start(20);
-    outer.set_margin_end(20);
-
-    let heading = gtk::Label::new(Some(&tr("Add OpenVPN connection")));
-    heading.set_xalign(0.0);
-    heading.add_css_class("metis-settings-section-title");
-    outer.append(&heading);
+    let wrap = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    wrap.add_css_class("metis-settings-top-sheet-body");
 
     let hint = gtk::Label::new(Some(&tr(
-        "Password authentication only. For provider configs with certificates, use Import… on an .ovpn file."
-        )));
+        "Password authentication only. For provider configs with certificates, use Import… on an .ovpn file.",
+    )));
     hint.set_xalign(0.0);
     hint.set_wrap(true);
-    hint.add_css_class("metis-settings-hint");
-    outer.append(&hint);
+    hint.add_css_class("metis-settings-top-dialog-body");
+    wrap.append(&hint);
 
     let name = wg_entry("Work VPN", "");
     let gateway = wg_entry("vpn.example.com", "");
@@ -1063,9 +1051,9 @@ fn show_openvpn_dialog(
         .build();
     let ca = wg_entry("/path/to/ca.crt", "");
 
-    outer.append(&wg_field(&tr("Name"), &name));
-    outer.append(&wg_field(&tr("Gateway"), &gateway));
-    outer.append(&wg_field(&tr("Username"), &username));
+    wrap.append(&wg_field(&tr("Name"), &name));
+    wrap.append(&wg_field(&tr("Gateway"), &gateway));
+    wrap.append(&wg_field(&tr("Username"), &username));
 
     let pw_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let pw_lbl = gtk::Label::new(Some(&tr("Password (optional)")));
@@ -1073,7 +1061,7 @@ fn show_openvpn_dialog(
     pw_lbl.add_css_class("metis-settings-hint");
     pw_box.append(&pw_lbl);
     pw_box.append(&password);
-    outer.append(&pw_box);
+    wrap.append(&pw_box);
 
     let ca_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     ca.set_hexpand(true);
@@ -1086,39 +1074,30 @@ fn show_openvpn_dialog(
     ca_lbl.add_css_class("metis-settings-hint");
     ca_box.append(&ca_lbl);
     ca_box.append(&ca_row);
-    outer.append(&ca_box);
+    wrap.append(&ca_box);
 
     let remember = gtk::CheckButton::with_label(&tr("Remember password on this profile"));
     remember.set_active(true);
-    outer.append(&remember);
+    wrap.append(&remember);
 
     let err = gtk::Label::new(None);
     err.set_xalign(0.0);
     err.set_wrap(true);
     err.add_css_class("metis-settings-error");
     err.set_visible(false);
-    outer.append(&err);
+    wrap.append(&err);
 
     let btn_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     btn_row.set_halign(gtk::Align::End);
-    btn_row.set_margin_top(4);
-    let cancel = gtk::Button::with_label(&tr("Cancel"));
+    // Header Cancel dismisses — only Create in the body.
     let create = gtk::Button::with_label(&tr("Create"));
     create.add_css_class("suggested-action");
-    btn_row.append(&cancel);
     btn_row.append(&create);
-    outer.append(&btn_row);
-
-    dialog.set_child(Some(&ui::dialog_sheet(&outer)));
+    wrap.append(&btn_row);
 
     {
-        let dialog = dialog.clone();
-        cancel.connect_clicked(move |_| dialog.close());
-    }
-    {
-        let dialog = dialog.clone();
         let ca = ca.clone();
-        browse.connect_clicked(move |_| {
+        browse.connect_clicked(move |btn| {
             let picker = gtk::FileDialog::new();
             picker.set_title(&tr("Choose CA certificate"));
             let filter = gtk::FileFilter::new();
@@ -1130,8 +1109,9 @@ fn show_openvpn_dialog(
             let filters = gio::ListStore::new::<gtk::FileFilter>();
             filters.append(&filter);
             picker.set_filters(Some(&filters));
+            let parent = btn.root().and_downcast::<gtk::Window>();
             let ca = ca.clone();
-            picker.open(Some(&dialog), gio::Cancellable::NONE, move |res| {
+            picker.open(parent.as_ref(), gio::Cancellable::NONE, move |res| {
                 let Ok(file) = res else { return };
                 if let Some(path) = file.path() {
                     ca.set_text(&path.to_string_lossy());
@@ -1140,7 +1120,6 @@ fn show_openvpn_dialog(
         });
     }
     {
-        let dialog = dialog.clone();
         let status = status.clone();
         let create_btn = create.clone();
         let name = name.clone();
@@ -1169,7 +1148,6 @@ fn show_openvpn_dialog(
                 let _ = tx.send(net::vpn_create_openvpn(cfg));
             });
 
-            let dialog = dialog.clone();
             let status = status.clone();
             let refresh = refresh.clone();
             let err = err.clone();
@@ -1178,7 +1156,7 @@ fn show_openvpn_dialog(
                 Ok(Ok(())) => {
                     set_vpn_status(&status, &tr("OpenVPN profile created."), false);
                     refresh();
-                    dialog.close();
+                    dialog::dismiss_silent();
                     glib::ControlFlow::Break
                 }
                 Ok(Err(e)) => {
@@ -1186,7 +1164,7 @@ fn show_openvpn_dialog(
                     err.set_visible(true);
                     create_btn.set_sensitive(true);
                     create_btn.set_label(&tr("Create"));
-                    glib::ControlFlow::Break
+                    glib::ControlFlow::Continue
                 }
                 Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -1198,58 +1176,28 @@ fn show_openvpn_dialog(
         });
     }
 
-    dialog.present();
+    if !dialog::present(&tr("Add OpenVPN"), &wrap, Rc::new(|| {})) {
+        set_vpn_status(
+            &status,
+            &tr("Could not open OpenVPN sheet."),
+            true,
+        );
+        return;
+    }
     let focus = name.clone();
     glib::idle_add_local_once(move || {
         focus.grab_focus();
     });
 }
 
-fn show_wireguard_dialog(
-    parent: Option<&gtk::Window>,
-    status: gtk::Label,
-    refresh: Rc<impl Fn() + 'static>,
-) {
-    let Some(parent) = parent else {
-        set_vpn_status(
-            &status,
-            &tr("Could not open WireGuard dialog (no parent window)."),
-            true,
-        );
+fn show_wireguard_sheet(status: gtk::Label, refresh: Rc<impl Fn() + 'static>) {
+    if dialog::is_open() {
         return;
-    };
+    }
 
-    // Undecorated so Metis does not paint a second compositor titlebar over the
-    // in-dialog close control (same pattern as Remote / Gaming / Desktop widgets).
-    let dialog = gtk::Window::builder()
-        .title(tr("Add WireGuard"))
-        .modal(true)
-        .transient_for(parent)
-        .decorated(false)
-        .resizable(false)
-        .default_width(480)
-        .build();
-    dialog.add_css_class("metis-settings-window");
-    dialog.add_css_class("metis-settings-password-dialog");
+    let wrap = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    wrap.add_css_class("metis-settings-top-sheet-body");
 
-    let outer = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    outer.set_margin_top(16);
-    outer.set_margin_bottom(16);
-    outer.set_margin_start(20);
-    outer.set_margin_end(20);
-
-    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    header.set_margin_bottom(4);
-    let heading = gtk::Label::new(Some(&tr("Add WireGuard connection")));
-    heading.set_xalign(0.0);
-    heading.set_hexpand(true);
-    heading.add_css_class("metis-settings-section-title");
-    header.append(&heading);
-    outer.append(&header);
-
-    // Vertical fields (not `ui::row`): keeps focus inside the entry, avoids the
-    // card-row hexpand fight that made CIDR typing feel sticky, and matches the
-    // Remote password dialog pattern.
     let name = wg_entry("Home VPN", "");
     let private_key = wg_entry("Interface private key", "");
     let address = wg_entry("10.0.0.2/32", "");
@@ -1258,39 +1206,29 @@ fn show_wireguard_dialog(
     let allowed = wg_entry("0.0.0.0/0, ::/0", "0.0.0.0/0, ::/0");
     let dns = wg_entry("1.1.1.1", "");
 
-    outer.append(&wg_field(&tr("Name"), &name));
-    outer.append(&wg_field(&tr("Private key"), &private_key));
-    outer.append(&wg_field(&tr("Address (CIDR)"), &address));
-    outer.append(&wg_field(&tr("Peer public key"), &peer_pub));
-    outer.append(&wg_field(&tr("Endpoint"), &endpoint));
-    outer.append(&wg_field(&tr("Allowed IPs"), &allowed));
-    outer.append(&wg_field(&tr("DNS (optional)"), &dns));
+    wrap.append(&wg_field(&tr("Name"), &name));
+    wrap.append(&wg_field(&tr("Private key"), &private_key));
+    wrap.append(&wg_field(&tr("Address (CIDR)"), &address));
+    wrap.append(&wg_field(&tr("Peer public key"), &peer_pub));
+    wrap.append(&wg_field(&tr("Endpoint"), &endpoint));
+    wrap.append(&wg_field(&tr("Allowed IPs"), &allowed));
+    wrap.append(&wg_field(&tr("DNS (optional)"), &dns));
 
     let err = gtk::Label::new(None);
     err.set_xalign(0.0);
     err.set_wrap(true);
     err.add_css_class("metis-settings-error");
     err.set_visible(false);
-    outer.append(&err);
+    wrap.append(&err);
 
     let btn_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     btn_row.set_halign(gtk::Align::End);
-    btn_row.set_margin_top(4);
-    let cancel = gtk::Button::with_label(&tr("Cancel"));
     let create = gtk::Button::with_label(&tr("Create"));
     create.add_css_class("suggested-action");
-    btn_row.append(&cancel);
     btn_row.append(&create);
-    outer.append(&btn_row);
-
-    dialog.set_child(Some(&ui::dialog_sheet(&outer)));
+    wrap.append(&btn_row);
 
     {
-        let dialog = dialog.clone();
-        cancel.connect_clicked(move |_| dialog.close());
-    }
-    {
-        let dialog = dialog.clone();
         let status = status.clone();
         let create_btn = create.clone();
         let name = name.clone();
@@ -1317,14 +1255,11 @@ fn show_wireguard_dialog(
                 dns: dns.text().to_string(),
             };
 
-            // nmcli can take several seconds — never block the GTK thread (that
-            // froze Settings and made the edge bar look dead).
             let (tx, rx) = mpsc::channel::<Result<(), String>>();
             std::thread::spawn(move || {
                 let _ = tx.send(net::vpn_create_wireguard(cfg));
             });
 
-            let dialog = dialog.clone();
             let status = status.clone();
             let refresh = refresh.clone();
             let err = err.clone();
@@ -1333,7 +1268,7 @@ fn show_wireguard_dialog(
                 Ok(Ok(())) => {
                     set_vpn_status(&status, &tr("WireGuard connection created."), false);
                     refresh();
-                    dialog.close();
+                    dialog::dismiss_silent();
                     glib::ControlFlow::Break
                 }
                 Ok(Err(e)) => {
@@ -1341,7 +1276,7 @@ fn show_wireguard_dialog(
                     err.set_visible(true);
                     create_btn.set_sensitive(true);
                     create_btn.set_label(&tr("Create"));
-                    glib::ControlFlow::Break
+                    glib::ControlFlow::Continue
                 }
                 Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -1353,9 +1288,14 @@ fn show_wireguard_dialog(
         });
     }
 
-    dialog.present();
-    // Wayland often needs a tick after present before grab_focus sticks; without
-    // it, keystrokes land in the Settings sidebar search and thrash the nav filter.
+    if !dialog::present(&tr("Add WireGuard"), &wrap, Rc::new(|| {})) {
+        set_vpn_status(
+            &status,
+            &tr("Could not open WireGuard sheet."),
+            true,
+        );
+        return;
+    }
     let focus_entry = name.clone();
     glib::idle_add_local_once(move || {
         focus_entry.grab_focus();
@@ -1548,7 +1488,153 @@ fn wg_field(label: &str, entry: &gtk::Entry) -> gtk::Box {
     box_
 }
 
-/// A standalone DNS-override editor for a connection (used on the Wireless tab):
+/// Top-slide sheet to forget saved Wi-Fi profiles or view connection info.
+fn show_known_wifi_sheet<F: Fn() + 'static>(saved: Vec<SavedConn>, refresh: Rc<F>) {
+    if dialog::is_open() {
+        return;
+    }
+
+    let wrap = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    wrap.add_css_class("metis-settings-top-sheet-body");
+
+    let intro = gtk::Label::new(Some(&tr(
+        "Saved Wi-Fi profiles on this device. Forget removes the NetworkManager connection.",
+    )));
+    intro.set_xalign(0.0);
+    intro.set_wrap(true);
+    intro.add_css_class("metis-settings-top-dialog-body");
+    wrap.append(&intro);
+
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    list.add_css_class("metis-settings-list");
+    list.set_hexpand(true);
+
+    let detail = gtk::Label::new(None);
+    detail.set_xalign(0.0);
+    detail.set_wrap(true);
+    detail.set_selectable(true);
+    detail.add_css_class("metis-settings-hint");
+    detail.set_visible(false);
+    detail.set_margin_top(4);
+
+    let empty = hint(&tr("No saved Wi-Fi networks."));
+    empty.set_visible(saved.is_empty());
+    wrap.append(&empty);
+
+    if saved.is_empty() {
+        let _ = dialog::present(
+            &tr("Known Wi-Fi networks"),
+            &wrap,
+            Rc::new(|| {}),
+        );
+        return;
+    }
+
+    let (info_tx, info_rx) = mpsc::channel::<(String, String)>();
+    {
+        let detail = detail.clone();
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            match info_rx.try_recv() {
+                Ok((title, body)) => {
+                    detail.set_markup(&format!("<b>{title}</b>\n{body}"));
+                    detail.set_visible(true);
+                    glib::ControlFlow::Continue
+                }
+                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            }
+        });
+    }
+
+    for c in saved {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.add_css_class("metis-settings-row");
+        row.set_hexpand(true);
+        let label = gtk::Label::new(Some(&c.name));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
+        let info = gtk::Button::with_label(&tr("Info"));
+        info.add_css_class("metis-settings-secondary");
+        info.add_css_class("flat");
+        {
+            let name = c.name.clone();
+            let uuid = c.uuid.clone();
+            let ctype = c.ctype.clone();
+            let info_tx = info_tx.clone();
+            info.connect_clicked(move |_| {
+                let name = name.clone();
+                let uuid = uuid.clone();
+                let ctype = ctype.clone();
+                let info_tx = info_tx.clone();
+                std::thread::spawn(move || {
+                    let ipv4 = net::read_ipv4(&name);
+                    let mut body = format!(
+                        "{}: {uuid}\n{}: {ctype}",
+                        tr("UUID"),
+                        tr("Type")
+                    );
+                    if !ipv4.method.is_empty() {
+                        body.push_str(&format!("\n{}: {}", tr("IPv4 method"), ipv4.method));
+                    }
+                    if !ipv4.addresses.is_empty() {
+                        body.push_str(&format!("\n{}: {}", tr("Address"), ipv4.addresses));
+                    }
+                    if !ipv4.gateway.is_empty() {
+                        body.push_str(&format!("\n{}: {}", tr("Gateway"), ipv4.gateway));
+                    }
+                    if !ipv4.dns.is_empty() {
+                        body.push_str(&format!("\n{}: {}", tr("DNS"), ipv4.dns));
+                    }
+                    let _ = info_tx.send((
+                        glib::markup_escape_text(&name).to_string(),
+                        glib::markup_escape_text(&body).to_string(),
+                    ));
+                });
+            });
+        }
+
+        let forget = gtk::Button::with_label(&tr("Forget"));
+        forget.add_css_class("destructive-action");
+        {
+            let refresh = refresh.clone();
+            let uuid = c.uuid.clone();
+            let row = row.clone();
+            let list = list.clone();
+            let empty = empty.clone();
+            forget.connect_clicked(move |btn| {
+                btn.set_sensitive(false);
+                net::forget(&uuid);
+                list.remove(&row);
+                if list.first_child().is_none() {
+                    empty.set_visible(true);
+                }
+                schedule_refresh(&refresh, 1200);
+            });
+        }
+
+        row.append(&label);
+        row.append(&info);
+        row.append(&forget);
+        list.append(&row);
+    }
+
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_height(160)
+        .max_content_height(320)
+        .propagate_natural_height(true)
+        .child(&list)
+        .build();
+    wrap.append(&scroll);
+    wrap.append(&detail);
+
+    let _ = dialog::present(&tr("Known Wi-Fi networks"), &wrap, Rc::new(|| {}));
+}
+
+/// A standalone DNS-override editor for a connection (DNS tab):
 /// a comma-separated DNS list applied with `ignore-auto-dns` so it overrides DHCP.
 fn dns_override_editor<F: Fn() + 'static>(
     conn: &str,
@@ -1556,9 +1642,11 @@ fn dns_override_editor<F: Fn() + 'static>(
     refresh: &Rc<F>,
 ) -> gtk::Widget {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    card.add_css_class("metis-settings-inset");
 
     let title = gtk::Label::new(Some(&tr(&format!("Connected: {conn}"))));
     title.set_xalign(0.0);
+    title.add_css_class("metis-settings-value");
     card.append(&title);
 
     let dns = entry("1.1.1.1, 8.8.8.8", &ipv4.dns);
@@ -1588,6 +1676,7 @@ fn dns_override_editor<F: Fn() + 'static>(
 
 fn ethernet_editor<F: Fn() + 'static>(dev: &net::EthDev, refresh: &Rc<F>) -> gtk::Widget {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    card.add_css_class("metis-settings-inset");
     card.set_margin_top(4);
 
     let status = if dev.connected {

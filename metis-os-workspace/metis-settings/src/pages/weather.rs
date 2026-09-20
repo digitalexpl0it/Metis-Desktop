@@ -99,10 +99,12 @@ pub fn build() -> gtk::Widget {
     rebuild_saved(&saved_list, &cfg);
 
     let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    search_row.add_css_class("metis-settings-inset");
     let search_entry = gtk::Entry::builder()
         .placeholder_text(tr("Search for a city…"))
         .hexpand(true)
         .build();
+    ui::swallow_empty_backspace(&search_entry);
     let search_btn = gtk::Button::with_label(&tr("Search"));
     search_row.append(&search_entry);
     search_row.append(&search_btn);

@@ -35,7 +35,11 @@ pub struct ArrangementCanvas {
     root: gtk::Box,
     /// Viewport that owns the allocation used for layout; keeps GtkFixed's
     /// child bounding-box from locking the Settings window min-width.
-    viewport: gtk::ScrolledWindow,
+    ///
+    /// Plain `Box` (not `ScrolledWindow`): GTK's built-in scroll controller on a
+    /// `ScrolledWindow` always `Stop`s wheel events even with Never/Never
+    /// policy, which fights the Settings page scroller on GTK 4.22.
+    viewport: gtk::Box,
     canvas: gtk::Fixed,
     hint: gtk::Label,
     cfg: Rc<RefCell<OutputsConfig>>,
@@ -94,18 +98,15 @@ impl ArrangementCanvas {
         // GtkFixed's minimum size is the child bounding box. Two side-by-side
         // monitor tiles easily report ~700–900px and freeze the window from
         // shrinking. The viewport takes allocation; Fixed lays out inside it.
-        let viewport = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vscrollbar_policy(gtk::PolicyType::Never)
+        let viewport = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
             .hexpand(true)
             .height_request(CANVAS_MIN_H)
-            .propagate_natural_width(false)
-            .propagate_natural_height(false)
-            .min_content_width(200)
-            .min_content_height(CANVAS_MIN_H)
-            .child(&canvas)
             .build();
+        viewport.set_overflow(gtk::Overflow::Hidden);
+        viewport.set_size_request(200, CANVAS_MIN_H);
         viewport.add_css_class("metis-display-arrangement-viewport");
+        viewport.append(&canvas);
         root.append(&viewport);
 
         let this = Rc::new(Self {
@@ -134,11 +135,14 @@ impl ArrangementCanvas {
             let this_w = this.clone();
             let on_alloc = {
                 let this_w = this_w.clone();
-                move |widget: &gtk::ScrolledWindow| {
+                move |widget: &gtk::Box| {
                     if this_w.dragging.get() {
                         return;
                     }
                     let alloc = widget.allocation();
+                    // Ignore sub-pixel / scrollbar jitter — a recompute_layout
+                    // storm while the page scrolls feels like a lock-up on the
+                    // arrangement card.
                     if alloc.width() > 0 && alloc.height() > 0 {
                         this_w
                             .schedule_layout_for_size(alloc.width() as f64, alloc.height() as f64);
@@ -146,20 +150,20 @@ impl ArrangementCanvas {
                 }
             };
             let on_width = Rc::new(on_alloc);
-            let on_height = on_width.clone();
             this.viewport
                 .connect_notify_local(Some("width"), move |widget, _| {
                     on_width(widget);
                 });
-            this.viewport
-                .connect_notify_local(Some("height"), move |widget, _| {
-                    on_height(widget);
-                });
+            // Height is fixed via size_request — don't re-layout on height notify.
             let this_w = this.clone();
             this.root.connect_map(move |_| {
                 this_w.refresh_layout();
             });
         }
+        // Ensure wheel/touchpad over the preview scrolls the Settings page —
+        // Capture on tiles alone is not enough if a child claims the sequence.
+        crate::ui::forward_wheel_to_page_scroller(&this.viewport);
+        crate::ui::forward_wheel_to_page_scroller(&this.canvas);
         wire_canvas_drag(&this);
         this.rebuild_blocks();
         this
@@ -170,7 +174,8 @@ impl ArrangementCanvas {
             return;
         }
         let prev = *self.canvas_size.borrow();
-        if (prev.0 - width).abs() < 1.0 && (prev.1 - height).abs() < 1.0 {
+        // Ignore tiny allocation jitter (scrollbar show/hide, subpixel rounding).
+        if (prev.0 - width).abs() < 8.0 && (prev.1 - height).abs() < 8.0 {
             return;
         }
         *self.canvas_size.borrow_mut() = (width, height);
@@ -180,7 +185,7 @@ impl ArrangementCanvas {
             id.remove();
         }
         let this = self.clone();
-        let id = glib::timeout_add_local(std::time::Duration::from_millis(32), move || {
+        let id = glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
             *this.resize_debounce.borrow_mut() = None;
             if this.dragging.get() || this.block_widgets.borrow().is_empty() {
                 return glib::ControlFlow::Break;
