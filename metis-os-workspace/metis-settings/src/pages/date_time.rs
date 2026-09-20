@@ -164,10 +164,7 @@ pub fn build() -> gtk::Widget {
                 let status = status.clone();
                 time_btn.set_sensitive(!active);
                 bg::run_bg(
-                    move || {
-                        let result = metis_remote::set_ntp(active);
-                        result
-                    },
+                    move || metis_remote::set_ntp(active),
                     move |result| {
                         if let Err(err) = result {
                             tracing::warn!(%err, "set-ntp failed");
@@ -344,10 +341,7 @@ fn open_set_time_sheet(
         let time_value = time_value.clone();
         let tz_value = tz_value.clone();
         bg::run_bg(
-            move || {
-                let result = metis_remote::set_time(&spec);
-                result
-            },
+            move || metis_remote::set_time(&spec),
             move |result| {
                 if let Err(err) = result {
                     tracing::warn!(%err, "set-time failed");
@@ -406,10 +400,7 @@ fn open_timezone_sheet(
             let time_value = time_value.clone();
             let tz_value = tz_value.clone();
             bg::run_bg(
-                move || {
-                    let result = metis_remote::set_timezone(&tz);
-                    result
-                },
+                move || metis_remote::set_timezone(&tz),
                 move |result| {
                     if let Err(err) = result {
                         tracing::warn!(%err, "set-timezone failed");
@@ -460,12 +451,7 @@ fn load_zone_list() -> Vec<String> {
             // zone.tab: code coords TZ comments
             let cols: Vec<&str> = line.split_whitespace().collect();
             if cols.len() >= 3 {
-                let tz = if path.ends_with("zone1970.tab") {
-                    cols.get(2).copied()
-                } else {
-                    cols.get(2).copied()
-                };
-                if let Some(tz) = tz {
+                if let Some(tz) = cols.get(2).copied() {
                     if tz.contains('/') {
                         out.push(tz.to_string());
                     }

@@ -5,13 +5,11 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use metis_i18n::tr;
 
+use crate::gtk_cb::FnStr;
 use crate::nav::{self, Category, CATEGORIES};
 
 /// Build the Home overview. `on_category` opens a category sheet; `on_page` deep-links.
-pub fn build(
-    on_category: Rc<dyn Fn(&str)>,
-    on_page: Rc<dyn Fn(&str)>,
-) -> (gtk::Box, gtk::Entry, Rc<dyn Fn(&str)>) {
+pub fn build(on_category: FnStr, on_page: FnStr) -> (gtk::Box, gtk::Entry, FnStr) {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("metis-settings-home");
     root.set_hexpand(true);

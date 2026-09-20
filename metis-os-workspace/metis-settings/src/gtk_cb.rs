@@ -13,6 +13,8 @@ pub type FnString = Rc<dyn Fn(String)>;
 pub type OptFn0Cell = Rc<RefCell<Option<Fn0>>>;
 pub type OptFnStrRef = RefCell<Option<FnStr>>;
 pub type OptFnStringRef = RefCell<Option<FnString>>;
+pub type BarConfigMutate = Box<dyn FnOnce(&mut metis_config::BarConfig)>;
+pub type OptBarConfigMutate = RefCell<Option<BarConfigMutate>>;
 pub type OutputModesCache =
     Rc<RefCell<HashMap<String, (Vec<OutputModeInfo>, Option<OutputModeInfo>)>>>;
 pub type GamingPersist = Rc<dyn Fn(Box<dyn FnOnce(&mut GamingConfig)>)>;

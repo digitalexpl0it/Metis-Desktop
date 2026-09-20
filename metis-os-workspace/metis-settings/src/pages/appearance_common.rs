@@ -16,9 +16,15 @@ use gtk::CssProvider;
 use gtk::STYLE_PROVIDER_PRIORITY_APPLICATION;
 
 use crate::dialog;
+use crate::gtk_cb::OptBarConfigMutate;
 use crate::runtime;
 
 static SWATCH_SEQ: AtomicU64 = AtomicU64::new(1);
+
+type ColorSwatchListener = Rc<dyn Fn(&ColorSwatchButton)>;
+type ColorSwatchListeners = Rc<RefCell<Vec<ColorSwatchListener>>>;
+type FontPickerListener = Rc<dyn Fn(&FontPickerButton)>;
+type FontPickerListeners = Rc<RefCell<Vec<FontPickerListener>>>;
 
 /// Compact swatch that opens the in-window top-slide colour picker (not a
 /// separate ColorDialog window).
@@ -28,7 +34,7 @@ pub struct ColorSwatchButton {
     chip_class: String,
     provider: CssProvider,
     rgba: Rc<RefCell<gdk::RGBA>>,
-    listeners: Rc<RefCell<Vec<Rc<dyn Fn(&ColorSwatchButton)>>>>,
+    listeners: ColorSwatchListeners,
 }
 
 impl ColorSwatchButton {
@@ -145,7 +151,7 @@ pub struct FontPickerButton {
     button: gtk::Button,
     label: gtk::Label,
     desc: Rc<RefCell<Option<pango::FontDescription>>>,
-    listeners: Rc<RefCell<Vec<Rc<dyn Fn(&FontPickerButton)>>>>,
+    listeners: FontPickerListeners,
 }
 
 impl FontPickerButton {
@@ -277,10 +283,8 @@ where
     F: FnOnce(&mut metis_config::BarConfig) + 'static,
 {
     thread_local! {
-        static PENDING: std::cell::RefCell<Option<Box<dyn FnOnce(&mut metis_config::BarConfig)>>> =
-            const { std::cell::RefCell::new(None) };
-        static DEBOUNCE: std::cell::RefCell<Option<glib::SourceId>> =
-            const { std::cell::RefCell::new(None) };
+        static PENDING: OptBarConfigMutate = const { RefCell::new(None) };
+        static DEBOUNCE: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
     }
 
     PENDING.with(|slot| {

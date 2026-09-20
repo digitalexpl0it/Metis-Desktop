@@ -11,6 +11,7 @@ use gtk::prelude::*;
 use metis_i18n::tr;
 
 use crate::dialog;
+use crate::gtk_cb::OptFnStrRef;
 use crate::home;
 use crate::motion;
 use crate::nav::{self, NavHue, CATEGORIES};
@@ -25,7 +26,7 @@ const MINI_SIDEBAR_WIDTH: i32 = 64;
 thread_local! {
     static SETTINGS_WINDOW: RefCell<Option<gtk::ApplicationWindow>> = const { RefCell::new(None) };
     static UI_READY: Cell<bool> = const { Cell::new(false) };
-    static OPEN_PAGE: RefCell<Option<Rc<dyn Fn(&str)>>> = const { RefCell::new(None) };
+    static OPEN_PAGE: OptFnStrRef = const { RefCell::new(None) };
     static SHOW_HOME: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
 }
 
@@ -114,7 +115,7 @@ fn build(app: &gtk::Application, launch: PageLaunch) {
             .decorated(!under_metis)
             .build();
         window.add_css_class("metis-settings-window");
-        window.connect_map(|win| apply_window_icon(win));
+        window.connect_map(apply_window_icon);
         window.connect_close_request({
             let app = app.clone();
             move |win| {
