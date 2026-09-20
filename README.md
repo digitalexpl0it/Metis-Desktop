@@ -210,7 +210,8 @@ Full walkthrough in the **[User Guide](docs/USER_GUIDE.md)**. The essentials:
   include Display, Appearance, Background, Edge bar, Windows, **Desktop widgets**,
   Metis Menu, Weather, Network (incl. **DNS** / VPN), Calendars, Input,
   **Shortcuts** (read-only guide; edit under Keyboard), Bluetooth, Printers,
-  Power, Sound, **Gaming**, **Control Center**, and **Remote access**.
+  Power, Sound, **Users**, **Date & Time**, **Gaming**, **Control Center**, and
+  **Remote access**. Admin prompts use Metis’s built-in `metis-polkit-agent`.
 - **Gaming** — Settings → Gaming: graphics mode, health → Fix, guided **Run gaming
   setup** wizard (Steam / Vulkan / controllers / GameMode / NVIDIA consent),
   Flatpak optimize, Steam library path picker, Metis-owned MangoHud / Gamescope

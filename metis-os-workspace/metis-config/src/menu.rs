@@ -102,7 +102,8 @@ pub struct MenuConfig {
     /// Optional display-name override; empty / missing → GECOS / `$USER`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_display_name: Option<String>,
-    /// Optional avatar image path; empty / missing → `~/.face` when present.
+    /// Optional avatar image path; empty / missing → DE face files when present
+    /// (`~/.face`, `~/.face.icon`, AccountsService icon).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_path: Option<String>,
 }
@@ -158,11 +159,29 @@ impl MenuConfig {
                 return Some(path);
             }
         }
-        let face = directories::UserDirs::new()
-            .map(|u| u.home_dir().join(".face"))
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".face")))?;
-        face.is_file().then_some(face)
+        let home = directories::UserDirs::new()
+            .map(|u| u.home_dir().to_path_buf())
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
+        let username = std::env::var("USER").unwrap_or_default();
+        resolve_user_avatar_path(&username, &home)
     }
+}
+
+/// Locate a user's avatar from common desktop-environment locations.
+///
+/// Order: `~/.face` → `~/.face.icon` → AccountsService
+/// (`/var/lib/AccountsService/icons/<username>`), which is what GNOME/KDE
+/// typically write when a picture is set in their user panels.
+pub fn resolve_user_avatar_path(username: &str, home: impl AsRef<Path>) -> Option<PathBuf> {
+    let home = home.as_ref();
+    let mut candidates = Vec::with_capacity(3);
+    candidates.push(home.join(".face"));
+    candidates.push(home.join(".face.icon"));
+    // AccountsService icons are keyed by login name (GNOME / KDE user pictures).
+    if !username.is_empty() && !username.contains(['/', '\\', '\0']) {
+        candidates.push(PathBuf::from("/var/lib/AccountsService/icons").join(username));
+    }
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 fn gecos_full_name() -> Option<String> {

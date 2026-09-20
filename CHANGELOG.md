@@ -11,13 +11,25 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 - **`metis-polkit-agent`** — first-party GTK4 PolicyKit authentication agent
   started with the Metis session (compositor + watchdog). `pkexec` prompts
-  (Users, firewall, Date & Time, …) no longer require GNOME/KDE agents; PAM
-  still uses the system `polkit-agent-helper-1`.
+  (Users, firewall, Date & Time, …) no longer require GNOME/KDE agents. PAM
+  goes through the system helper: prefer systemd socket activation at
+  `/run/polkit/agent-helper.socket` (polkit ≥ 127), with legacy setuid
+  `polkit-agent-helper-1` as fallback.
+- **Users list polish** — Settings → System → Users shows each account as a
+  separated row with circular avatar, display name, username, and
+  Administrator / Standard user role (plus admin toggle and actions).
+- **Cross-DE avatar lookup** — resolve profile pictures from `~/.face`,
+  `~/.face.icon`, then AccountsService
+  (`/var/lib/AccountsService/icons/<username>`) so GNOME/KDE-set avatars
+  appear in Settings and the Metis Menu header.
 
 ### Changed
 
 - Packaging and session install ship `metis-polkit-agent`; deb Recommends drop
   `policykit-1-gnome | mate-polkit` in favor of depending on `pkexec`/`polkitd`.
+- Polkit auth dialog: single compositor titlebar (no GTK CSD double chrome),
+  Metis-themed Authenticate button contrast, and lighter password entry
+  (`GTK_A11Y=none` / Cairo) to avoid typing lag.
 
 ## [2026-09-19]
 

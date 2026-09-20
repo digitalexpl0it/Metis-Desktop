@@ -116,7 +116,9 @@ with the session so the admin password dialog can appear (no third-party
 PolicyKit agent required). Users / Date & Time settings use the same agent with
 actions in `packaging/polkit/org.metis.policy` (install to
 `/usr/share/polkit-1/actions/org.metis.policy` when updating `metis-remote`).
-See USER_GUIDE → Remote desktop.
+On Ubuntu polkit 127+, keep `polkit-agent-helper.socket` enabled so the agent
+can authenticate via `/run/polkit/agent-helper.socket` without a setuid helper.
+See USER_GUIDE → Remote desktop / Users.
 
 **XWayland:** default one shared server (`xwayland_mode: shared`). Opt-in
 `xwayland_mode: isolated` in `config.json` starts a second gaming bucket

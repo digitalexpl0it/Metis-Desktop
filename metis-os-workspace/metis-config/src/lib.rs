@@ -484,8 +484,8 @@ pub use lock::{
 };
 pub use menu::{
     argv_in_terminal, binary_in_path, load_menu_config, menu_config_path, resolve_executable,
-    resolve_file_manager, resolve_terminal, save_menu_config, MenuConfig, MenuStyle,
-    KNOWN_FILE_MANAGERS, KNOWN_TERMINALS,
+    resolve_file_manager, resolve_terminal, resolve_user_avatar_path, save_menu_config, MenuConfig,
+    MenuStyle, KNOWN_FILE_MANAGERS, KNOWN_TERMINALS,
 };
 pub use outputs::{
     format_schedule_hhmm, format_schedule_minutes, load_outputs_config,

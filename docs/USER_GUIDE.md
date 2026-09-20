@@ -906,9 +906,14 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   Selecting **Settings** restores and focuses the existing Settings window
   (including when minimized) instead of opening a duplicate. Saved to
   `menu.json` (layout changes reload the edge bar live).
-- **Users** — profile picture (`~/.face`), display name, password change, and
-  local account management (add/remove, Administrator/`sudo` toggle). Privileged
-  actions show a PolicyKit password dialog (`metis-remote`).
+- **Users** — profile picture and display name (synced with Metis Menu),
+  password change, and local account management (add/remove, Administrator /
+  `sudo` toggle). The **Other users** list shows each account with a circular
+  avatar, display name, username, and role. Avatars resolve from `~/.face`,
+  `~/.face.icon`, or the GNOME/KDE AccountsService icon
+  (`/var/lib/AccountsService/icons/<username>`), then a default icon.
+  Privileged actions show Metis’s PolicyKit password dialog
+  (`metis-polkit-agent` + `metis-remote`).
 - **Date & Time** — automatic date/time (NTP), automatic timezone, manual
   clock/timezone when auto is off, 12/24-hour bar format, and calendar first day
   of the week (`datetime.json`).
@@ -1088,8 +1093,10 @@ set a password first. If Metis Viewer says FreeRDP was not found, install
 applied (or Retry fails / times out), install `nftables` (recommended) or enable
 `ufw` (`sudo ufw enable`). Metis starts `metis-polkit-agent` with the session so
 a password dialog can appear for `pkexec`; without it, authorization waits until
-it times out. You can also run `pkexec metis-remote firewall apply` from a
-terminal. PipeWire and the
+it times out. On polkit 127+, the agent talks to
+`/run/polkit/agent-helper.socket` (enable `polkit-agent-helper.socket` if auth
+fails with a setuid-helper error). You can also run
+`pkexec metis-remote firewall apply` from a terminal. PipeWire and the
 Metis ScreenCast portal must be running in the DRM session — re-run
 `./run-metis.sh --install-session` if portal capture is broken. Check status:
 `metis-remote status` (JSON).
@@ -1310,7 +1317,9 @@ changes live.
 | Verify the shell is reachable | `./run-metis.sh --verify` |
 | Compare compositor vs shell grid | `./run-metis.sh --verify-grid` |
 | Remote desktop toggle greyed out | Install `gnome-remote-desktop`; set a password on **Settings → Remote access** before enabling |
-| LAN firewall not applied / Retry times out | Install `nftables` (or active `ufw`); ensure `metis-polkit-agent` is running; use **Retry firewall apply** under Security, or `pkexec metis-remote firewall apply` |
+| LAN firewall not applied / Retry times out | Install `nftables` (or active `ufw`); ensure `metis-polkit-agent` is running (`ps` / session logs); use **Retry firewall apply** under Security, or `pkexec metis-remote firewall apply`. On polkit 127+, confirm `systemctl is-active polkit-agent-helper.socket` |
+| PolicyKit password dialog missing / auth fails | Confirm `metis-polkit-agent` is running; kill competing GNOME/KDE agents if register fails. Helper path: socket `/run/polkit/agent-helper.socket` or setuid `polkit-agent-helper-1` |
+| User list shows default icon instead of DE picture | Metis reads `~/.face`, `~/.face.icon`, then `/var/lib/AccountsService/icons/<username>`. Set a picture in Settings → Users or ensure the AccountsService icon exists and is world-readable |
 | RDP connects but screen is black | Confirm you are on a DRM session (not nested dev); unlock if the session is locked; check `metis-remote status` and PipeWire/portal stack |
 | `metis-remote` not found | Package may be missing — `dpkg -l metis-desktop` and reinstall with `sudo apt install ./metis-desktop_*.deb`. Dev trees: `./run-metis.sh --install-session` |
 | Metis Viewer: `cliprdr_… failed` / instant disconnect | Update Viewer (clipboard channel disabled in spawn). **Do not RDP into the same session from itself** — connect from another machine (e.g. the KVM host → guest IP) |

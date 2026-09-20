@@ -227,7 +227,8 @@ fn set_avatar_picture(pic: &gtk::Picture, path: Option<&std::path::Path>) {
 }
 
 fn refresh_avatar(pic: &gtk::Picture) {
-    set_avatar_picture(pic, Some(face_path().as_path()));
+    let path = metis_config::load_menu_config().resolved_avatar_path();
+    set_avatar_picture(pic, path.as_deref());
 }
 
 fn install_face_image(src: &std::path::Path) -> std::io::Result<()> {
@@ -280,16 +281,13 @@ fn refresh_account_list(accounts: &Rc<RefCell<Vec<AccountInfo>>>, list_box: &gtk
     }
 }
 
-fn account_face_path(acct: &AccountInfo) -> PathBuf {
-    if acct.is_current {
-        return face_path();
-    }
-    PathBuf::from(&acct.home).join(".face")
-}
-
 fn load_account_avatar(pic: &gtk::Picture, acct: &AccountInfo) {
-    let face = account_face_path(acct);
-    set_avatar_picture(pic, Some(face.as_path()));
+    let path = if acct.is_current {
+        metis_config::load_menu_config().resolved_avatar_path()
+    } else {
+        metis_config::resolve_user_avatar_path(&acct.username, &acct.home)
+    };
+    set_avatar_picture(pic, path.as_deref());
 }
 
 fn build_user_row(

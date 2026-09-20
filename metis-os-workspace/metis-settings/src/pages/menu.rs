@@ -150,8 +150,9 @@ pub fn build() -> gtk::Widget {
     }
 
     let feat_hint = gtk::Label::new(Some(&tr(
-        "Avatar uses ~/.face when present (or a path in menu.json). Display name \
-         falls back to your account full name, then $USER.",
+        "Avatar uses ~/.face, ~/.face.icon, or the GNOME/KDE AccountsService \
+         picture when present (or a path in menu.json). Display name falls back \
+         to your account full name, then $USER.",
     )));
     feat_hint.set_xalign(0.0);
     feat_hint.set_wrap(true);

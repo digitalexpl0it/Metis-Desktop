@@ -892,7 +892,11 @@ strings, and lays out correctly for RTL scripts — without per-string rebuilds.
 - [x] **Locale detection + override** — `locale.json` + Settings → System →
       **Language & region**.
 - [x] **Users + Date & Time** — Settings pages for profile/accounts (Polkit via
-      `metis-remote`) and NTP/timezone/`datetime.json` week start (2026-09-19).
+      `metis-remote` + `metis-polkit-agent`) and NTP/timezone/`datetime.json`
+      week start (2026-09-19). User list avatars resolve `~/.face` /
+      AccountsService icons (2026-09-20).
+- [x] **Native Polkit agent** — `metis-polkit-agent` GTK4 dialog; socket-activated
+      helper on polkit ≥ 127 (2026-09-20).
 
 ### B. Extract & translate strings
 

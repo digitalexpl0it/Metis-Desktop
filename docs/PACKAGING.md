@@ -158,14 +158,14 @@ Nix: [`.github/workflows/nix-flake.yml`](../.github/workflows/nix-flake.yml).
 
 | Path | Role |
 |------|------|
-| `/usr/bin/metis-{compositor,shell,settings,portal,remote,viewer,gamingd}` | Binaries |
+| `/usr/bin/metis-{compositor,shell,settings,portal,remote,viewer,gamingd,polkit-agent}` | Binaries |
 | `/usr/bin/metis-session` | Greeter session launcher |
 | `/usr/share/wayland-sessions/metis.desktop` | Session entry |
 | `/usr/share/xdg-desktop-portal/…` | Portal backend |
 | `/usr/share/applications/metis-*.desktop` + icons | Settings / Viewer |
 | `/usr/share/metis/{wallpapers,widgets,locale}` | Assets / i18n |
-| `/usr/share/polkit-1/actions/org.metis.policy` | Polkit |
-| `/usr/bin/metis-polkit-agent` / `/usr/libexec/metis-polkit-agent` | Metis PolicyKit auth agent |
+| `/usr/share/polkit-1/actions/org.metis.policy` | Polkit actions for `metis-remote` |
+| `/usr/bin/metis-polkit-agent` / `/usr/libexec/metis-polkit-agent` | Metis PolicyKit auth agent (session password dialogs) |
 | `/etc/pam.d/metis` | Lock-screen PAM |
 
 ## Explicit non-goals (for now)
