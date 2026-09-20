@@ -237,7 +237,10 @@ pub fn ensure_polkit_agent() {
     let mut cmd = Command::new(&bin);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .env("GTK_A11Y", "none")
+        .env("NO_AT_BRIDGE", "1")
+        .env("GSK_RENDERER", "cairo");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

@@ -32,6 +32,20 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
+    // Avoid AT-SPI round-trips that stall password entry on Wayland sessions.
+    // Also prefer Cairo so GSK/GL init cannot hitch the dialog.
+    unsafe {
+        if std::env::var_os("GTK_A11Y").is_none() {
+            std::env::set_var("GTK_A11Y", "none");
+        }
+        if std::env::var_os("NO_AT_BRIDGE").is_none() {
+            std::env::set_var("NO_AT_BRIDGE", "1");
+        }
+        if std::env::var_os("GSK_RENDERER").is_none() {
+            std::env::set_var("GSK_RENDERER", "cairo");
+        }
+    }
+
     if let Err(err) = gtk::init() {
         eprintln!("metis-polkit-agent: gtk init failed: {err}");
         return ExitCode::from(1);
@@ -45,8 +59,11 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(1);
     };
+    if let Err(err) = helper::helper_backend_ready(&helper) {
+        eprintln!("metis-polkit-agent: {err}");
+        return ExitCode::from(1);
+    }
     tracing::info!(path = %helper.display(), "using polkit agent helper");
-
     let session_id = match resolve_session_id() {
         Ok(id) => id,
         Err(err) => {

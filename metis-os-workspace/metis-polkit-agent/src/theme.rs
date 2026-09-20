@@ -98,7 +98,7 @@ fn stylesheet(tokens: &ThemeTokens) -> String {
             border-radius: 8px;
             padding: 8px 16px;
         }}
-        entry, passwordentry {{
+        entry, entry.metis-polkit-password {{
             border-radius: 8px;
             padding: 6px 10px;
         }}

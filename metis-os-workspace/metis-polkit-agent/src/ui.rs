@@ -88,11 +88,14 @@ pub fn present_auth_dialog(
     pass_lbl.set_xalign(0.0);
     pass_lbl.set_width_chars(10);
     pass_row.append(&pass_lbl);
-    let password = gtk::PasswordEntry::builder()
-        .show_peek_icon(true)
+    // Plain Entry is lighter than PasswordEntry (no peek-icon / a11y chatter).
+    let password = gtk::Entry::builder()
+        .visibility(false)
+        .input_purpose(gtk::InputPurpose::Password)
         .hexpand(true)
         .activates_default(true)
         .build();
+    password.add_css_class("metis-polkit-password");
     pass_row.append(&password);
     root.append(&pass_row);
 
@@ -145,10 +148,17 @@ pub fn present_auth_dialog(
             }
             err.set_visible(false);
             auth_btn.set_sensitive(false);
-            let _ = from_ui.send_blocking(UiResponse::Authenticate {
-                cookie: cookie.clone(),
-                username,
-                password: pw,
+            // Never block the GTK main loop on channel send.
+            let from_ui = from_ui.clone();
+            let cookie = cookie.clone();
+            glib::spawn_future_local(async move {
+                let _ = from_ui
+                    .send(UiResponse::Authenticate {
+                        cookie,
+                        username,
+                        password: pw,
+                    })
+                    .await;
             });
         });
     }
@@ -157,10 +167,16 @@ pub fn present_auth_dialog(
         let cookie = cookie.clone();
         let from_ui = from_ui.clone();
         cancel.connect_clicked(move |_| {
-            let _ = from_ui.send_blocking(UiResponse::Cancel {
-                cookie: cookie.clone(),
+            let from_ui = from_ui.clone();
+            let cookie = cookie.clone();
+            glib::spawn_future_local(async move {
+                let _ = from_ui
+                    .send(UiResponse::Cancel {
+                        cookie: cookie.clone(),
+                    })
+                    .await;
+                close_dialog(&cookie);
             });
-            close_dialog(&cookie);
         });
     }
 
@@ -168,8 +184,14 @@ pub fn present_auth_dialog(
         let cookie = cookie.clone();
         let from_ui = from_ui.clone();
         window.connect_close_request(move |_| {
-            let _ = from_ui.send_blocking(UiResponse::Cancel {
-                cookie: cookie.clone(),
+            let from_ui = from_ui.clone();
+            let cookie_for_send = cookie.clone();
+            glib::spawn_future_local(async move {
+                let _ = from_ui
+                    .send(UiResponse::Cancel {
+                        cookie: cookie_for_send,
+                    })
+                    .await;
             });
             OPEN.with(|m| {
                 m.borrow_mut().remove(&cookie);
@@ -224,9 +246,11 @@ fn restore_dialog_after_retry(widget: &gtk::Widget, message: Option<&str>) {
             btn.set_sensitive(true);
         }
     }
-    if let Some(entry) = widget.downcast_ref::<gtk::PasswordEntry>() {
-        entry.set_text("");
-        entry.grab_focus();
+    if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
+        if entry.has_css_class("metis-polkit-password") {
+            entry.set_text("");
+            entry.grab_focus();
+        }
     }
     if let Some(bx) = widget.downcast_ref::<gtk::Box>() {
         let mut child = bx.first_child();
