@@ -343,9 +343,8 @@ impl Wallpaper {
                                 .or_else(|| new_sources.get(&path))
                                 .cloned()
                                 .or_else(|| {
-                                    load_image_cached(&path).map(|arc| {
+                                    load_image_cached(&path).inspect(|arc| {
                                         new_sources.insert(path.clone(), arc.clone());
-                                        arc
                                     })
                                 });
                             match source {

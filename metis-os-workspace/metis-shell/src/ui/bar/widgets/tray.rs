@@ -728,7 +728,7 @@ fn pixmap_to_texture(pixmap: &crate::services::IconPixmap) -> gdk::Texture {
 fn pixmap_is_mostly_light(rgba: &[u8]) -> bool {
     let mut light = 0u32;
     let mut opaque = 0u32;
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         if px[3] < 48 {
             continue;
         }
@@ -742,7 +742,7 @@ fn pixmap_is_mostly_light(rgba: &[u8]) -> bool {
 }
 
 fn invert_opaque_rgba(rgba: &mut [u8]) {
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         if px[3] < 16 {
             continue;
         }

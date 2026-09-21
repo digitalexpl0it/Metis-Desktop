@@ -143,7 +143,9 @@ fn urgency_kind(hints: &HashMap<String, OwnedValue>) -> NotificationKind {
 /// dropping any trailing unpaired entry.
 fn parse_actions(actions: &[String]) -> Vec<(String, String)> {
     actions
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| (pair[0].clone(), pair[1].clone()))
         .collect()
 }

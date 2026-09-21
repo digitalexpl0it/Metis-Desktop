@@ -503,7 +503,6 @@ pub fn install(button: &gtk::Button) {
         let search = search.clone();
         let list_generation = list_generation.clone();
         let pin_ctx = pin_ctx.clone();
-        let show_pinned = show_pinned;
         Rc::new(move || {
             let keep_search_focus = search.has_focus();
             let query = search.text().to_string();

@@ -222,7 +222,7 @@ fn run_pulse_session(st: &VizState) -> Result<(), String> {
 
         // Shift left by HOP_SIZE and append new samples.
         ring.copy_within(HOP_SIZE.., 0);
-        for (i, chunk) in hop_bytes.chunks_exact(4).enumerate() {
+        for (i, chunk) in hop_bytes.as_chunks::<4>().0.iter().enumerate() {
             if i >= HOP_SIZE {
                 break;
             }
