@@ -28,6 +28,8 @@ pub struct AppEntry {
     /// `com.valvesoftware.Steam`. Flatpak windows commonly report this as their
     /// Wayland `app_id`, so it is another handle for window→entry matching.
     pub flatpak_id: Option<String>,
+    /// Freedesktop Categories= tokens from the `.desktop` file.
+    pub categories: Vec<String>,
 }
 
 thread_local! {
@@ -136,6 +138,16 @@ fn entry_from_info(info: gio::AppInfo) -> Option<AppEntry> {
         .and_then(|desktop| desktop.string("X-Flatpak"))
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let categories = desktop
+        .and_then(|desktop| desktop.categories())
+        .map(|s| {
+            s.split(';')
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     Some(AppEntry {
         id,
@@ -145,6 +157,7 @@ fn entry_from_info(info: gio::AppInfo) -> Option<AppEntry> {
         keywords,
         wm_class,
         flatpak_id,
+        categories,
     })
 }
 
@@ -244,6 +257,67 @@ pub fn pinned_entries_from(apps: &[AppEntry]) -> Vec<AppEntry> {
 pub fn pinned_entries() -> Vec<AppEntry> {
     pinned_entries_from(&list_apps())
 }
+
+/// Main menu category groups (id, translated label key, matching desktop tokens).
+/// Special ids: `frequent`, `all`.
+pub const MENU_CATEGORY_DEFS: &[(&str, &str, &[&str])] = &[
+    ("frequent", "Frequent", &[]),
+    ("all", "All", &[]),
+    (
+        "internet",
+        "Internet",
+        &["Network", "WebBrowser", "Email", "InstantMessaging"],
+    ),
+    ("office", "Office", &["Office", "WordProcessor", "Spreadsheet"]),
+    ("graphics", "Graphics", &["Graphics", "Photography", "2DGraphics"]),
+    (
+        "audiovideo",
+        "Audio & Video",
+        &["AudioVideo", "Audio", "Video", "Player", "Recorder"],
+    ),
+    (
+        "development",
+        "Development",
+        &["Development", "IDE", "TextEditor"],
+    ),
+    ("games", "Games", &["Game"]),
+    ("education", "Education", &["Education"]),
+    ("science", "Science", &["Science"]),
+    ("settings", "Settings", &["Settings", "DesktopSettings", "System"]),
+    ("utilities", "Utilities", &["Utility", "Accessories", "Core"]),
+];
+
+/// Apps matching a category id (`frequent` / `all` / Freedesktop group).
+pub fn apps_in_category<'a>(apps: &'a [AppEntry], category_id: &str, query: &str) -> Vec<AppEntry> {
+    let base: Vec<AppEntry> = match category_id {
+        "frequent" => frequent_from(apps, FREQUENT_CATEGORY_LIMIT),
+        "all" => apps.to_vec(),
+        id => {
+            let tokens = MENU_CATEGORY_DEFS
+                .iter()
+                .find(|(cid, _, _)| *cid == id)
+                .map(|(_, _, t)| *t)
+                .unwrap_or(&[]);
+            apps.iter()
+                .filter(|e| {
+                    tokens.iter().any(|tok| {
+                        e.categories
+                            .iter()
+                            .any(|c| c.eq_ignore_ascii_case(tok))
+                    })
+                })
+                .cloned()
+                .collect()
+        }
+    };
+    if query.trim().is_empty() {
+        base
+    } else {
+        search_in(&base, query)
+    }
+}
+
+const FREQUENT_CATEGORY_LIMIT: usize = 24;
 
 /// Toggle an app's pinned state, persisting the change. Returns the new state.
 pub fn toggle_pin(id: &str) -> bool {

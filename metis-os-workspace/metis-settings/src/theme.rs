@@ -1354,6 +1354,23 @@ fn settings_css(t: &ThemeTokens) -> String {
             background-color: rgba({accent_rgb}, 0.45);
             border-radius: 999px;
         }}
+        .metis-menu-thumb-cats {{
+            background-color: rgba({text_rgb}, 0.06);
+            border-radius: 4px;
+            padding: 3px;
+        }}
+        .metis-menu-thumb-grid {{
+            background-color: rgba({text_rgb}, 0.04);
+            border-radius: 4px;
+            padding: 4px;
+        }}
+        .metis-menu-thumb-footer {{
+            padding-top: 2px;
+            border-top: 1px solid {border};
+        }}
+        .metis-menu-thumb-crest {{
+            padding-bottom: 2px;
+        }}
 
         /* Appearance · Wallpaper grid */
         .metis-wallpaper-grid {{ padding: 4px; }}

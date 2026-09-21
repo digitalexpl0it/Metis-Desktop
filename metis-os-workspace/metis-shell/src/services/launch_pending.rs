@@ -241,6 +241,7 @@ mod tests {
             keywords: Vec::new(),
             wm_class: wm.map(str::to_string),
             flatpak_id: flatpak.map(str::to_string),
+            categories: Vec::new(),
         }
     }
 

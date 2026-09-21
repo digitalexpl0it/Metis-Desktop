@@ -899,14 +899,19 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   object — labels may use `{helper.<key>}`. No network from helpers by default;
   not available to `open_uri` / `launch`. Rhai/Lua/WASM remain deferred. Example
   packs: `com.metis.example.quicklinks`, `com.metis.example.helperstatus`.
-- **Metis Menu** — pick a **layout** (Metis default, Whisker, ArcMenu, Mint),
-  toggle the user avatar/name header, places/power rail, and pinned column;
+- **Metis Menu** — pick a **layout** (Metis, Whisker, ArcMenu, Mint, plus the
+  layout pack: **Bracket**, **Ledger**, **Mosaic**, **Ramp**, **Ladder**,
+  **Plaza**, **Crest**, **Chip**), toggle the user avatar/name header,
+  places/power rail, and pinned column (some layouts hide pinned by design);
   choose your default **terminal** and **file manager** (auto-detected installs
   or a custom binary path); and set launcher panel opacity. Tap **Super** to
   toggle the menu; start typing while it is open to filter applications.
-  Selecting **Settings** restores and focuses the existing Settings window
-  (including when minimized) instead of opening a duplicate. Saved to
-  `menu.json` (layout changes reload the edge bar live).
+  **Bracket** / **Ladder** browse by Freedesktop categories; grid layouts
+  (**Mosaic**, **Chip**, **Plaza**, **Crest**) show icon tiles; **Plaza** adds
+  a profile/power footer; **Crest** centers a large avatar header. Selecting
+  **Settings** restores and focuses the existing Settings window (including when
+  minimized) instead of opening a duplicate. Saved to `menu.json` (layout
+  changes reload the edge bar live).
 - **Users** — profile picture and display name (synced with Metis Menu),
   password change, and local account management (add/remove, Administrator /
   `sudo` toggle). The **Other users** list shows each account with a circular
@@ -973,6 +978,9 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   optional backup to `~/metis-config-backup-…`, keep custom themes (not stock
   dark/light), and optionally run first-run setup again. Confirm before wipe;
   log out / restart the session afterward for a full reload.
+- **About** — Metis product version (from the workspace crate / GitHub tag
+  scheme), installed Metis components, author **DigitalExpl0it**, GitHub link,
+  and host OS details (distro, kernel, CPU, memory).
 
 **Bluetooth battery notes.** Many devices only expose a coarse percentage over
 plain Bluetooth (often updating on reconnect). Charging state requires a driver

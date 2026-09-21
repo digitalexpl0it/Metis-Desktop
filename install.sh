@@ -212,6 +212,26 @@ warn_mixed_install() {
 [[ -x "$RUN_METIS" || -f "$RUN_METIS" ]] || die "missing $RUN_METIS (run from Metis repo root)"
 [[ -d "$DEPS_DIR" ]] || die "missing $DEPS_DIR"
 
+# Workspace crate SemVer (GitHub tags like v0.1.0.18 → Cargo 0.1.18 via
+# scripts/sync-version.sh / sync-versions.sh). From-source installs use whatever
+# is currently in metis-os-workspace/Cargo.toml — sync before tagging a release.
+METIS_CARGO_VER="$(python3 - "$WORKSPACE/Cargo.toml" <<'PY'
+import re, sys
+text = open(sys.argv[1]).read().splitlines()
+in_wp = False
+for line in text:
+    if line.startswith("["):
+        in_wp = line.startswith("[workspace.package]")
+    if in_wp and re.match(r"^version\s*=", line):
+        m = re.search(r'"([^"]+)"', line)
+        print(m.group(1) if m else "")
+        break
+PY
+)"
+if [[ -n "${METIS_CARGO_VER:-}" ]]; then
+  log "Metis workspace version: ${METIS_CARGO_VER} (product tag style 0.1.0.N → sync with scripts/sync-version.sh)"
+fi
+
 DEPS_FILE="$(resolve_deps_file)"
 log "Distro: ${PRETTY_NAME:-$ID $VERSION_ID}"
 log "Deps profile: $(basename "$DEPS_FILE")"

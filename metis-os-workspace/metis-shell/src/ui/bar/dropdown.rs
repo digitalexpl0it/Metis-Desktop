@@ -50,12 +50,7 @@ pub fn wire_toggle_prepare(
             btn.add_css_class("metis-bar-dropdown-active");
         });
     }
-    {
-        let btn = button.clone();
-        popover.connect_unmap(move |_| {
-            btn.remove_css_class("metis-bar-dropdown-active");
-        });
-    }
+    wire_clear_on_dismiss(&popover);
 
     POPOVERS.with(|list| list.borrow_mut().push(popover.clone()));
 
@@ -65,6 +60,7 @@ pub fn wire_toggle_prepare(
             return;
         };
         if popover.is_visible() {
+            clear_trigger_highlight(&popover);
             glib::idle_add_local_once(move || {
                 popover.popdown();
             });
@@ -84,10 +80,10 @@ pub fn wire_toggle_prepare(
     popover
 }
 
-/// Register an externally-managed popover (e.g. a grab-based MenuButton popover)
-/// so the compositor "close-popovers" signal and single-open logic can still
-/// pop it down.
+/// Register an externally-managed popover (e.g. Metis Menu) so the compositor
+/// "close-popovers" signal and single-open logic can still pop it down.
 pub fn register(popover: &gtk::Popover) {
+    wire_clear_on_dismiss(popover);
     POPOVERS.with(|list| list.borrow_mut().push(popover.clone()));
 }
 
@@ -100,6 +96,11 @@ pub fn close_all() {
         list.clone()
     });
     for popover in &popovers {
+        // Clear the cyan "open" chrome *before* popdown. Launching an app from
+        // inside the Metis Menu steals focus mid-dismiss; GTK can skip / delay
+        // unmap, which left the launcher button stuck highlighted until the
+        // next bar click.
+        clear_trigger_highlight(popover);
         popover.popdown();
     }
 }
@@ -113,4 +114,31 @@ pub fn request_close_all() {
         return;
     }
     glib::idle_add_local_once(close_all);
+}
+
+/// Drop `metis-bar-dropdown-active` (+ pressed/focus flags) on the popover's
+/// parent bar button. Safe to call repeatedly.
+pub fn clear_trigger_highlight(popover: &gtk::Popover) {
+    let Some(parent) = popover.parent() else {
+        return;
+    };
+    parent.remove_css_class("metis-bar-dropdown-active");
+    parent.unset_state_flags(
+        gtk::StateFlags::ACTIVE
+            | gtk::StateFlags::CHECKED
+            | gtk::StateFlags::FOCUSED
+            | gtk::StateFlags::FOCUS_WITHIN
+            | gtk::StateFlags::PRELIGHT,
+    );
+}
+
+fn wire_clear_on_dismiss(popover: &gtk::Popover) {
+    // `closed` fires even when unmap is delayed (common when an app launch
+    // steals focus during popdown from a child click).
+    popover.connect_closed(|popover| {
+        clear_trigger_highlight(popover);
+    });
+    popover.connect_unmap(|popover| {
+        clear_trigger_highlight(popover);
+    });
 }

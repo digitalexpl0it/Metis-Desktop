@@ -3,9 +3,10 @@
 **Current phase:** Phases **1–17** are complete for their shipped product bars
 (Phase 17 Task View / Super+Tab shipped).
 **Phase 18** (security / IPC / isolation polish) **A–D complete** 2026-08-08;
-§E remains track-only (colour management UAF + MultiRenderer) — see below.
+§E: colour management UAF stays track-only; **MultiRenderer promoted to urgent**
+(see **Urgent priorities**).
 **Phase 19** (Gaming Setup UX — guided drivers + first-run polish) shipped
-2026-08-08 — see Phase 19 below.
+2026-08-08 — see Phase 19 below; **per-app Gamescope UI now urgent**.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -25,6 +26,34 @@ individual phase sections for deferred follow-ups.
 
 ---
 
+## Urgent priorities (promoted 2026-09-20)
+
+Former stretch / deferred items now **front of queue**. Detail and history stay
+in the phase sections linked below — this list is the active order of work.
+
+- [ ] **1. GLES `MultiRenderer` / zero-copy cross-GPU path** — replace CPU
+      readback for hybrid multi-monitor (outputs on separate GPUs). ScreenCast
+      dmabuf is already done; this is compositor binding.
+      → Wave 3a residual, Phase 3 multi-GPU notes, Phase 18 §E.
+- [ ] **2. True per-surface HDR decode** — apps with distinct HDR metadata
+      streams render natively per window (beyond today’s global encode + 3c
+      pass-through hints). Fuller tone-map matrix welcome.
+      → Phase 5 §B residual (pass-through ≠ decode).
+- [ ] **3. Metis-native remote host** — first-party host protocol + client path
+      so session sharing is not only `gnome-remote-desktop`. Decision already
+      recorded; implementation now urgent.
+      → Wave 4c, Phase 7, Phase 15 §F,
+      [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
+- [ ] **4. Per-Steam-appid Gamescope profile UI** — Settings UI over existing
+      `gaming.json` → `gamescope_profiles` (config retained; Big Picture already
+      uses `gamescope_big_picture`).
+      → Phase 19 §C.
+
+**Suggested order:** 1 → 2 → 4 → 3 (graphics first; native remote last —
+largest surface). Profile MultiRenderer before deep investment.
+
+---
+
 ## Optional stretch (Waves 1–4)
 
 Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backlog*.
@@ -39,18 +68,22 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 
 ### Wave 3 — Graphics
 - [x] **3a** Primary→secondary transfer for hybrid outputs (CPU readback path;
-      local+no-blur fallback). Full `MultiRenderer` element typing later.
+      local+no-blur fallback). **Urgent residual:** full GLES `MultiRenderer`
+      element typing / dmabuf path without CPU readback — see **Urgent priorities**.
 - [ ] **3b** Default-on `wp_color_management_v1` — **blocked** on upstream
       wayland-rs server/sys ObjectData UAF; keep `METIS_COLOR_MGMT=1` opt-in
       ([docs/upstream/](../docs/upstream/README.md))
-- [x] **3c** Per-surface HDR pass-through into encode path (PQ/HLG hints;
-      mixed SDR+HDR approximate). Fuller tone-map matrix still welcome.
+- [x] **3c** Per-surface HDR **pass-through** into encode path (PQ/HLG hints;
+      mixed SDR+HDR approximate). **Urgent residual:** true per-surface HDR
+      **decode** + fuller tone-map — see **Urgent priorities** (pass-through ≠ decode).
 
 ### Wave 4 — Remote
 - [x] **4a** `metis-remote rustdesk status|enable|disable` + firewall/Polkit +
-      Settings; GRD remains default
-- [x] **4b** Decision doc only:
+      Settings; GRD remains default until native host ships
+- [x] **4b** Decision doc:
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md)
+- [ ] **4c** **Urgent:** Metis-native remote host protocol + client — see
+      **Urgent priorities** (GRD path stays supported meanwhile)
 
 ### Wave 5 — Session startup
 - [x] `startup.json` — global enable + ordered desktop ids + per-entry enable/delay
@@ -400,8 +433,9 @@ so each milestone is shippable on its own:
         **Caveat (updated Wave 3a, 2026-07-27):** hybrid outputs try a
         primary→secondary framebuffer transfer (composite on primary with blur,
         present on secondary); on failure fall back to the local renderer with
-        blur off. Full GLES `OutputStack` typing for Smithay `MultiRenderer`
-        (dmabuf path without CPU readback) remains a later stretch.
+        blur off. **Urgent:** full GLES `OutputStack` typing for Smithay
+        `MultiRenderer` (dmabuf path without CPU readback) — see **Urgent
+        priorities**.
         Wallpaper/decoration GL caches are invalidated on renderer-context
         switches. **Hardware validation (2026-07-26):** hybrid iGPU+dGPU laptop
         — HDMI projector output, gaming PRIME offload (fast), pointer/input
@@ -574,9 +608,11 @@ Phase 3) — none of these are possible under the nested winit dev session.
       metadata / prefer DRM BT.2020 Colorspace; HLG EDID detection + HLG encode
       (EOTF=3) when HLG-only (PQ preferred when both); VT resume invalidates LUT/
       HDR GL and dirties ICC rebake. Mode-set/VT gamma+HDR re-apply is **wired**
-      (hardware QA still welcome). **Still deferred:** default-on colour protocol
-      ([wayland-rs#949](https://github.com/Smithay/wayland-rs/issues/949)), true
-      per-surface HDR decode.
+      (hardware QA still welcome). **Still deferred (upstream):** default-on
+      colour protocol
+      ([wayland-rs#949](https://github.com/Smithay/wayland-rs/issues/949)).
+      **Urgent:** true per-surface HDR **decode** (3c pass-through is done;
+      see **Urgent priorities**).
 ---
 
 ## Phase 6 — Flatpak, Steam & gaming
@@ -775,9 +811,9 @@ Mode. Track compatibility either way:
 **Status: complete for the GNOME RDP path (2026-07-25 security closeout).** Metis
 hardens session sharing via `metis-remote` + `gnome-remote-desktop` + portal
 clipboard/input. **Phase 15 §F:** first-party **viewer** + RustDesk Settings
-preset shipped; host remains GRD. Still deferred: Metis-native host protocol;
-optional `metis-remote` RustDesk backend. Deep per-app X11 isolation shipped as
-Phase 15 §E opt-in.
+preset shipped; host remains GRD for now. **Urgent:** Metis-native host protocol
+(see **Urgent priorities** / Wave 4c). Optional `metis-remote` RustDesk backend
+still TBD. Deep per-app X11 isolation shipped as Phase 15 §E opt-in.
 
 Let you **remote into a Metis machine from another device** (laptop, tablet,
 phone) with full interactive control — not just “share screen” in a call.
@@ -1636,21 +1672,22 @@ re-doing ScreenCast dmabuf (already shipped).
 - [x] Do **not** claim full isolation — SECURITY residual #4 marked done as soft
       policy only
 
-### E. Display / upstream (track only)
+### E. Display / upstream
 
 - [ ] **Default-on `wp_color_management_v1`** — only after upstream wayland-rs
       **server/sys** ObjectData UAF fix (keep `METIS_COLOR_MGMT=1` opt-in). No
-      local ObjectData lifecycle wrapper in Metis
-- [ ] **GLES `MultiRenderer` / zero-copy compositor path** — Phase 3 stretch for
-      hybrid multi-GPU *compositor* binding (ScreenCast dmabuf already done).
-      Profile before prioritizing
+      local ObjectData lifecycle wrapper in Metis (**blocked**, not urgent)
+- [ ] **Urgent: GLES `MultiRenderer` / zero-copy compositor path** — Phase 3
+      residual for hybrid multi-GPU *compositor* binding (ScreenCast dmabuf
+      already done). See **Urgent priorities**; profile before deep investment
 
 ### F. Explicitly deferred / rejected from review
 
 - Local safe-wrapper around wayland-rs ObjectData destruction (prefer upstream)
 - Blind `metis-grid` static layout cache (measure contention first)
 
-**Suggested order:** A → B → C → D; E stays gated on upstream / profiling.
+**Suggested order:** **Urgent priorities** first; then A → B → C → D; colour
+protocol stays gated on upstream.
 
 **Dependencies:** Phase 15 IPC / XWayland / gaming; Phase 16 trust-boundary
 tests; Phase 14 widgets process split.
@@ -1697,8 +1734,10 @@ out-kernelling CachyOS.
 
 ### C. Metis-owned optional tweaks (P1)
 
-- [x] **Deferred per-app `gamescope_profiles`** — config retained; full per-Steam
-      appid UI left for a follow-up (Big Picture uses `gamescope_big_picture`)
+- [x] **`gamescope_profiles` config retained** — Big Picture uses
+      `gamescope_big_picture`
+- [ ] **Urgent: per-Steam-appid Gamescope profile UI** — Settings editor over
+      `gaming.json` → `gamescope_profiles` (see **Urgent priorities**)
 - [x] **Optional toggles** — `mangohud_for_games` / `gamescope_big_picture` in
       Settings, applied via env/wrapper when Metis starts Steam / Big Picture
 - [x] **Settings UI** for `extra_steam_paths` (Flatpak only) — path picker using

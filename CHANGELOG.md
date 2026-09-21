@@ -9,6 +9,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Metis Menu layout pack** — eight additional layouts with Metis names (not
+  Arc/Whisker clones): **Bracket** (categories | apps), **Ledger** (tall list),
+  **Mosaic** (icon grid), **Ramp** (rail + wide center + pinned), **Ladder**
+  (category → apps), **Plaza** (search + grid + profile/power footer), **Crest**
+  (centered avatar + grid), **Chip** (dense grid). Settings → Metis Menu shows
+  scrollable thumbnails; Freedesktop categories feed Bracket/Ladder.
+- **Settings → System → About** — product version (`0.1.0.N` from crate SemVer),
+  installed Metis components, author DigitlExpl0it, GitHub link, and host OS
+  info (distro, kernel, CPU, memory).
 - **Settings → System → Reset** — factory-reset `~/.config/metis` with optional
   backup (`~/metis-config-backup-…`), keep custom themes, and re-run first-run
   setup. Destructive confirm; session restart recommended afterward.

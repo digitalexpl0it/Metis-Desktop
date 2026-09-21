@@ -56,6 +56,31 @@ pub fn build() -> gtk::Widget {
         );
     }
 
+    let (pin_row, pin_sw) = ui::switch_row(&tr("Show pinned apps"));
+    pin_sw.set_active(cfg.show_pinned && !cfg.style.hides_pinned());
+    pin_sw.set_sensitive(!cfg.style.hides_pinned());
+    {
+        let suppress = suppress.clone();
+        ui::defer_switch_active_notify_when(
+            &pin_sw,
+            {
+                let suppress = suppress.clone();
+                move || !suppress.get()
+            },
+            |active| {
+                let mut c = metis_config::load_menu_config();
+                if c.style.hides_pinned() {
+                    return;
+                }
+                if c.show_pinned == active {
+                    return;
+                }
+                c.show_pinned = active;
+                persist_and_reload(&c);
+            },
+        );
+    }
+
     let mut first_btn: Option<gtk::ToggleButton> = None;
     for style in MenuStyle::ALL {
         let btn = layout_thumb_button(*style);
@@ -70,6 +95,7 @@ pub fn build() -> gtk::Widget {
         {
             let suppress = suppress.clone();
             let user_sw = user_sw.clone();
+            let pin_sw = pin_sw.clone();
             let style = *style;
             btn.connect_toggled(move |b| {
                 if suppress.get() || !b.is_active() {
@@ -80,24 +106,44 @@ pub fn build() -> gtk::Widget {
                     return;
                 }
                 c.style = style;
-                // ArcMenu is the user-header layout — turn the header on when
-                // picking it so the style matches expectations out of the box.
-                if style == MenuStyle::ArcMenu && !c.show_user_header {
+                if style.prefers_user_header() && !c.show_user_header {
                     c.show_user_header = true;
                     suppress.set(true);
                     user_sw.set_active(true);
                     suppress.set(false);
+                }
+                if style.hides_pinned() {
+                    c.show_pinned = false;
+                    suppress.set(true);
+                    pin_sw.set_active(false);
+                    pin_sw.set_sensitive(false);
+                    suppress.set(false);
+                } else {
+                    pin_sw.set_sensitive(true);
+                    if !c.show_pinned {
+                        c.show_pinned = true;
+                        suppress.set(true);
+                        pin_sw.set_active(true);
+                        suppress.set(false);
+                    }
                 }
                 persist_and_reload(&c);
             });
         }
         chooser.append(&btn);
     }
-    layout_body.append(&chooser);
+    let chooser_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_height(280)
+        .child(&chooser)
+        .build();
+    layout_body.append(&chooser_scroll);
 
     let layout_hint = gtk::Label::new(Some(&tr(
-        "Metis is today’s classic menu. Other layouts rearrange search, the rail, \
-         and pinned apps. Changes apply after the edge bar reloads (~1s).",
+        "Pick a layout for the Metis Menu. Some layouts hide the pinned column \
+         (Whisker, Bracket, Ledger, Mosaic, Ladder, Plaza, Crest, Chip). Changes \
+         apply after the edge bar reloads (~1s).",
     )));
     layout_hint.set_xalign(0.0);
     layout_hint.set_wrap(true);
@@ -126,28 +172,7 @@ pub fn build() -> gtk::Widget {
             },
         );
     }
-
-    let (pin_row, pin_sw) = ui::switch_row(&tr("Show pinned apps"));
-    pin_sw.set_active(cfg.show_pinned);
     feat_body.append(&pin_row);
-    {
-        let suppress = suppress.clone();
-        ui::defer_switch_active_notify_when(
-            &pin_sw,
-            {
-                let suppress = suppress.clone();
-                move || !suppress.get()
-            },
-            |active| {
-                let mut c = metis_config::load_menu_config();
-                if c.show_pinned == active {
-                    return;
-                }
-                c.show_pinned = active;
-                persist_and_reload(&c);
-            },
-        );
-    }
 
     let feat_hint = gtk::Label::new(Some(&tr(
         "Avatar uses ~/.face, ~/.face.icon, or the GNOME/KDE AccountsService \
@@ -266,7 +291,6 @@ fn layout_thumb_button(style: MenuStyle) -> gtk::ToggleButton {
 
     match style {
         MenuStyle::Default => {
-            // rail | list+search | pinned  (search at bottom of list)
             let body = gtk::Box::new(gtk::Orientation::Horizontal, 3);
             body.set_hexpand(true);
             body.set_vexpand(true);
@@ -294,7 +318,7 @@ fn layout_thumb_button(style: MenuStyle) -> gtk::ToggleButton {
             body.append(&thumb_pins());
             preview.append(&body);
         }
-        MenuStyle::Mint => {
+        MenuStyle::Mint | MenuStyle::Ramp => {
             preview.append(&thumb_search_bar());
             let body = gtk::Box::new(gtk::Orientation::Horizontal, 3);
             body.set_hexpand(true);
@@ -303,6 +327,32 @@ fn layout_thumb_button(style: MenuStyle) -> gtk::ToggleButton {
             body.append(&thumb_list(false));
             body.append(&thumb_pins());
             preview.append(&body);
+        }
+        MenuStyle::Bracket | MenuStyle::Ladder => {
+            preview.append(&thumb_search_bar());
+            let body = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+            body.set_hexpand(true);
+            body.set_vexpand(true);
+            body.append(&thumb_cats());
+            body.append(&thumb_list(false));
+            preview.append(&body);
+        }
+        MenuStyle::Ledger => {
+            preview.append(&thumb_search_bar());
+            preview.append(&thumb_list(false));
+        }
+        MenuStyle::Mosaic | MenuStyle::Chip => {
+            preview.append(&thumb_search_bar());
+            preview.append(&thumb_grid(style == MenuStyle::Chip));
+        }
+        MenuStyle::Plaza => {
+            preview.append(&thumb_search_bar());
+            preview.append(&thumb_grid(false));
+            preview.append(&thumb_footer());
+        }
+        MenuStyle::Crest => {
+            preview.append(&thumb_crest());
+            preview.append(&thumb_grid(false));
         }
     }
 
@@ -402,4 +452,78 @@ fn thumb_user_bar() -> gtk::Box {
     name.set_size_request(-1, 8);
     row.append(&name);
     row
+}
+
+fn thumb_cats() -> gtk::Box {
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    col.add_css_class("metis-menu-thumb-cats");
+    col.set_size_request(28, -1);
+    col.set_vexpand(true);
+    for _ in 0..4 {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.add_css_class("metis-menu-thumb-row");
+        row.set_size_request(-1, 8);
+        col.append(&row);
+    }
+    col
+}
+
+fn thumb_grid(dense: bool) -> gtk::Box {
+    let grid = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    grid.add_css_class("metis-menu-thumb-grid");
+    grid.set_hexpand(true);
+    grid.set_vexpand(true);
+    let cols = if dense { 4 } else { 3 };
+    let size = if dense { 10 } else { 14 };
+    for _ in 0..2 {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        row.set_halign(gtk::Align::Center);
+        for _ in 0..cols {
+            let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            cell.add_css_class("metis-menu-thumb-tile");
+            cell.set_size_request(size, size);
+            row.append(&cell);
+        }
+        grid.append(&row);
+    }
+    grid
+}
+
+fn thumb_footer() -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    row.add_css_class("metis-menu-thumb-footer");
+    row.set_hexpand(true);
+    let avatar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    avatar.add_css_class("metis-menu-thumb-avatar");
+    avatar.set_size_request(10, 10);
+    row.append(&avatar);
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    line.add_css_class("metis-menu-thumb-line");
+    line.set_hexpand(true);
+    line.set_size_request(-1, 6);
+    row.append(&line);
+    for _ in 0..2 {
+        let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        dot.add_css_class("metis-menu-thumb-dot");
+        dot.set_size_request(8, 8);
+        row.append(&dot);
+    }
+    row
+}
+
+fn thumb_crest() -> gtk::Box {
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    col.set_halign(gtk::Align::Center);
+    col.add_css_class("metis-menu-thumb-crest");
+    let avatar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    avatar.add_css_class("metis-menu-thumb-avatar");
+    avatar.set_size_request(20, 20);
+    avatar.set_halign(gtk::Align::Center);
+    col.append(&avatar);
+    let name = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    name.add_css_class("metis-menu-thumb-line");
+    name.set_size_request(48, 6);
+    name.set_halign(gtk::Align::Center);
+    col.append(&name);
+    col
 }

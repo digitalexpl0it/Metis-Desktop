@@ -2544,6 +2544,87 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         border-color: {accent};
     }}
 
+    /* Layout pack: Bracket / Ladder categories */
+    .metis-menu-categories {{
+        background-color: transparent;
+        border: none;
+    }}
+    .metis-menu-categories row {{
+        border-radius: {rs}px;
+        margin: 1px 4px;
+        padding: 0;
+        color: {text};
+    }}
+    .metis-menu-categories row:hover {{
+        background-color: rgba({accent_rgb}, 0.12);
+    }}
+    .metis-menu-categories row:selected {{
+        background-color: rgba({accent_rgb}, 0.22);
+        color: {text};
+    }}
+    .metis-menu-style-bracket .metis-menu-scroll,
+    .metis-menu-style-ladder .metis-menu-scroll,
+    .metis-menu-style-ledger .metis-menu-scroll {{
+        min-height: 420px;
+        min-width: 280px;
+    }}
+    .metis-menu-style-bracket .metis-menu-body,
+    .metis-menu-style-ladder .metis-menu-body {{
+        min-width: 520px;
+    }}
+
+    /* Mosaic / Plaza / Crest / Chip grids */
+    .metis-menu-style-mosaic .metis-menu-scroll,
+    .metis-menu-style-plaza .metis-menu-scroll,
+    .metis-menu-style-crest .metis-menu-scroll {{
+        min-height: 360px;
+        min-width: 420px;
+    }}
+    .metis-menu-style-chip .metis-menu-scroll {{
+        min-height: 320px;
+        min-width: 360px;
+    }}
+    .metis-menu-app-grid {{
+        padding: 4px;
+    }}
+    .metis-menu-app-grid-dense .metis-menu-tile {{
+        padding: 6px 4px;
+    }}
+    .metis-menu-app-grid-dense .metis-menu-tile-label {{
+        font-size: 10px;
+    }}
+
+    /* Crest centered avatar header */
+    .metis-menu-crest-header {{
+        padding: 8px 8px 12px 8px;
+        border-bottom: 1px solid {border};
+        margin-bottom: 4px;
+    }}
+    .metis-menu-crest-avatar {{
+        border-radius: 999px;
+        min-width: 72px;
+        min-height: 72px;
+    }}
+
+    /* Plaza footer: profile + power */
+    .metis-menu-plaza-footer {{
+        padding: 8px 4px 2px 4px;
+        border-top: 1px solid {border};
+        margin-top: 4px;
+    }}
+    .metis-menu-plaza-footer .metis-menu-user-avatar {{
+        min-width: 28px;
+        min-height: 28px;
+    }}
+
+    /* Ramp: Dash-like wider center */
+    .metis-menu-style-ramp .metis-menu-center {{
+        min-width: 320px;
+    }}
+    .metis-menu-style-ramp .metis-menu-scroll {{
+        min-height: 400px;
+    }}
+
     .metis-menu-pinned-flow {{
         padding: 2px 2px 2px 2px;
     }}

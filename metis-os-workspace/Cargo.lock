@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "metis-capture"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "drm-fourcc",
  "gbm",
@@ -2320,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "metis-compositor"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "bitflags 2.13.0",
  "bytemuck",
@@ -2350,7 +2350,7 @@ dependencies = [
 
 [[package]]
 name = "metis-config"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "chrono",
  "directories",
@@ -2361,7 +2361,7 @@ dependencies = [
 
 [[package]]
 name = "metis-gaming"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "metis-config",
  "metis-protocol",
@@ -2373,7 +2373,7 @@ dependencies = [
 
 [[package]]
 name = "metis-grid"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "serde",
  "serde_json",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "metis-i18n"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "chrono",
  "fluent",
@@ -2397,7 +2397,7 @@ dependencies = [
 
 [[package]]
 name = "metis-polkit-agent"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "async-channel",
  "futures-util",
@@ -2415,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "metis-portal"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "ashpd",
  "async-trait",
@@ -2440,7 +2440,7 @@ dependencies = [
 
 [[package]]
 name = "metis-protocol"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "libc",
  "metis-grid",
@@ -2450,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "metis-remote"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "metis-config",
  "serde",
@@ -2463,7 +2463,7 @@ dependencies = [
 
 [[package]]
 name = "metis-screenshot"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "gdk-pixbuf",
  "gio",
@@ -2483,14 +2483,14 @@ dependencies = [
 
 [[package]]
 name = "metis-secrets"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "oo7",
 ]
 
 [[package]]
 name = "metis-settings"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "gio",
  "glib",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "metis-shell"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2553,7 +2553,7 @@ dependencies = [
 
 [[package]]
 name = "metis-viewer"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "gio",
  "glib",

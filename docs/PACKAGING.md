@@ -139,8 +139,11 @@ version = "0.1.13"
 Before a release build, sync (also done automatically by `package-deb.sh`):
 
 ```bash
-./scripts/sync-version.sh 0.1.0.14   # or: VERSION=0.1.0.14 ./scripts/sync-version.sh
+./scripts/sync-version.sh 0.1.0.18   # or: VERSION=0.1.0.18 ./scripts/sync-version.sh
+# Alias: ./scripts/sync-versions.sh (same script)
 ```
+
+Current workspace crate version is `0.1.18` (product / GitHub `0.1.0.18`).
 
 Shared FHS staging: [`scripts/stage-fhs.sh`](../metis-os-workspace/scripts/stage-fhs.sh)
 (used by deb, Arch PKGBUILD, and aligned with Nix `postInstall`).

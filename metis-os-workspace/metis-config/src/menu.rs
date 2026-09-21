@@ -11,12 +11,28 @@ pub enum MenuStyle {
     /// Metis default — rail | Frequent + search | Pinned.
     #[default]
     Default,
-    /// Search on top; rail + app list (+ optional pinned).
+    /// Search on top; rail + app list (no pinned column).
     Whisker,
     /// Optional user header above the usual Metis columns.
     ArcMenu,
     /// Search on top spanning the content; rail + list + pinned.
     Mint,
+    /// Category list beside the app list (Brisk-inspired).
+    Bracket,
+    /// Single tall app list with search (GNOME list-inspired).
+    Ledger,
+    /// Icon tile grid with search (Elementary-inspired).
+    Mosaic,
+    /// Utility rail, wide center, pinned column (Dash-inspired).
+    Ramp,
+    /// Category column cascading into an app column.
+    Ladder,
+    /// Search + icon grid + footer user/power row (Start-menu inspired).
+    Plaza,
+    /// Large centered avatar header + icon grid.
+    Crest,
+    /// Dense small-icon grid with search on top.
+    Chip,
 }
 
 impl MenuStyle {
@@ -25,6 +41,14 @@ impl MenuStyle {
         MenuStyle::Whisker,
         MenuStyle::ArcMenu,
         MenuStyle::Mint,
+        MenuStyle::Bracket,
+        MenuStyle::Ledger,
+        MenuStyle::Mosaic,
+        MenuStyle::Ramp,
+        MenuStyle::Ladder,
+        MenuStyle::Plaza,
+        MenuStyle::Crest,
+        MenuStyle::Chip,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -33,6 +57,14 @@ impl MenuStyle {
             MenuStyle::Whisker => "whisker",
             MenuStyle::ArcMenu => "arc_menu",
             MenuStyle::Mint => "mint",
+            MenuStyle::Bracket => "bracket",
+            MenuStyle::Ledger => "ledger",
+            MenuStyle::Mosaic => "mosaic",
+            MenuStyle::Ramp => "ramp",
+            MenuStyle::Ladder => "ladder",
+            MenuStyle::Plaza => "plaza",
+            MenuStyle::Crest => "crest",
+            MenuStyle::Chip => "chip",
         }
     }
 
@@ -42,6 +74,14 @@ impl MenuStyle {
             MenuStyle::Whisker => "Whisker",
             MenuStyle::ArcMenu => "ArcMenu",
             MenuStyle::Mint => "Mint",
+            MenuStyle::Bracket => "Bracket",
+            MenuStyle::Ledger => "Ledger",
+            MenuStyle::Mosaic => "Mosaic",
+            MenuStyle::Ramp => "Ramp",
+            MenuStyle::Ladder => "Ladder",
+            MenuStyle::Plaza => "Plaza",
+            MenuStyle::Crest => "Crest",
+            MenuStyle::Chip => "Chip",
         }
     }
 
@@ -50,9 +90,19 @@ impl MenuStyle {
             MenuStyle::Default => {
                 "Classic Metis menu: quick rail, Frequent Apps with search, and Pinned."
             }
-            MenuStyle::Whisker => "Search on top, places rail beside the app list.",
+            MenuStyle::Whisker => {
+                "Search on top, places rail beside the app list (no pinned column)."
+            }
             MenuStyle::ArcMenu => "Metis columns with an optional user header on top.",
             MenuStyle::Mint => "Search across the top; rail, apps, and pinned below.",
+            MenuStyle::Bracket => "Categories on the left, apps on the right.",
+            MenuStyle::Ledger => "A single searchable list of every installed app.",
+            MenuStyle::Mosaic => "Browse apps as a large icon grid with search on top.",
+            MenuStyle::Ramp => "Utility rail, wide app list, and pinned apps on the right.",
+            MenuStyle::Ladder => "Pick a category, then browse apps in the next column.",
+            MenuStyle::Plaza => "Search, icon grid, and a footer with profile and power.",
+            MenuStyle::Crest => "Centered profile header above an icon grid.",
+            MenuStyle::Chip => "Compact icon grid with search — dense and fast.",
         }
     }
 
@@ -62,7 +112,81 @@ impl MenuStyle {
             MenuStyle::Whisker => "metis-menu-style-whisker",
             MenuStyle::ArcMenu => "metis-menu-style-arc",
             MenuStyle::Mint => "metis-menu-style-mint",
+            MenuStyle::Bracket => "metis-menu-style-bracket",
+            MenuStyle::Ledger => "metis-menu-style-ledger",
+            MenuStyle::Mosaic => "metis-menu-style-mosaic",
+            MenuStyle::Ramp => "metis-menu-style-ramp",
+            MenuStyle::Ladder => "metis-menu-style-ladder",
+            MenuStyle::Plaza => "metis-menu-style-plaza",
+            MenuStyle::Crest => "metis-menu-style-crest",
+            MenuStyle::Chip => "metis-menu-style-chip",
         }
+    }
+
+    /// Search field sits above the body (not under the Frequent list).
+    pub fn search_on_top(self) -> bool {
+        matches!(
+            self,
+            MenuStyle::Whisker
+                | MenuStyle::Mint
+                | MenuStyle::Bracket
+                | MenuStyle::Ledger
+                | MenuStyle::Mosaic
+                | MenuStyle::Ladder
+                | MenuStyle::Plaza
+                | MenuStyle::Crest
+                | MenuStyle::Chip
+        )
+    }
+
+    /// Layout never shows the pinned column (ignores `show_pinned`).
+    pub fn hides_pinned(self) -> bool {
+        matches!(
+            self,
+            MenuStyle::Whisker
+                | MenuStyle::Bracket
+                | MenuStyle::Ledger
+                | MenuStyle::Mosaic
+                | MenuStyle::Ladder
+                | MenuStyle::Plaza
+                | MenuStyle::Crest
+                | MenuStyle::Chip
+        )
+    }
+
+    /// Uses Freedesktop category browsing instead of Frequent/alpha list.
+    pub fn uses_categories(self) -> bool {
+        matches!(self, MenuStyle::Bracket | MenuStyle::Ladder)
+    }
+
+    /// Main apps surface is an icon grid (not a list).
+    pub fn uses_app_grid(self) -> bool {
+        matches!(
+            self,
+            MenuStyle::Mosaic | MenuStyle::Plaza | MenuStyle::Crest | MenuStyle::Chip
+        )
+    }
+
+    /// Dense chip-sized tiles.
+    pub fn dense_grid(self) -> bool {
+        matches!(self, MenuStyle::Chip)
+    }
+
+    /// Force a user header (Crest / Plaza footer still builds its own chrome).
+    pub fn prefers_user_header(self) -> bool {
+        matches!(self, MenuStyle::Crest | MenuStyle::ArcMenu)
+    }
+
+    /// Classic three-column rail | list | pinned family (including Ramp).
+    pub fn classic_columns(self) -> bool {
+        matches!(
+            self,
+            MenuStyle::Default
+                | MenuStyle::Whisker
+                | MenuStyle::ArcMenu
+                | MenuStyle::Mint
+                | MenuStyle::Ramp
+        )
     }
 }
 

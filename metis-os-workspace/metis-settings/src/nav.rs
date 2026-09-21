@@ -78,7 +78,7 @@ pub const CATEGORIES: &[Category] = &[
         title: "System",
         icon: "preferences-system-symbolic",
         hue: NavHue::Green,
-        blurb: "Users, date & time, sound, power, locale, remote access, reset, and more",
+        blurb: "Users, date & time, sound, power, locale, remote access, reset, about, and more",
     },
 ];
 
@@ -356,6 +356,14 @@ pub const NAV: &[NavItem] = &[
         icon: Some("edit-clear-all-symbolic"),
         hue: Some(NavHue::Orange),
         subtitle: Some("Backup and restore Metis preferences to defaults"),
+        category: Some("system"),
+    },
+    NavItem {
+        page_id: Some("about"),
+        title: "About",
+        icon: Some("help-about-symbolic"),
+        hue: Some(NavHue::Gray),
+        subtitle: Some("Version, components, author, and system information"),
         category: Some("system"),
     },
 ];
