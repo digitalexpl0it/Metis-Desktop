@@ -26,11 +26,11 @@ pub enum BarDisplays {
 #[serde(rename_all = "lowercase")]
 pub enum WorkspaceMode {
     /// Each output owns an independent set of workspaces; switching one output's
-    /// workspace leaves the others alone (default).
-    #[default]
+    /// workspace leaves the others alone.
     Separate,
     /// All outputs switch together: changing to workspace N moves every monitor to
-    /// its own workspace N at once.
+    /// its own workspace N at once (default).
+    #[default]
     Linked,
 }
 
@@ -298,7 +298,7 @@ impl Default for BarFill {
 }
 
 fn default_bar_border_color() -> String {
-    "#00F2FE".into()
+    "#3d3846".into()
 }
 
 fn default_bar_border_gradient() -> Vec<String> {
@@ -306,13 +306,13 @@ fn default_bar_border_gradient() -> Vec<String> {
 }
 
 fn default_bar_border_width() -> f32 {
-    1.0
+    0.0
 }
 
 impl Default for BarBorder {
     fn default() -> Self {
         Self {
-            mode: BorderMode::default(),
+            mode: BorderMode::Solid,
             color: default_bar_border_color(),
             gradient: default_bar_border_gradient(),
             width_px: default_bar_border_width(),
@@ -321,7 +321,7 @@ impl Default for BarBorder {
 }
 
 fn default_pill_color() -> String {
-    "#00F2FE".into()
+    "#000000".into()
 }
 
 fn default_pill_gradient() -> Vec<String> {
@@ -329,11 +329,11 @@ fn default_pill_gradient() -> Vec<String> {
 }
 
 fn default_pill_border_width() -> f32 {
-    1.0
+    0.0
 }
 
 fn default_window_border_color() -> String {
-    "#00F2FE".into()
+    "#77767b".into()
 }
 
 fn default_window_border_gradient() -> Vec<String> {
@@ -341,13 +341,13 @@ fn default_window_border_gradient() -> Vec<String> {
 }
 
 fn default_window_border_width() -> f32 {
-    1.0
+    0.0
 }
 
 impl Default for TitlebarPillBorder {
     fn default() -> Self {
         Self {
-            mode: BorderMode::default(),
+            mode: BorderMode::Solid,
             color: default_pill_color(),
             gradient: default_pill_gradient(),
             width_px: default_pill_border_width(),
@@ -358,7 +358,7 @@ impl Default for TitlebarPillBorder {
 impl Default for WindowBorder {
     fn default() -> Self {
         Self {
-            mode: BorderMode::default(),
+            mode: BorderMode::Solid,
             color: default_window_border_color(),
             gradient: default_window_border_gradient(),
             width_px: default_window_border_width(),
@@ -474,7 +474,7 @@ fn default_width() -> u32 {
 }
 
 fn default_margin_top() -> u32 {
-    4
+    1
 }
 
 fn default_margin_h() -> u32 {
@@ -494,11 +494,11 @@ fn default_auto_hide_delay_ms() -> u32 {
 }
 
 fn default_auto_hide_peek_px() -> u32 {
-    4
+    2
 }
 
 fn default_opacity() -> f32 {
-    0.92
+    0.61
 }
 
 fn default_menu_opacity() -> f32 {
@@ -506,15 +506,15 @@ fn default_menu_opacity() -> f32 {
 }
 
 fn default_titlebar_opacity() -> f32 {
-    1.0
+    0.72
 }
 
 fn default_blur_radius() -> f32 {
-    18.0
+    4.0
 }
 
 fn default_window_gap_px() -> u32 {
-    8
+    0
 }
 
 fn default_true() -> bool {

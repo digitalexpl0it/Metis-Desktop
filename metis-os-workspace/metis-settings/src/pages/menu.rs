@@ -11,6 +11,10 @@ use metis_config::{MenuConfig, MenuStyle};
 use crate::{runtime, ui};
 use metis_i18n::tr;
 
+/// Two rows of four thumbnails — matches the old scroller viewport without
+/// overflowing the layout card.
+const LAYOUT_PAGE_SIZE: usize = 8;
+
 pub fn build() -> gtk::Widget {
     let (scroller, content) = ui::page_for("menu");
     let cfg = metis_config::load_menu_config();
@@ -82,6 +86,7 @@ pub fn build() -> gtk::Widget {
     }
 
     let mut first_btn: Option<gtk::ToggleButton> = None;
+    let mut buttons: Vec<gtk::ToggleButton> = Vec::with_capacity(MenuStyle::ALL.len());
     for style in MenuStyle::ALL {
         let btn = layout_thumb_button(*style);
         if let Some(ref group) = first_btn {
@@ -130,15 +135,84 @@ pub fn build() -> gtk::Widget {
                 persist_and_reload(&c);
             });
         }
-        chooser.append(&btn);
+        buttons.push(btn);
     }
-    let chooser_scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .min_content_height(280)
-        .child(&chooser)
-        .build();
-    layout_body.append(&chooser_scroll);
+
+    let selected_idx = MenuStyle::ALL
+        .iter()
+        .position(|s| *s == cfg.style)
+        .unwrap_or(0);
+    let page = Rc::new(Cell::new(selected_idx / LAYOUT_PAGE_SIZE));
+
+    let pager = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    pager.add_css_class("metis-menu-layout-pager");
+    pager.set_halign(gtk::Align::Center);
+
+    let prev = gtk::Button::from_icon_name("go-previous-symbolic");
+    prev.add_css_class("flat");
+    prev.set_tooltip_text(Some(&tr("Previous page")));
+
+    let status = gtk::Label::new(None);
+    status.add_css_class("metis-settings-hint");
+    status.set_width_chars(14);
+    status.set_halign(gtk::Align::Center);
+
+    let next = gtk::Button::from_icon_name("go-next-symbolic");
+    next.add_css_class("flat");
+    next.set_tooltip_text(Some(&tr("Next page")));
+
+    pager.append(&prev);
+    pager.append(&status);
+    pager.append(&next);
+
+    let show_page = {
+        let chooser = chooser.clone();
+        let buttons = buttons.clone();
+        let page = page.clone();
+        let prev = prev.clone();
+        let next = next.clone();
+        let status = status.clone();
+        let pager = pager.clone();
+        Rc::new(move || {
+            apply_layout_page(
+                &chooser,
+                &buttons,
+                page.get(),
+                &prev,
+                &next,
+                &status,
+                &pager,
+            );
+        })
+    };
+    show_page();
+
+    {
+        let page = page.clone();
+        let show_page = show_page.clone();
+        prev.connect_clicked(move |_| {
+            let p = page.get();
+            if p > 0 {
+                page.set(p - 1);
+                show_page();
+            }
+        });
+    }
+    {
+        let page = page.clone();
+        let show_page = show_page.clone();
+        next.connect_clicked(move |_| {
+            let p = page.get();
+            let pages = layout_page_count(MenuStyle::ALL.len());
+            if p + 1 < pages {
+                page.set(p + 1);
+                show_page();
+            }
+        });
+    }
+
+    layout_body.append(&chooser);
+    layout_body.append(&pager);
 
     let layout_hint = gtk::Label::new(Some(&tr(
         "Pick a layout for the Metis Menu. Some layouts hide the pinned column \
@@ -248,6 +322,42 @@ pub fn build() -> gtk::Widget {
 
     let _ = suppress;
     scroller.upcast()
+}
+
+fn layout_page_count(total: usize) -> usize {
+    total.div_ceil(LAYOUT_PAGE_SIZE).max(1)
+}
+
+fn apply_layout_page(
+    chooser: &gtk::FlowBox,
+    buttons: &[gtk::ToggleButton],
+    page: usize,
+    prev: &gtk::Button,
+    next: &gtk::Button,
+    status: &gtk::Label,
+    pager: &gtk::Box,
+) {
+    let total = buttons.len();
+    let pages = layout_page_count(total);
+    let page = page.min(pages.saturating_sub(1));
+    let start = page * LAYOUT_PAGE_SIZE;
+    let end = (start + LAYOUT_PAGE_SIZE).min(total);
+
+    while let Some(child) = chooser.first_child() {
+        chooser.remove(&child);
+    }
+    for btn in &buttons[start..end] {
+        chooser.append(btn);
+    }
+
+    pager.set_visible(pages > 1);
+    prev.set_sensitive(page > 0);
+    next.set_sensitive(page + 1 < pages);
+    if total == 0 {
+        status.set_text("");
+    } else {
+        status.set_text(&format!("{}–{} of {total}", start + 1, end));
+    }
 }
 
 fn persist(cfg: &MenuConfig) {

@@ -10,7 +10,7 @@ use metis_i18n::tr;
 use crate::ui;
 
 const CARGO_VERSION: &str = env!("CARGO_PKG_VERSION");
-const AUTHOR: &str = "DigitlExpl0it";
+const AUTHOR: &str = "DigitalExpl0it";
 const GITHUB_URL: &str = "https://github.com/digitalexpl0it/Metis-Desktop";
 
 /// Binaries installed with the Metis session (order matches install scripts).

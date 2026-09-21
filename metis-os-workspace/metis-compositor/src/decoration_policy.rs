@@ -45,9 +45,6 @@ const SSD_APP_IDS: &[&str] = &[
     // and rely on this entry for chrome.
     "com.metis.Screenshot",
     "com.metis.Viewer",
-    // GNOME Text Editor ships a libadwaita headerbar; Metis SSD gives consistent
-    // tiling controls and avoids double-chrome layout fights in grid mode.
-    "org.gnome.TextEditor",
     // GitHub Desktop (Electron): Flatpak + native package app_ids. The blanket
     // `io.github.*` CSD rule would strip Metis chrome, but the app draws no
     // Wayland titlebar — same class of bug as frameless `chromium` Electron shells.
@@ -111,6 +108,12 @@ const CSD_APP_IDS: &[&str] = &[
     "simple-scan",
     "gnome-disks",
     "gnome-terminal",
+    "org.gnome.terminal",
+    "gnome-text-editor",
+    "org.gnome.texteditor",
+    "virt-manager",
+    "org.vinegarhq.sober",
+    "sober",
     "gnome-power-statistics",
     "gnome-control-center",
     "gnome-language-selector",
@@ -436,13 +439,27 @@ mod tests {
     }
 
     #[test]
-    fn text_editor_uses_ssd() {
-        assert!(resolve_uses_ssd(
-            Some("org.gnome.TextEditor"),
-            None,
-            false,
-            None
-        ));
+    fn text_editor_keeps_csd() {
+        for id in [
+            "org.gnome.TextEditor",
+            "gnome-text-editor",
+            "org.gnome.texteditor",
+        ] {
+            assert!(
+                !resolve_uses_ssd(Some(id), None, false, None),
+                "{id} should keep client chrome under Auto"
+            );
+        }
+    }
+
+    #[test]
+    fn virt_manager_and_sober_keep_csd() {
+        for id in ["virt-manager", "org.vinegarhq.sober", "sober"] {
+            assert!(
+                !resolve_uses_ssd(Some(id), Some(DecorationMode::ServerSide), true, None),
+                "{id} should keep client chrome under Auto"
+            );
+        }
     }
 
     #[test]

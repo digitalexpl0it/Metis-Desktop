@@ -118,6 +118,9 @@ pub fn init_and_show() {
     if let Err(err) = save_default_bar_config() {
         tracing::warn!(%err, "failed to write default bar.json");
     }
+    if let Err(err) = crate::config::save_default_decorations_config() {
+        tracing::warn!(%err, "failed to write default decorations.json");
+    }
 
     let tray = crate::services::spawn_tray_service();
     crate::services::set_command_sender(tray.commands);

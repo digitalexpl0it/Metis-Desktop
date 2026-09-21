@@ -14,9 +14,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   **Mosaic** (icon grid), **Ramp** (rail + wide center + pinned), **Ladder**
   (category → apps), **Plaza** (search + grid + profile/power footer), **Crest**
   (centered avatar + grid), **Chip** (dense grid). Settings → Metis Menu shows
-  scrollable thumbnails; Freedesktop categories feed Bracket/Ladder.
+  paginated thumbnails; Freedesktop categories feed Bracket/Ladder.
 - **Settings → System → About** — product version (`0.1.0.N` from crate SemVer),
-  installed Metis components, author DigitlExpl0it, GitHub link, and host OS
+  installed Metis components, author DigitalExpl0it, GitHub link, and host OS
   info (distro, kernel, CPU, memory).
 - **Settings → System → Reset** — factory-reset `~/.config/metis` with optional
   backup (`~/metis-config-backup-…`), keep custom themes, and re-run first-run
@@ -39,6 +39,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **Metis Menu layout picker** — Settings → Metis Menu paginates layout
+  thumbnails (8 per page, prev/next) instead of a nested scrollbar.
 - Packaging and session install ship `metis-polkit-agent`; deb Recommends drop
   `policykit-1-gnome | mate-polkit` in favor of depending on `pkexec`/`polkitd`.
 - Polkit auth dialog: single compositor titlebar (no GTK CSD double chrome),

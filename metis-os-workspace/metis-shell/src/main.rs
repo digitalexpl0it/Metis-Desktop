@@ -21,6 +21,9 @@ fn main() {
     if let Err(err) = config::save_default_bar_config() {
         tracing::warn!("bar config: {err}");
     }
+    if let Err(err) = config::save_default_decorations_config() {
+        tracing::warn!("decorations config: {err}");
+    }
 
     let desktop_widgets_only = std::env::args().any(|a| a == "--desktop-widgets");
 

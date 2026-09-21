@@ -28,11 +28,36 @@ impl DecorationsOverride {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecorationsConfig {
     /// Exact `app_id` keys (stored lowercase). Absent means Auto.
-    #[serde(default)]
+    #[serde(default = "default_decoration_overrides")]
     pub overrides: BTreeMap<String, DecorationsOverride>,
+}
+
+/// Apps that ship their own chrome — default to App titlebar so Auto does not
+/// paint a second Metis titlebar on first run.
+fn default_decoration_overrides() -> BTreeMap<String, DecorationsOverride> {
+    let mut overrides = BTreeMap::new();
+    for id in [
+        "gnome-terminal",
+        "gnome-text-editor",
+        "org.gnome.terminal",
+        "org.gnome.texteditor",
+        "org.vinegarhq.sober",
+        "virt-manager",
+    ] {
+        overrides.insert(id.to_string(), DecorationsOverride::Client);
+    }
+    overrides
+}
+
+impl Default for DecorationsConfig {
+    fn default() -> Self {
+        Self {
+            overrides: default_decoration_overrides(),
+        }
+    }
 }
 
 impl DecorationsConfig {
@@ -168,6 +193,17 @@ pub fn load_decorations_config() -> DecorationsConfig {
     DecorationsConfig::default()
 }
 
+/// Write `decorations.json` on first run so Settings shows the factory
+/// titlebar overrides. Existing files are left untouched.
+pub fn save_default_decorations_config() -> std::io::Result<()> {
+    ensure_config_dirs()?;
+    let path = decorations_config_path();
+    if path.exists() {
+        return Ok(());
+    }
+    save_decorations_config(&DecorationsConfig::default())
+}
+
 pub fn save_decorations_config(cfg: &DecorationsConfig) -> std::io::Result<()> {
     ensure_config_dirs()?;
     let json = serde_json::to_string_pretty(cfg).map_err(std::io::Error::other)?;
@@ -182,8 +218,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn empty_cfg() -> DecorationsConfig {
+        DecorationsConfig {
+            overrides: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn factory_defaults_force_client_chrome_on_csd_apps() {
+        let cfg = DecorationsConfig::default();
+        for id in [
+            "gnome-terminal",
+            "gnome-text-editor",
+            "org.gnome.terminal",
+            "org.gnome.texteditor",
+            "org.vinegarhq.sober",
+            "virt-manager",
+        ] {
+            assert_eq!(cfg.lookup(id), Some(DecorationsOverride::Client));
+        }
+        assert!(cfg.lookup("kitty").is_none());
+    }
+
+    #[test]
     fn lookup_related_reverse_dns_and_bare_class() {
-        let mut cfg = DecorationsConfig::default();
+        let mut cfg = empty_cfg();
         cfg.set_override("org.gnome.shotwell", Some(DecorationsOverride::Client));
         assert_eq!(cfg.lookup("shotwell"), Some(DecorationsOverride::Client));
         assert_eq!(
@@ -191,7 +250,7 @@ mod tests {
             Some(DecorationsOverride::Client)
         );
 
-        let mut cfg2 = DecorationsConfig::default();
+        let mut cfg2 = empty_cfg();
         cfg2.set_override("seahorse", Some(DecorationsOverride::Client));
         assert_eq!(
             cfg2.lookup("org.gnome.seahorse.Application"),
@@ -201,7 +260,7 @@ mod tests {
 
     #[test]
     fn lookup_is_case_insensitive() {
-        let mut cfg = DecorationsConfig::default();
+        let mut cfg = empty_cfg();
         cfg.set_override("MousePad", Some(DecorationsOverride::Client));
         assert_eq!(cfg.lookup("mousepad"), Some(DecorationsOverride::Client));
         assert_eq!(cfg.lookup("MOUSEPAD"), Some(DecorationsOverride::Client));
@@ -210,7 +269,7 @@ mod tests {
 
     #[test]
     fn candidates_set_and_clear() {
-        let mut cfg = DecorationsConfig::default();
+        let mut cfg = empty_cfg();
         let cands = vec!["mousepad".into(), "org.xfce.mousepad".into()];
         cfg.set_for_candidates(&cands, Some(DecorationsOverride::Client));
         assert_eq!(
@@ -224,7 +283,7 @@ mod tests {
 
     #[test]
     fn roundtrip_json() {
-        let mut cfg = DecorationsConfig::default();
+        let mut cfg = empty_cfg();
         cfg.set_override("kitty", Some(DecorationsOverride::Server));
         cfg.set_override("firefox", Some(DecorationsOverride::Client));
         let json = serde_json::to_string(&cfg).unwrap();
@@ -237,7 +296,7 @@ mod tests {
 
     #[test]
     fn wine_exe_matches_desktop_wm_class_with_spaces() {
-        let mut cfg = DecorationsConfig::default();
+        let mut cfg = empty_cfg();
         cfg.set_override("cheat engine.exe", Some(DecorationsOverride::Server));
         assert_eq!(
             cfg.lookup("cheatengine-x86_64-sse4-avx2.exe"),
