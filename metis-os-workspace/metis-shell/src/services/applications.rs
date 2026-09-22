@@ -268,8 +268,16 @@ pub const MENU_CATEGORY_DEFS: &[(&str, &str, &[&str])] = &[
         "Internet",
         &["Network", "WebBrowser", "Email", "InstantMessaging"],
     ),
-    ("office", "Office", &["Office", "WordProcessor", "Spreadsheet"]),
-    ("graphics", "Graphics", &["Graphics", "Photography", "2DGraphics"]),
+    (
+        "office",
+        "Office",
+        &["Office", "WordProcessor", "Spreadsheet"],
+    ),
+    (
+        "graphics",
+        "Graphics",
+        &["Graphics", "Photography", "2DGraphics"],
+    ),
     (
         "audiovideo",
         "Audio & Video",
@@ -283,8 +291,16 @@ pub const MENU_CATEGORY_DEFS: &[(&str, &str, &[&str])] = &[
     ("games", "Games", &["Game"]),
     ("education", "Education", &["Education"]),
     ("science", "Science", &["Science"]),
-    ("settings", "Settings", &["Settings", "DesktopSettings", "System"]),
-    ("utilities", "Utilities", &["Utility", "Accessories", "Core"]),
+    (
+        "settings",
+        "Settings",
+        &["Settings", "DesktopSettings", "System"],
+    ),
+    (
+        "utilities",
+        "Utilities",
+        &["Utility", "Accessories", "Core"],
+    ),
 ];
 
 /// Apps matching a category id (`frequent` / `all` / Freedesktop group).
@@ -300,11 +316,9 @@ pub fn apps_in_category<'a>(apps: &'a [AppEntry], category_id: &str, query: &str
                 .unwrap_or(&[]);
             apps.iter()
                 .filter(|e| {
-                    tokens.iter().any(|tok| {
-                        e.categories
-                            .iter()
-                            .any(|c| c.eq_ignore_ascii_case(tok))
-                    })
+                    tokens
+                        .iter()
+                        .any(|tok| e.categories.iter().any(|c| c.eq_ignore_ascii_case(tok)))
                 })
                 .cloned()
                 .collect()
