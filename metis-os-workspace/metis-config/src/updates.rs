@@ -99,8 +99,7 @@ impl UpdatesConfig {
         let today_evening = now
             .date_naive()
             .and_hms_opt(21, 0, 0)
-            .map(|naive| naive.and_local_timezone(Local).single())
-            .flatten();
+            .and_then(|naive| naive.and_local_timezone(Local).single());
         let until = match today_evening {
             Some(t) if t > now => t,
             _ => now + chrono::Duration::hours(12),

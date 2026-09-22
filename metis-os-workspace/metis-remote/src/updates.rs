@@ -285,7 +285,7 @@ fn parse_pkcon_updates(text: &str) -> Vec<UpdateItem> {
 
 fn split_nevra(pkg: &str) -> (String, Option<String>) {
     // foo-1.2.3-1.x86_64 or foo_1.2.3
-    let bare = pkg.trim_end_matches(|c| c == ',' || c == ')');
+    let bare = pkg.trim_end_matches([',', ')']);
     if let Some((name, rest)) = bare.rsplit_once('-') {
         // Heuristic: version often starts with digit
         if rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
@@ -562,7 +562,7 @@ fn escalate_refresh(progress: &Option<Sender<UpdateProgressEvent>>) -> Result<()
         &["pk-updates-refresh"],
         std::time::Duration::from_secs(600),
     )
-    .map_err(|e| UpdatesError::Message(e))?;
+    .map_err(UpdatesError::Message)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
         emit(progress, UpdateProgressEvent::Log {
@@ -708,7 +708,7 @@ fn run_streaming(
 
     if let Some(stdout) = child.stdout.take() {
         let reader = BufReader::new(stdout);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             if let Some(pct) = parse_percent_line(&line) {
                 emit(progress, UpdateProgressEvent::Progress {
                     percent: pct,
@@ -720,7 +720,7 @@ fn run_streaming(
     }
     if let Some(stderr) = child.stderr.take() {
         let reader = BufReader::new(stderr);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             emit(progress, UpdateProgressEvent::Log {
                 line: format!("! {line}"),
             });

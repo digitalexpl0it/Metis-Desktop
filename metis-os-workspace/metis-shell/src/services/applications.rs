@@ -304,7 +304,7 @@ pub const MENU_CATEGORY_DEFS: &[(&str, &str, &[&str])] = &[
 ];
 
 /// Apps matching a category id (`frequent` / `all` / Freedesktop group).
-pub fn apps_in_category<'a>(apps: &'a [AppEntry], category_id: &str, query: &str) -> Vec<AppEntry> {
+pub fn apps_in_category(apps: &[AppEntry], category_id: &str, query: &str) -> Vec<AppEntry> {
     let base: Vec<AppEntry> = match category_id {
         "frequent" => frequent_from(apps, FREQUENT_CATEGORY_LIMIT),
         "all" => apps.to_vec(),

@@ -1363,7 +1363,6 @@ fn install_pack_layout(button: &gtk::Button, menu_cfg: &metis_config::MenuConfig
         let search = search.clone();
         let pin_ctx = pin_ctx.clone();
         let selected_category = selected_category.clone();
-        let style = style;
         Rc::new(move || {
             let keep = search.has_focus();
             let query = search.text().to_string();
