@@ -54,8 +54,9 @@ pub fn build() -> gtk::Widget {
                     tracing::warn!(%err, "failed to set profile picture");
                     return;
                 }
+                let face = face_path();
                 let mut menu = metis_config::load_menu_config();
-                menu.avatar_path = Some(face_path().display().to_string());
+                menu.avatar_path = Some(face.display().to_string());
                 // Ensure the menu header is shown so the new picture is visible.
                 menu.show_user_header = true;
                 let _ = metis_config::save_menu_config(&menu);
@@ -63,6 +64,20 @@ pub fn build() -> gtk::Widget {
                 // Menu header is built at bar install time — remount so it reloads
                 // ~/.face / menu.json.
                 runtime::send("reload-bar");
+                // Push to AccountsService so GDM / other greeters show the same
+                // picture (falls back to a privileged copy when needed).
+                let user = std::env::var("USER").unwrap_or_default();
+                if !user.is_empty() {
+                    let face_c = face.clone();
+                    bg::run_bg(
+                        move || metis_remote::set_user_icon(&user, &face_c),
+                        |result: Result<(), String>| {
+                            if let Err(err) = result {
+                                tracing::warn!(%err, "failed to sync login avatar");
+                            }
+                        },
+                    );
+                }
             });
         });
     }
@@ -234,12 +249,17 @@ fn install_face_image(src: &std::path::Path) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::copy(src, &dest)?;
+    // LightDM and some greeters prefer ~/.face.icon alongside ~/.face.
+    let icon = dest.with_file_name(".face.icon");
+    let _ = std::fs::copy(&dest, &icon);
     // Keep the file user-readable (and avoid a root-owned leftover if Settings
     // was ever run elevated).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644));
+        let mode = std::fs::Permissions::from_mode(0o644);
+        let _ = std::fs::set_permissions(&dest, mode.clone());
+        let _ = std::fs::set_permissions(&icon, mode);
     }
     Ok(())
 }

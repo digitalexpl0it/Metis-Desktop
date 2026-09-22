@@ -348,10 +348,20 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
     fi
     if [[ -x "$REL/metis-remote" ]]; then
         $SUDO install -Dm755 "$REL/metis-remote" "$BIN_DST/metis-remote"
+        # Polkit actions annotate /usr/bin/metis-remote — keep a copy there too.
+        if [[ "$BIN_DST" != /usr/bin ]]; then
+            $SUDO install -Dm755 "$REL/metis-remote" /usr/bin/metis-remote
+        fi
     fi
     if [[ -x "$REL/metis-polkit-agent" ]]; then
         $SUDO install -Dm755 "$REL/metis-polkit-agent" "$BIN_DST/metis-polkit-agent"
         $SUDO install -Dm755 "$REL/metis-polkit-agent" /usr/libexec/metis-polkit-agent
+    fi
+
+    POLICY_SRC="$WORKSPACE/packaging/polkit/org.metis.policy"
+    if [[ -f "$POLICY_SRC" ]]; then
+        echo "Installing Polkit policy …"
+        $SUDO install -Dm644 "$POLICY_SRC" /usr/share/polkit-1/actions/org.metis.policy
     fi
     if [[ -x "$REL/metis-viewer" ]]; then
         $SUDO install -Dm755 "$REL/metis-viewer" "$BIN_DST/metis-viewer"

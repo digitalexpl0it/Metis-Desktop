@@ -161,9 +161,11 @@ pub fn add_input_group(user: &str) -> Result<(), String> {
 
 /// Prefer the packaged binary so pkexec cannot escalate a writable cwd copy.
 pub fn privileged_exe() -> PathBuf {
-    const INSTALLED: &str = "/usr/bin/metis-remote";
-    if Path::new(INSTALLED).is_file() {
-        return Path::new(INSTALLED).to_path_buf();
+    const INSTALLED: &[&str] = &["/usr/bin/metis-remote", "/usr/local/bin/metis-remote"];
+    for path in INSTALLED {
+        if Path::new(path).is_file() {
+            return Path::new(path).to_path_buf();
+        }
     }
     std::env::current_exe().unwrap_or_else(|_| Path::new("metis-remote").to_path_buf())
 }

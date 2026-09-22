@@ -912,14 +912,16 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   **Settings** restores and focuses the existing Settings window (including when
   minimized) instead of opening a duplicate. Saved to `menu.json` (layout
   changes reload the edge bar live).
-- **Users** — profile picture and display name (synced with Metis Menu),
-  password change, and local account management (add/remove, Administrator /
-  `sudo` toggle). The **Other users** list shows each account with a circular
-  avatar, display name, username, and role. Avatars resolve from `~/.face`,
-  `~/.face.icon`, or the GNOME/KDE AccountsService icon
-  (`/var/lib/AccountsService/icons/<username>`), then a default icon.
-  Privileged actions show Metis’s PolicyKit password dialog
-  (`metis-polkit-agent` + `metis-remote`).
+- **Users** — profile picture and display name (synced with Metis Menu **and**
+  AccountsService so GDM / other greeters update), password change, and local
+  account management (add/remove, Administrator / `sudo` toggle). The **Other
+  users** list shows each account with a circular avatar, display name,
+  username, and role. Avatars resolve from `~/.face`, `~/.face.icon`, or the
+  GNOME/KDE AccountsService icon (`/var/lib/AccountsService/icons/<username>`),
+  then a default icon. Changing your picture also writes `~/.face.icon` and
+  calls AccountsService `SetIconFile` (privileged copy fallback). Privileged
+  actions show Metis’s PolicyKit password dialog (`metis-polkit-agent` +
+  `metis-remote`).
 - **Date & Time** — automatic date/time (NTP), automatic timezone, manual
   clock/timezone when auto is off, 12/24-hour bar format, and calendar first day
   of the week (`datetime.json`).

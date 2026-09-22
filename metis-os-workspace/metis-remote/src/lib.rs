@@ -13,7 +13,7 @@ pub use accounts::{
     accounts_list_as_root, add_user, add_user_as_root, list_accounts, remove_user,
     remove_user_as_root, set_admin, set_admin_as_root, set_display_name, set_display_name_as_root,
     set_password as set_account_password, set_password_as_root as set_account_password_as_root,
-    AccountInfo,
+    set_user_icon, set_user_icon_as_root, AccountInfo,
 };
 pub use datetime::{
     set_ntp, set_ntp_as_root, set_time, set_time_as_root, set_timezone, set_timezone_as_root,

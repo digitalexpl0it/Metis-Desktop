@@ -10,7 +10,7 @@ use metis_remote::{
     firewall_rustdesk_status, firewall_status, pause, privileged_exe, remove_user_as_root, resume,
     rustdesk_disable, rustdesk_enable, rustdesk_status, set_account_password_as_root,
     set_admin_as_root, set_display_name_as_root, set_lan_only, set_ntp_as_root, set_password,
-    set_time_as_root, set_timezone_as_root, status, ubuntu_drivers_install,
+    set_time_as_root, set_timezone_as_root, set_user_icon_as_root, status, ubuntu_drivers_install,
 };
 use zeroize::Zeroize;
 
@@ -174,6 +174,17 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-name <user> <name>"))?;
             set_display_name_as_root(&user, &name)
         }
+        Some("pk-accounts-set-icon") => {
+            let user = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-icon <user> <path>"))?;
+            let path = args
+                .get(2)
+                .cloned()
+                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-icon <user> <path>"))?;
+            set_user_icon_as_root(&user, &path)
+        }
         Some("pk-accounts-set-password") => {
             let user = args.get(1).cloned().ok_or_else(|| {
                 String::from(
@@ -323,7 +334,7 @@ fn print_help() {
   rustdesk disable    Clear RustDesk backend preference ([--kill] stops process)
   pk-apt-install …    Polkit: install allowlisted apt packages
   pk-ubuntu-drivers-install  Polkit: ubuntu-drivers install (NVIDIA consent path)
-  pk-accounts-list / set-name / set-password / set-admin / add / remove
+  pk-accounts-list / set-name / set-password / set-admin / set-icon / add / remove
   pk-datetime-status / set-ntp / set-timezone / set-time
 
 Never put the RDP password on the shell command line — pipe it to stdin."

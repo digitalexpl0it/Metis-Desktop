@@ -5,6 +5,20 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-09-21]
+
+### Fixed
+
+- **Settings → About author** — shows **DigitalExpl0it** (typo `DigitlExpl0it`
+  in the shipped binary). Rebuild/reinstall Settings to pick this up.
+
+### Changed
+
+- **Login avatar sync** — Settings → Users → Change picture writes `~/.face` and
+  `~/.face.icon`, then pushes the image to AccountsService (`SetIconFile`) so
+  GDM and other AccountsService greeters update. Falls back to a privileged
+  copy into `/var/lib/AccountsService/icons/<user>` when the daemon call fails.
+
 ## [2026-09-20]
 
 ### Added

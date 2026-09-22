@@ -408,3 +408,161 @@ pub fn remove_user_as_root(user: &str) -> Result<(), String> {
         })
     }
 }
+
+/// Publish a profile picture for login managers (GDM, AccountsService greeters).
+///
+/// Writes through `org.freedesktop.Accounts.User.SetIconFile` when
+/// `accounts-daemon` is available (no admin prompt for the active user). Falls
+/// back to copying into `/var/lib/AccountsService/icons/<user>` via pkexec.
+pub fn set_user_icon(user: &str, icon_path: &Path) -> Result<(), String> {
+    validate_username(user)?;
+    if !icon_path.is_file() {
+        return Err(format!("icon file not found: {}", icon_path.display()));
+    }
+    let path = icon_path
+        .canonicalize()
+        .map_err(|e| format!("resolve icon path: {e}"))?;
+    if !path.is_absolute() {
+        return Err("icon path must be absolute".into());
+    }
+    // Own-user AccountsService call is unprivileged (change-own-user-data=yes).
+    match accounts_service_set_icon(user, &path) {
+        Ok(()) => return Ok(()),
+        Err(err) => {
+            tracing::warn!(%err, "AccountsService SetIconFile failed — trying privileged copy");
+        }
+    }
+    let path_s = path.display().to_string();
+    escalate(&["pk-accounts-set-icon", user, &path_s])
+}
+
+fn accounts_service_set_icon(user: &str, path: &Path) -> Result<(), String> {
+    let find = Command::new("gdbus")
+        .args([
+            "call",
+            "--system",
+            "--dest",
+            "org.freedesktop.Accounts",
+            "--object-path",
+            "/org/freedesktop/Accounts",
+            "--method",
+            "org.freedesktop.Accounts.FindUserByName",
+            user,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("gdbus FindUserByName: {e}"))?;
+    if !find.status.success() {
+        let err = String::from_utf8_lossy(&find.stderr);
+        return Err(if err.trim().is_empty() {
+            format!("FindUserByName exited with {}", find.status)
+        } else {
+            err.trim().to_string()
+        });
+    }
+    let obj = parse_gdbus_object_path(&String::from_utf8_lossy(&find.stdout))
+        .ok_or_else(|| "could not parse AccountsService user object path".to_string())?;
+    let set = Command::new("gdbus")
+        .args([
+            "call",
+            "--system",
+            "--dest",
+            "org.freedesktop.Accounts",
+            "--object-path",
+            &obj,
+            "--method",
+            "org.freedesktop.Accounts.User.SetIconFile",
+            &path.display().to_string(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("gdbus SetIconFile: {e}"))?;
+    if set.status.success() {
+        Ok(())
+    } else {
+        let err = String::from_utf8_lossy(&set.stderr);
+        Err(if err.trim().is_empty() {
+            format!("SetIconFile exited with {}", set.status)
+        } else {
+            err.trim().to_string()
+        })
+    }
+}
+
+/// gdbus prints `('/org/freedesktop/Accounts/User1000',)` — extract the path.
+fn parse_gdbus_object_path(stdout: &str) -> Option<String> {
+    let start = stdout.find("/org/freedesktop/Accounts/")?;
+    let rest = &stdout[start..];
+    let end = rest
+        .find(|c: char| c == '\'' || c == '"' || c.is_whitespace() || c == ',')
+        .unwrap_or(rest.len());
+    let path = rest[..end].trim();
+    if path.starts_with("/org/freedesktop/Accounts/User") {
+        Some(path.to_string())
+    } else {
+        None
+    }
+}
+
+/// Root: install icon into AccountsService storage so GDM/SDDM see it even when
+/// `accounts-daemon` D-Bus was unavailable.
+pub fn set_user_icon_as_root(user: &str, icon_path: &str) -> Result<(), String> {
+    require_root()?;
+    validate_username(user)?;
+    let src = Path::new(icon_path);
+    if !src.is_file() {
+        return Err(format!("icon file not found: {icon_path}"));
+    }
+    let icons_dir = Path::new("/var/lib/AccountsService/icons");
+    std::fs::create_dir_all(icons_dir).map_err(|e| format!("mkdir AccountsService icons: {e}"))?;
+    let dest = icons_dir.join(user);
+    std::fs::copy(src, &dest).map_err(|e| format!("copy icon: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644));
+    }
+
+    let users_dir = Path::new("/var/lib/AccountsService/users");
+    let _ = std::fs::create_dir_all(users_dir);
+    let user_file = users_dir.join(user);
+    let icon_line = format!("Icon={}", dest.display());
+    if user_file.is_file() {
+        let text = std::fs::read_to_string(&user_file).unwrap_or_default();
+        let mut out = String::new();
+        let mut saw_icon = false;
+        let mut saw_user = false;
+        for line in text.lines() {
+            if line.trim() == "[User]" {
+                saw_user = true;
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            if line.starts_with("Icon=") {
+                out.push_str(&icon_line);
+                out.push('\n');
+                saw_icon = true;
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        if !saw_icon {
+            if !saw_user {
+                out.push_str("[User]\n");
+            }
+            out.push_str(&icon_line);
+            out.push('\n');
+        }
+        std::fs::write(&user_file, out).map_err(|e| format!("write AccountsService user: {e}"))?;
+    } else {
+        let body = format!("[User]\nSystemAccount=false\n{icon_line}\n");
+        std::fs::write(&user_file, body).map_err(|e| format!("write AccountsService user: {e}"))?;
+    }
+    Ok(())
+}
