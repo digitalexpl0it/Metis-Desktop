@@ -97,6 +97,8 @@ pub enum BarWidgetId {
     RemovableVolumes,
     /// System tray (StatusNotifierItem) host.
     Tray,
+    /// Software updates available (PackageKit / Flatpak / fwupd). Hidden when idle.
+    Updates,
 }
 
 /// How system tray app icons appear on the edge bar.
@@ -528,6 +530,7 @@ fn default_widgets() -> Vec<BarWidgetId> {
         BarWidgetId::Spacer,
         BarWidgetId::RemovableVolumes,
         BarWidgetId::Tray,
+        BarWidgetId::Updates,
         BarWidgetId::Weather,
         BarWidgetId::Battery,
         BarWidgetId::Network,
@@ -822,6 +825,19 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
             if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
                 let _ = std::fs::write(bar_config_path(), json);
             }
+        }
+    }
+
+    // Software updates indicator sits immediately left of weather (after tray).
+    if !cfg.widgets.contains(&BarWidgetId::Updates) {
+        let pos = cfg
+            .widgets
+            .iter()
+            .position(|w| matches!(w, BarWidgetId::Weather))
+            .unwrap_or(cfg.widgets.len());
+        cfg.widgets.insert(pos, BarWidgetId::Updates);
+        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
+            let _ = std::fs::write(bar_config_path(), json);
         }
     }
 

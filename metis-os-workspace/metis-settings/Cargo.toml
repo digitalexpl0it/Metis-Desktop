@@ -15,6 +15,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 metis-config = { workspace = true }
 metis-i18n = { workspace = true }
 metis-secrets = { workspace = true }

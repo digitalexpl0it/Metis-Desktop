@@ -11,4 +11,5 @@ pub mod splash;
 pub mod task_view;
 pub mod theme;
 pub mod toast;
+pub mod updater;
 pub mod window_thumbs;

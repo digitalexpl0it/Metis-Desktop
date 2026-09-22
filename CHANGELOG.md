@@ -7,6 +7,16 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-09-21]
 
+### Added
+
+- **Software Updates** — PackageKit (`pkcon`) for distro packages, plus Flatpak
+  and fwupd. Background checks with snooze, edge-bar Updates icon (badge +
+  right-click snooze menu), Install/Later notification, updater window with
+  progress and expandable live log, reboot-required banner, and
+  Settings → System → Updates (`updates.json`). Privileged distro refresh/apply
+  via `org.metis.software.updates-refresh` / `updates-apply` and
+  `metis-remote pk-updates-*`. Flatpak/fwupd may show their own polkit prompts.
+
 ### Fixed
 
 - **Settings → About author** — shows **DigitalExpl0it** (typo `DigitlExpl0it`

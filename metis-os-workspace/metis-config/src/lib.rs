@@ -31,6 +31,7 @@ pub mod sanitize;
 pub mod screenshot;
 pub mod startup;
 pub mod theme;
+pub mod updates;
 pub mod viewer;
 pub mod wallpaper;
 pub mod weather;
@@ -514,6 +515,10 @@ pub use startup::{
     startup_config_path, StartupConfig, StartupEntry,
 };
 pub use theme::{SemanticColors, ThemeMode, ThemeTokens};
+pub use updates::{
+    load_updates_config, sanitize_updates_config, save_updates_config, updates_config_path,
+    UpdateSources, UpdatesConfig,
+};
 pub use viewer::{
     load_viewer_config, remember_host, remove_recent, save_viewer_config, viewer_config_path,
     ViewerConfig, ViewerHost,

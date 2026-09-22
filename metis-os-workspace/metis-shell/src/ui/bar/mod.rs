@@ -146,6 +146,7 @@ pub fn init_and_show() {
         attach_poll_channel(spawn_bar_pollers());
         attach_weather_channel(spawn_weather_service());
         attach_notification_channel(spawn_notification_service());
+        crate::services::spawn_updates_service();
         crate::ui::dashboard::init();
         crate::ui::screenshot::init();
         crate::ui::notification_center::init();
@@ -722,6 +723,7 @@ fn watch_compositor_dismiss() {
                     }
                 }
                 "show-onboarding" => crate::ui::onboarding::show(),
+                "show-updater" => crate::ui::updater::show(),
                 "settings" => {
                     let program = if arg.trim().is_empty() {
                         "metis-settings".to_string()
@@ -1748,6 +1750,11 @@ fn emit_internal_notification(note: crate::services::BarNotification) {
         crate::ui::toast::show(&note);
     }
     crate::services::push_notification(note);
+}
+
+/// Software-updates toast + notification-center card (Install / Later actions).
+pub fn emit_updates_notification(note: crate::services::BarNotification) {
+    emit_internal_notification(note);
 }
 
 /// Toast + notification-center card when a monitor is plugged or unplugged.

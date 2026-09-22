@@ -11,6 +11,7 @@ use metis_remote::{
     rustdesk_disable, rustdesk_enable, rustdesk_status, set_account_password_as_root,
     set_admin_as_root, set_display_name_as_root, set_lan_only, set_ntp_as_root, set_password,
     set_time_as_root, set_timezone_as_root, set_user_icon_as_root, status, ubuntu_drivers_install,
+    updates_apply_as_root, updates_refresh_as_root,
 };
 use zeroize::Zeroize;
 
@@ -162,6 +163,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
             add_input_group(&user)
         }
         Some("pk-ubuntu-drivers-install") => ubuntu_drivers_install(),
+        Some("pk-updates-refresh") => updates_refresh_as_root(),
+        Some("pk-updates-apply") => updates_apply_as_root(),
         Some("pk-accounts-list") => accounts_list_as_root(),
         Some("pk-accounts-set-name") => {
             let user = args
@@ -334,6 +337,7 @@ fn print_help() {
   rustdesk disable    Clear RustDesk backend preference ([--kill] stops process)
   pk-apt-install …    Polkit: install allowlisted apt packages
   pk-ubuntu-drivers-install  Polkit: ubuntu-drivers install (NVIDIA consent path)
+  pk-updates-refresh / apply  Polkit: refresh indexes / upgrade packages (distro fallback)
   pk-accounts-list / set-name / set-password / set-admin / set-icon / add / remove
   pk-datetime-status / set-ntp / set-timezone / set-time
 

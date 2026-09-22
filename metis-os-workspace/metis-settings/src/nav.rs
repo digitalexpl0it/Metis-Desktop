@@ -78,7 +78,7 @@ pub const CATEGORIES: &[Category] = &[
         title: "System",
         icon: "preferences-system-symbolic",
         hue: NavHue::Green,
-        blurb: "Users, date & time, sound, power, locale, remote access, reset, about, and more",
+        blurb: "Users, date & time, updates, sound, power, locale, remote access, reset, about, and more",
     },
 ];
 
@@ -348,6 +348,14 @@ pub const NAV: &[NavItem] = &[
         icon: Some("camera-photo-symbolic"),
         hue: Some(NavHue::Blue),
         subtitle: Some("Capture defaults, editor, and save location"),
+        category: Some("system"),
+    },
+    NavItem {
+        page_id: Some("updates"),
+        title: "Updates",
+        icon: Some("software-update-available-symbolic"),
+        hue: Some(NavHue::Green),
+        subtitle: Some("PackageKit, Flatpak, and firmware update checks"),
         category: Some("system"),
     },
     NavItem {

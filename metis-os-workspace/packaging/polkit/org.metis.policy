@@ -95,6 +95,30 @@
     <annotate key="org.freedesktop.policykit.exec.argv1">pk-ubuntu-drivers-install</annotate>
   </action>
 
+  <action id="org.metis.software.updates-refresh">
+    <description>Refresh Metis software update indexes</description>
+    <message>Authentication is required to refresh software update indexes</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-updates-refresh</annotate>
+  </action>
+
+  <action id="org.metis.software.updates-apply">
+    <description>Install Metis system software updates</description>
+    <message>Authentication is required to install system software updates</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-updates-apply</annotate>
+  </action>
+
   <action id="org.metis.accounts.list">
     <description>List local Metis user accounts</description>
     <message>Authentication is required to list user accounts</message>

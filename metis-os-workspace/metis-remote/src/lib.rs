@@ -8,6 +8,7 @@ mod gnome_rdp;
 mod host;
 mod pkhelpers;
 mod rustdesk;
+mod updates;
 
 pub use accounts::{
     accounts_list_as_root, add_user, add_user_as_root, list_accounts, remove_user,
@@ -30,6 +31,12 @@ pub use pkhelpers::{
     validate_username, APT_ALLOWLIST,
 };
 pub use rustdesk::RustDeskStatus;
+pub use updates::{
+    apply as updates_apply, apply_as_root as updates_apply_as_root, apply_privileged,
+    check as updates_check, check_from_config as updates_check_from_config, refresh as updates_refresh,
+    refresh_as_root as updates_refresh_as_root, refresh_privileged, reboot_required,
+    UpdateItem, UpdateProgressEvent, UpdateSnapshot, UpdateSourceKind, UpdatesError,
+};
 
 use metis_config::{load_remote_config, save_remote_config};
 use zeroize::Zeroize;

@@ -6,6 +6,7 @@ mod notifications;
 pub mod sys;
 mod tasks;
 mod tray;
+mod updates;
 mod volumes;
 mod weather;
 pub(crate) use menu::request_toggle as toggle_menu;
@@ -30,6 +31,7 @@ use notifications::NotificationsWidget;
 use sys::{BatteryWidget, BluetoothWidget, NetworkWidget, VolumeWidget, VpnWidget};
 use tasks::TasksWidget;
 use tray::TrayWidget;
+use updates::UpdatesWidget;
 use volumes::VolumesWidget;
 use weather::WeatherWidget;
 use workspaces::WorkspacesWidget;
@@ -48,6 +50,7 @@ pub struct WidgetRefs {
     weather: RefCell<Option<WeatherWidget>>,
     tray: RefCell<Option<TrayWidget>>,
     removable_volumes: RefCell<Option<VolumesWidget>>,
+    updates: RefCell<Option<UpdatesWidget>>,
 }
 
 impl WidgetRefs {
@@ -152,6 +155,7 @@ pub fn build(
         weather: RefCell::new(None),
         tray: RefCell::new(None),
         removable_volumes: RefCell::new(None),
+        updates: RefCell::new(None),
     };
 
     let cfg = config.borrow().clone();
@@ -213,6 +217,11 @@ pub fn build(
                 let w = VolumesWidget::new();
                 append_bar_widget(root, w.root(), bar_orientation);
                 *refs.removable_volumes.borrow_mut() = Some(w);
+            }
+            BarWidgetId::Updates => {
+                let w = UpdatesWidget::new();
+                append_bar_widget(root, w.root(), bar_orientation);
+                *refs.updates.borrow_mut() = Some(w);
             }
             BarWidgetId::Clock => {
                 let w = ClockWidget::new(&cfg.clock, compact);

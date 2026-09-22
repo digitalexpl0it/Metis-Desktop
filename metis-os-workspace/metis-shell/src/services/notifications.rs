@@ -73,6 +73,9 @@ fn send_outgoing(msg: NotifyOutgoing) {
 /// id 0 and are silently ignored here (nothing to signal back to).
 pub fn invoke_action(id: u32, key: &str) {
     if id == 0 {
+        if crate::services::updates_handle_notification_action(key) {
+            return;
+        }
         return;
     }
     send_outgoing(NotifyOutgoing::Action {

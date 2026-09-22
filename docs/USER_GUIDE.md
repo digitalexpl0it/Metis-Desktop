@@ -104,8 +104,17 @@ Widgets appear in the order set by `bar.json#widgets`. The defaults:
 | **Network** | Wired/Wi-Fi status. Click for a network popover (Wi-Fi scan/connect, Ethernet status). The signal icon stays stable during background rescans. |
 | **VPN** | NetworkManager VPN / WireGuard. Click for connect/disconnect per profile (bar spinner while connecting; toast + notification on result). If a password is required, the popover (or Settings) prompts and can remember it on the profile. Tooltip shows active tunnel names. **VPN Settings…** opens Settings → Network → VPN. Profiles with **Auto-connect** are brought up after login once Wi‑Fi/Ethernet is ready (one profile at a time). |
 | **Volume** | Current output volume. Click for a slider + mute. |
+| **Updates** | *(ephemeral)* Appears when software updates are pending (PackageKit, Flatpak, and/or fwupd). Badge shows the count. Click opens the updater; right-click to snooze (1 hour / tonight / 1 day) or open the updater. Hidden while snoozed or when up to date. |
 | **Notifications** | *(optional)* Legacy bell — opens the same Notification Center as the clock. Removed from the default bar layout in Phase 13. |
 | **Clock** | Date/time with unread badge. Click opens the **Notification Center** (right panel): notifications, calendar events, and calendar/tools (world clocks, stopwatch, timer, alarms). **Esc** closes. |
+
+**Software updates.** The shell checks on a schedule (default every 6 hours;
+configure under Settings → System → Updates). When updates are found you get a
+notification with **Install** / **Later**, and the Updates icon appears on the
+edge bar. The updater shows packages by source, progress, an expandable live
+log, and a restart banner when `/var/run/reboot-required` (or PackageKit) says
+so. Flatpak and fwupd may show their own PolicyKit prompts when elevation is
+required.
 
 **Per-output bars.** With multiple outputs you can show the bar on **all
 displays** (each is independent and live) or **the primary display only** —
@@ -976,6 +985,13 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   nested dev. Open with `metis-cmd settings remote` or `metis-cmd viewer`.
 - **Sound** — default output and input device selection (bar volume widget
   unchanged).
+- **Updates** — automatic check interval, source toggles (PackageKit / Flatpak /
+  fwupd), notify-on-available, optional PackageKit security auto-install,
+  **Check now**, and **Open updater** (asks the running shell via
+  `show-updater`). Preferences live in `updates.json`. Installing system
+  packages uses PackageKit (`pkcon`) or a polkit-backed distro fallback;
+  Flatpak/fwupd use their own auth when needed. A restart banner appears when
+  the OS marks reboot-required.
 - **Reset** — factory-reset Metis preferences under `~/.config/metis` with an
   optional backup to `~/metis-config-backup-…`, keep custom themes (not stock
   dark/light), and optionally run first-run setup again. Confirm before wipe;
@@ -1257,6 +1273,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `keybinds.json` | Desktop shortcuts (chords → actions); browse in Settings → Shortcuts, edit under Keyboard → Shortcuts |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action, dim-on-battery (compositor overlay) |
 | `startup.json` | Session startup apps: master enable + desktop ids (empty by default; Settings → Startup) |
+| `updates.json` | Software updates: enabled, check interval, snooze, notify, auto-install security, PackageKit/Flatpak/fwupd sources, last check/error |
 | `remote.json` | Desktop sharing: enabled, backend (`gnome_rdp` default / `rustdesk`), auto-start, LAN-only + firewall state |
 | `dashboard.json` | Control Center: enabled, widgets, height %, refresh, confirm-before-kill, process monitor |
 | `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, `extra_steam_paths`, Metis MangoHud/Gamescope toggles |

@@ -521,6 +521,7 @@ fn build_page_stack(window: &gtk::ApplicationWindow, launch: &PageLaunch) -> gtk
         "Remote access",
     );
     stack.add_titled(&pages::gaming::build(), Some("gaming"), "Gaming");
+    stack.add_titled(&pages::updates::build(), Some("updates"), "Updates");
     stack.add_titled(&pages::reset::build(), Some("reset"), "Reset");
     stack.add_titled(&pages::about::build(), Some("about"), "About");
     stack.add_titled(

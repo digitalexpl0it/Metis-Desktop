@@ -26,6 +26,7 @@ pub mod sound;
 pub mod startup;
 pub mod titlebars;
 pub mod touchpad;
+pub mod updates;
 pub mod users;
 pub mod weather;
 pub mod windows;

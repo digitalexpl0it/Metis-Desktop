@@ -217,7 +217,6 @@ pub fn save_decorations_config(cfg: &DecorationsConfig) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
     fn empty_cfg() -> DecorationsConfig {
         DecorationsConfig {
             overrides: BTreeMap::new(),
