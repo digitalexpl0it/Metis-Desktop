@@ -828,16 +828,51 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
         }
     }
 
-    // Software updates indicator sits immediately left of weather (after tray).
-    if !cfg.widgets.contains(&BarWidgetId::Updates) {
-        let pos = cfg
+    // Software updates indicator: immediately to the right of the tray
+    // (StatusNotifier / background apps). Reorder if an older migrate placed
+    // it left of the tray or elsewhere in the trailing cluster.
+    {
+        let tray_pos = cfg
             .widgets
             .iter()
-            .position(|w| matches!(w, BarWidgetId::Weather))
-            .unwrap_or(cfg.widgets.len());
-        cfg.widgets.insert(pos, BarWidgetId::Updates);
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
+            .position(|w| matches!(w, BarWidgetId::Tray));
+        let updates_pos = cfg
+            .widgets
+            .iter()
+            .position(|w| matches!(w, BarWidgetId::Updates));
+        let mut changed = false;
+        match (tray_pos, updates_pos) {
+            (Some(t), Some(u)) if u != t + 1 => {
+                cfg.widgets.retain(|w| !matches!(w, BarWidgetId::Updates));
+                let t = cfg
+                    .widgets
+                    .iter()
+                    .position(|w| matches!(w, BarWidgetId::Tray))
+                    .unwrap_or(0);
+                let insert_at = (t + 1).min(cfg.widgets.len());
+                cfg.widgets.insert(insert_at, BarWidgetId::Updates);
+                changed = true;
+            }
+            (Some(t), None) => {
+                let insert_at = (t + 1).min(cfg.widgets.len());
+                cfg.widgets.insert(insert_at, BarWidgetId::Updates);
+                changed = true;
+            }
+            (None, None) => {
+                let pos = cfg
+                    .widgets
+                    .iter()
+                    .position(|w| matches!(w, BarWidgetId::Weather))
+                    .unwrap_or(cfg.widgets.len());
+                cfg.widgets.insert(pos, BarWidgetId::Updates);
+                changed = true;
+            }
+            _ => {}
+        }
+        if changed {
+            if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
+                let _ = std::fs::write(bar_config_path(), json);
+            }
         }
     }
 

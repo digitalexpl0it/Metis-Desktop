@@ -115,6 +115,7 @@ fn show_context_menu(anchor: &gtk::Button, entry: &VolumeEntry) {
     super::super::dropdown::close_all();
 
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    box_.add_css_class("metis-bar-dropdown-panel");
     box_.add_css_class("metis-bar-volumes-menu-panel");
     box_.set_margin_top(6);
     box_.set_margin_bottom(6);

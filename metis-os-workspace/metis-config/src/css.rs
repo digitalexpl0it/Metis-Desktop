@@ -670,6 +670,16 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         min-width: 140px;
         max-width: 240px;
     }}
+    /* Ensure volume/updates context menus keep a solid panel even when the
+       popover chrome itself is transparent (layer-shell popup pattern). */
+    popover.metis-bar-volumes-menu .metis-bar-dropdown-panel {{
+        background-color: {raised};
+        border: 1px solid {border};
+        border-radius: {rl}px;
+        padding: 10px 12px;
+        color: {text};
+        box-shadow: {shadow};
+    }}
     .metis-bar-volumes-menu-title {{
         max-width: 220px;
     }}
@@ -679,6 +689,73 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
     }}
     .metis-bar-volumes-menu-item:hover {{
         background-color: rgba({text_rgb}, 0.08);
+    }}
+
+    /* Software Updates client window — opaque Metis surface (global `window`
+       is transparent for layer-shell surfaces). */
+    window.metis-updater,
+    window.metis-updater.background {{
+        background-color: {surface_solid} !important;
+        color: {text};
+    }}
+    .metis-updater-root {{
+        background-color: {surface_solid};
+        color: {text};
+    }}
+    .metis-updater-title {{
+        color: {text};
+        font-weight: 700;
+    }}
+    .metis-updater-list {{
+        background-color: {raised};
+        border: 1px solid {border};
+        border-radius: {rm}px;
+        color: {text};
+    }}
+    .metis-updater-list row {{
+        background-color: transparent;
+        color: {text};
+        padding: 2px 4px;
+    }}
+    .metis-updater-list row:hover {{
+        background-color: rgba({accent_rgb}, 0.10);
+    }}
+    .metis-updater-reboot {{
+        background-color: rgba({accent_rgb}, 0.14);
+        border: 1px solid {border};
+        border-radius: {rm}px;
+        padding: 10px 12px;
+        color: {text};
+    }}
+    .metis-updater-log {{
+        background-color: {raised};
+        color: {text};
+        border: 1px solid {border};
+        border-radius: {rs}px;
+        padding: 8px;
+        font-family: monospace;
+        font-size: 11px;
+    }}
+    .metis-updater-log text {{
+        color: {text};
+        background-color: transparent;
+    }}
+    .metis-updater-btn.suggested-action {{
+        background-color: {accent};
+        color: {text_on_accent};
+        border-radius: {rs}px;
+        padding: 6px 14px;
+    }}
+    .metis-updater-btn.suggested-action:hover {{
+        background-color: {accent2};
+        color: {text_on_accent};
+    }}
+    .metis-updater-log-toggle {{
+        background-color: {raised};
+        color: {text};
+        border: 1px solid {border};
+        border-radius: {rs}px;
+        padding: 4px 10px;
     }}
 
     .metis-bar-task-pick.focused {{

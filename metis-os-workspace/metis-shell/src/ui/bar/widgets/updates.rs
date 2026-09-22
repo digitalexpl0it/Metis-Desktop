@@ -110,15 +110,17 @@ fn show_context_menu(anchor: &gtk::Button) {
     super::super::dropdown::close_all();
 
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    box_.add_css_class("metis-bar-dropdown-panel");
     box_.add_css_class("metis-bar-volumes-menu-panel");
-    box_.set_margin_top(6);
-    box_.set_margin_bottom(6);
-    box_.set_margin_start(6);
-    box_.set_margin_end(6);
+    box_.set_margin_top(2);
+    box_.set_margin_bottom(2);
+    box_.set_margin_start(2);
+    box_.set_margin_end(2);
 
     let title = gtk::Label::new(Some(&metis_i18n::tr("Software updates")));
     title.set_xalign(0.0);
     title.add_css_class("metis-bar-section-title");
+    title.add_css_class("metis-bar-volumes-menu-title");
     title.set_margin_bottom(4);
     box_.append(&title);
 
@@ -157,6 +159,7 @@ fn show_context_menu(anchor: &gtk::Button) {
         .child(&box_)
         .build();
     popover.add_css_class("metis-bar-popover");
+    popover.add_css_class("metis-bar-volumes-menu");
     popover.set_parent(anchor);
     super::super::dropdown::register(&popover);
 
@@ -180,7 +183,7 @@ fn show_context_menu(anchor: &gtk::Button) {
 fn menu_btn(label: &str) -> gtk::Button {
     let btn = gtk::Button::with_label(label);
     btn.add_css_class("flat");
-    btn.add_css_class("metis-bar-menu-item");
+    btn.add_css_class("metis-bar-volumes-menu-item");
     btn.set_halign(gtk::Align::Fill);
     btn
 }

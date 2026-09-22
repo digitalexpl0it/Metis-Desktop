@@ -109,12 +109,13 @@ Widgets appear in the order set by `bar.json#widgets`. The defaults:
 | **Clock** | Date/time with unread badge. Click opens the **Notification Center** (right panel): notifications, calendar events, and calendar/tools (world clocks, stopwatch, timer, alarms). **Esc** closes. |
 
 **Software updates.** The shell checks on a schedule (default every 6 hours;
-configure under Settings → System → Updates). When updates are found you get a
-notification with **Install** / **Later**, and the Updates icon appears on the
-edge bar. The updater shows packages by source, progress, an expandable live
-log, and a restart banner when `/var/run/reboot-required` (or PackageKit) says
-so. Flatpak and fwupd may show their own PolicyKit prompts when elevation is
-required.
+configure under Settings → System → Updates). Checks are unprivileged (no
+password) — like GNOME Software, authentication is only required when you
+**Install**. When updates are found you get a notification with **Install** /
+**Later**, and the Updates icon appears on the edge bar. The updater shows
+packages by source, progress, an expandable live log, and a restart banner when
+`/var/run/reboot-required` (or PackageKit) says so. Flatpak and fwupd may show
+their own PolicyKit prompts when elevation is required.
 
 **Per-output bars.** With multiple outputs you can show the bar on **all
 displays** (each is independent and live) or **the primary display only** —

@@ -65,13 +65,17 @@ impl UpdateSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum UpdateProgressEvent {
-    Log { line: String },
+    Log {
+        line: String,
+    },
     Progress {
         percent: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item: Option<String>,
     },
-    Phase { name: String },
+    Phase {
+        name: String,
+    },
     Finished {
         ok: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,8 +123,7 @@ fn package_manager_busy() -> bool {
 }
 
 pub fn reboot_required() -> bool {
-    Path::new("/var/run/reboot-required").is_file()
-        || Path::new("/run/reboot-required").is_file()
+    Path::new("/var/run/reboot-required").is_file() || Path::new("/run/reboot-required").is_file()
 }
 
 /// Full check across enabled sources (no elevation for list; may soft-fail per source).
@@ -201,8 +204,7 @@ fn pkcon_get_updates() -> Result<Vec<UpdateItem>, UpdatesError> {
     let code = output.status.code().unwrap_or(1);
     if !output.status.success() && code != 5 {
         let err = String::from_utf8_lossy(&output.stderr);
-        if err.to_ascii_lowercase().contains("busy")
-            || err.to_ascii_lowercase().contains("locked")
+        if err.to_ascii_lowercase().contains("busy") || err.to_ascii_lowercase().contains("locked")
         {
             return Err(UpdatesError::Busy);
         }
@@ -215,7 +217,9 @@ fn pkcon_get_updates() -> Result<Vec<UpdateItem>, UpdatesError> {
             }));
         }
     }
-    Ok(parse_pkcon_updates(&String::from_utf8_lossy(&output.stdout)))
+    Ok(parse_pkcon_updates(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
 }
 
 fn parse_pkcon_updates(text: &str) -> Vec<UpdateItem> {
@@ -232,7 +236,11 @@ fn parse_pkcon_updates(text: &str) -> Vec<UpdateItem> {
             if name.is_empty() || name.contains(' ') {
                 continue;
             }
-            let version = ver.split(';').next().map(str::trim).filter(|s| !s.is_empty());
+            let version = ver
+                .split(';')
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
             items.push(UpdateItem {
                 id: name.to_string(),
                 name: name.to_string(),
@@ -435,7 +443,10 @@ fn check_flatpak() -> Result<Vec<UpdateItem>, UpdatesError> {
             continue;
         }
         let name = cols.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
-        let version = cols.get(2).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let version = cols
+            .get(2)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         items.push(UpdateItem {
             id: id.to_string(),
             name: name.unwrap_or(id).to_string(),
@@ -520,68 +531,54 @@ fn emit(tx: &Option<Sender<UpdateProgressEvent>>, ev: UpdateProgressEvent) {
     }
 }
 
-/// Refresh metadata (PackageKit / apt update). Escalates for distro fallback.
-pub fn refresh(sources: &UpdateSources, progress: Option<Sender<UpdateProgressEvent>>) -> Result<(), UpdatesError> {
+/// Soft metadata refresh for listing — never elevates / never prompts polkit.
+///
+/// Matches GNOME Software: checking for updates is unprivileged. Stale caches
+/// are fine; install still refreshes under elevation when needed.
+pub fn refresh(
+    sources: &UpdateSources,
+    progress: Option<Sender<UpdateProgressEvent>>,
+) -> Result<(), UpdatesError> {
     if package_manager_busy() {
         return Err(UpdatesError::Busy);
     }
-    if sources.packagekit {
-        emit(&progress, UpdateProgressEvent::Phase {
-            name: "Refreshing package metadata".into(),
-        });
-        if packagekit_available() {
-            run_streaming(
-                "pkcon",
-                &["refresh", "--noninteractive"],
-                &progress,
-            )?;
-        } else {
-            escalate_refresh(&progress)?;
-        }
+    if sources.packagekit && packagekit_available() {
+        emit(
+            &progress,
+            UpdateProgressEvent::Phase {
+                name: "Refreshing package metadata".into(),
+            },
+        );
+        // Ignore auth / network failures — GetUpdates still works with a stale cache.
+        let _ = run_streaming("pkcon", &["refresh", "--noninteractive"], &progress);
     }
     if sources.flatpak && command_exists("flatpak") {
-        emit(&progress, UpdateProgressEvent::Phase {
-            name: "Refreshing Flatpak remotes".into(),
-        });
+        emit(
+            &progress,
+            UpdateProgressEvent::Phase {
+                name: "Refreshing Flatpak remotes".into(),
+            },
+        );
         let _ = run_streaming("flatpak", &["update", "--appstream", "-y"], &progress);
     }
     if sources.fwupd && command_exists("fwupdmgr") {
-        emit(&progress, UpdateProgressEvent::Phase {
-            name: "Refreshing firmware metadata".into(),
-        });
+        emit(
+            &progress,
+            UpdateProgressEvent::Phase {
+                name: "Refreshing firmware metadata".into(),
+            },
+        );
+        // May require auth; never escalate from the soft path.
         let _ = run_streaming("fwupdmgr", &["refresh", "--force"], &progress);
     }
     Ok(())
 }
 
-fn escalate_refresh(progress: &Option<Sender<UpdateProgressEvent>>) -> Result<(), UpdatesError> {
-    emit(progress, UpdateProgressEvent::Log {
-        line: "Elevating to refresh package indexes…".into(),
-    });
-    let output = run_pkexec(
-        &["pk-updates-refresh"],
-        std::time::Duration::from_secs(600),
-    )
-    .map_err(UpdatesError::Message)?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        emit(progress, UpdateProgressEvent::Log {
-            line: line.to_string(),
-        });
-    }
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(UpdatesError::Message(if err.trim().is_empty() {
-            format!("refresh exited {}", output.status)
-        } else {
-            err.trim().to_string()
-        }));
-    }
-    Ok(())
-}
-
 /// Apply all enabled update sources. Streams progress events.
-pub fn apply(sources: &UpdateSources, progress: Option<Sender<UpdateProgressEvent>>) -> Result<(), UpdatesError> {
+pub fn apply(
+    sources: &UpdateSources,
+    progress: Option<Sender<UpdateProgressEvent>>,
+) -> Result<(), UpdatesError> {
     if package_manager_busy() {
         return Err(UpdatesError::Busy);
     }
@@ -590,45 +587,52 @@ pub fn apply(sources: &UpdateSources, progress: Option<Sender<UpdateProgressEven
     let mut last_err = None;
 
     if sources.packagekit {
-        emit(&progress, UpdateProgressEvent::Phase {
-            name: "Installing system updates".into(),
-        });
+        emit(
+            &progress,
+            UpdateProgressEvent::Phase {
+                name: "Installing system updates".into(),
+            },
+        );
         let r = if packagekit_available() {
-            run_streaming(
-                "pkcon",
-                &["update", "--noninteractive", "-y"],
-                &progress,
-            )
+            // Soft refresh then update; PackageKit may auth once for the transaction.
+            let _ = run_streaming("pkcon", &["refresh", "--noninteractive"], &progress);
+            run_streaming("pkcon", &["update", "--noninteractive", "-y"], &progress)
         } else {
+            // Single elevation: refresh indexes + upgrade inside pk-updates-apply.
             escalate_apply(&progress)
         };
         if let Err(e) = r {
             ok = false;
             last_err = Some(e.to_string());
-            emit(&progress, UpdateProgressEvent::Log {
-                line: format!("System updates failed: {e}"),
-            });
+            emit(
+                &progress,
+                UpdateProgressEvent::Log {
+                    line: format!("System updates failed: {e}"),
+                },
+            );
         }
     }
 
     if sources.flatpak && command_exists("flatpak") {
-        emit(&progress, UpdateProgressEvent::Phase {
-            name: "Updating Flatpak apps".into(),
-        });
-        if let Err(e) = run_streaming(
-            "flatpak",
-            &["update", "-y", "--noninteractive"],
+        emit(
             &progress,
-        ) {
+            UpdateProgressEvent::Phase {
+                name: "Updating Flatpak apps".into(),
+            },
+        );
+        if let Err(e) = run_streaming("flatpak", &["update", "-y", "--noninteractive"], &progress) {
             ok = false;
             last_err = Some(e.to_string());
         }
     }
 
     if sources.fwupd && command_exists("fwupdmgr") {
-        emit(&progress, UpdateProgressEvent::Phase {
-            name: "Updating firmware".into(),
-        });
+        emit(
+            &progress,
+            UpdateProgressEvent::Phase {
+                name: "Updating firmware".into(),
+            },
+        );
         if let Err(e) = run_streaming(
             "fwupdmgr",
             &["update", "--assume-yes", "--no-reboot-check"],
@@ -662,24 +666,30 @@ pub fn apply(sources: &UpdateSources, progress: Option<Sender<UpdateProgressEven
 }
 
 fn escalate_apply(progress: &Option<Sender<UpdateProgressEvent>>) -> Result<(), UpdatesError> {
-    emit(progress, UpdateProgressEvent::Log {
-        line: "Elevating to install system updates…".into(),
-    });
-    let output = run_pkexec(
-        &["pk-updates-apply"],
-        std::time::Duration::from_secs(3600),
-    )
-    .map_err(UpdatesError::Message)?;
+    emit(
+        progress,
+        UpdateProgressEvent::Log {
+            line: "Elevating to install system updates…".into(),
+        },
+    );
+    let output = run_pkexec(&["pk-updates-apply"], std::time::Duration::from_secs(3600))
+        .map_err(UpdatesError::Message)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
-        emit(progress, UpdateProgressEvent::Log {
-            line: line.to_string(),
-        });
+        emit(
+            progress,
+            UpdateProgressEvent::Log {
+                line: line.to_string(),
+            },
+        );
         if let Some(pct) = parse_percent_line(line) {
-            emit(progress, UpdateProgressEvent::Progress {
-                percent: pct,
-                item: None,
-            });
+            emit(
+                progress,
+                UpdateProgressEvent::Progress {
+                    percent: pct,
+                    item: None,
+                },
+            );
         }
     }
     if !output.status.success() {
@@ -710,10 +720,13 @@ fn run_streaming(
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
             if let Some(pct) = parse_percent_line(&line) {
-                emit(progress, UpdateProgressEvent::Progress {
-                    percent: pct,
-                    item: extract_item_name(&line),
-                });
+                emit(
+                    progress,
+                    UpdateProgressEvent::Progress {
+                        percent: pct,
+                        item: extract_item_name(&line),
+                    },
+                );
             }
             emit(progress, UpdateProgressEvent::Log { line });
         }
@@ -721,9 +734,12 @@ fn run_streaming(
     if let Some(stderr) = child.stderr.take() {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
-            emit(progress, UpdateProgressEvent::Log {
-                line: format!("! {line}"),
-            });
+            emit(
+                progress,
+                UpdateProgressEvent::Log {
+                    line: format!("! {line}"),
+                },
+            );
         }
     }
     let status = child
@@ -732,9 +748,7 @@ fn run_streaming(
     if status.success() {
         Ok(())
     } else {
-        Err(UpdatesError::Message(format!(
-            "{bin} exited with {status}"
-        )))
+        Err(UpdatesError::Message(format!("{bin} exited with {status}")))
     }
 }
 
@@ -775,9 +789,7 @@ pub fn refresh_as_root() -> Result<(), String> {
             .env("DEBIAN_FRONTEND", "noninteractive")
             .status()
     } else if id == "arch" || id == "manjaro" || command_exists("pacman") {
-        Command::new("pacman")
-            .args(["-Sy"])
-            .status()
+        Command::new("pacman").args(["-Sy"]).status()
     } else {
         Command::new("apt-get")
             .args(["update"])
@@ -792,14 +804,14 @@ pub fn refresh_as_root() -> Result<(), String> {
     }
 }
 
-/// Root: apply distro package upgrades.
+/// Root: apply distro package upgrades (refresh indexes first).
 pub fn apply_as_root() -> Result<(), String> {
     require_root()?;
+    // Fold refresh into apply so Install prompts once, not twice.
+    let _ = refresh_as_root();
     let id = distro_id();
     let status = if id == "fedora" || id == "rhel" || id == "centos" || command_exists("dnf") {
-        Command::new("dnf")
-            .args(["-y", "upgrade"])
-            .status()
+        Command::new("dnf").args(["-y", "upgrade"]).status()
     } else if id == "arch" || id == "manjaro" || command_exists("pacman") {
         Command::new("pacman")
             .args(["-Syu", "--noconfirm"])
@@ -820,10 +832,7 @@ pub fn apply_as_root() -> Result<(), String> {
 
 /// Unprivileged wrappers that escalate for distro fallback refresh/apply.
 pub fn refresh_privileged() -> Result<(), String> {
-    let output = run_pkexec(
-        &["pk-updates-refresh"],
-        std::time::Duration::from_secs(600),
-    )?;
+    let output = run_pkexec(&["pk-updates-refresh"], std::time::Duration::from_secs(600))?;
     if output.status.success() {
         Ok(())
     } else {
@@ -832,10 +841,7 @@ pub fn refresh_privileged() -> Result<(), String> {
 }
 
 pub fn apply_privileged() -> Result<(), String> {
-    let output = run_pkexec(
-        &["pk-updates-apply"],
-        std::time::Duration::from_secs(3600),
-    )?;
+    let output = run_pkexec(&["pk-updates-apply"], std::time::Duration::from_secs(3600))?;
     if output.status.success() {
         Ok(())
     } else {

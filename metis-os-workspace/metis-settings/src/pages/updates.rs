@@ -47,7 +47,8 @@ pub fn build() -> gtk::Widget {
     auto_body.append(&ui::row(&tr("Check every (hours)"), &interval));
     let (notify_row, notify) = ui::switch_row(&tr("Notify when updates are available"));
     auto_body.append(&notify_row);
-    let (sec_row, auto_security) = ui::switch_row(&tr("Auto-install security updates (PackageKit)"));
+    let (sec_row, auto_security) =
+        ui::switch_row(&tr("Auto-install security updates (PackageKit)"));
     auto_body.append(&sec_row);
     let sec_hint = gtk::Label::new(Some(&tr(
         "When enabled, PackageKit security updates may be applied without opening \
@@ -202,9 +203,7 @@ fn apply_config(sections: &Sections, cfg: &UpdatesConfig) {
         .interval
         .set_value(f64::from(cfg.check_interval_hours));
     sections.notify.set_active(cfg.notify_on_available);
-    sections
-        .auto_security
-        .set_active(cfg.auto_install_security);
+    sections.auto_security.set_active(cfg.auto_install_security);
     sections.pk.set_active(cfg.sources.packagekit);
     sections.flatpak.set_active(cfg.sources.flatpak);
     sections.fwupd.set_active(cfg.sources.fwupd);
@@ -232,9 +231,7 @@ fn apply_status(sections: &Sections, cfg: &UpdatesConfig, snap: Option<&UpdateSn
     if let Some(snap) = snap {
         let n = snap.total_count();
         if n == 0 {
-            sections
-                .status
-                .set_text(&tr("Your system is up to date."));
+            sections.status.set_text(&tr("Your system is up to date."));
         } else {
             sections.status.set_text(
                 &tr("%1 update(s) available — open the updater to install.")

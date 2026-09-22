@@ -75,15 +75,11 @@ impl Default for UpdatesConfig {
 
 impl UpdatesConfig {
     pub fn is_snoozed(&self) -> bool {
-        self.snooze_until
-            .is_some_and(|until| until > Local::now())
+        self.snooze_until.is_some_and(|until| until > Local::now())
     }
 
     pub fn clear_expired_snooze(&mut self) {
-        if self
-            .snooze_until
-            .is_some_and(|until| until <= Local::now())
-        {
+        if self.snooze_until.is_some_and(|until| until <= Local::now()) {
             self.snooze_until = None;
         }
     }

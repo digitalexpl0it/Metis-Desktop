@@ -33,8 +33,8 @@ pub use pkhelpers::{
 pub use rustdesk::RustDeskStatus;
 pub use updates::{
     apply as updates_apply, apply_as_root as updates_apply_as_root, apply_privileged,
-    check as updates_check, check_from_config as updates_check_from_config, refresh as updates_refresh,
-    refresh_as_root as updates_refresh_as_root, refresh_privileged, reboot_required,
+    check as updates_check, check_from_config as updates_check_from_config, reboot_required,
+    refresh as updates_refresh, refresh_as_root as updates_refresh_as_root, refresh_privileged,
     UpdateItem, UpdateProgressEvent, UpdateSnapshot, UpdateSourceKind, UpdatesError,
 };
 

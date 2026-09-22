@@ -85,6 +85,7 @@ pub fn request_check(manual: bool) {
     let sources = cfg.sources.clone();
     let (tx, rx) = mpsc::channel::<Result<UpdateSnapshot, String>>();
     std::thread::spawn(move || {
+        // List only — never elevate. Soft refresh is best-effort and ignored.
         let _ = updates_refresh(&sources, None);
         let snap = updates_check_from_config(&UpdatesConfig {
             sources,
@@ -93,46 +94,44 @@ pub fn request_check(manual: bool) {
         let _ = tx.send(Ok(snap));
     });
 
-    glib::timeout_add_local(Duration::from_millis(200), move || {
-        match rx.try_recv() {
-            Ok(Ok(snap)) => {
-                if CHECK_GEN.with(|g| g.get()) != gen {
-                    return glib::ControlFlow::Break;
-                }
-                let count = snap.total_count();
-                let err = snap.error.clone();
-                cfg.last_check = Some(chrono::Local::now());
-                cfg.last_error = err;
-                let _ = save_updates_config(&cfg);
-                maybe_notify(&cfg, count);
-                set_snapshot(snap.clone());
-                if cfg.auto_install_security && !manual {
-                    let has_security = snap.packages.iter().any(|p| p.security);
-                    if has_security {
-                        tracing::info!("auto-installing PackageKit security updates");
-                        let sources = UpdateSources {
-                            packagekit: true,
-                            flatpak: false,
-                            fwupd: false,
-                        };
-                        std::thread::spawn(move || {
-                            let _ = updates_refresh(&sources, None);
-                            let _ = updates_apply(&sources, None);
-                        });
-                    }
-                }
-                glib::ControlFlow::Break
+    glib::timeout_add_local(Duration::from_millis(200), move || match rx.try_recv() {
+        Ok(Ok(snap)) => {
+            if CHECK_GEN.with(|g| g.get()) != gen {
+                return glib::ControlFlow::Break;
             }
-            Ok(Err(err)) => {
-                tracing::warn!(%err, "updates check failed");
-                cfg.last_error = Some(err);
-                let _ = save_updates_config(&cfg);
-                fire_refresh();
-                glib::ControlFlow::Break
+            let count = snap.total_count();
+            let err = snap.error.clone();
+            cfg.last_check = Some(chrono::Local::now());
+            cfg.last_error = err;
+            let _ = save_updates_config(&cfg);
+            maybe_notify(&cfg, count);
+            set_snapshot(snap.clone());
+            if cfg.auto_install_security && !manual {
+                let has_security = snap.packages.iter().any(|p| p.security);
+                if has_security {
+                    tracing::info!("auto-installing PackageKit security updates");
+                    let sources = UpdateSources {
+                        packagekit: true,
+                        flatpak: false,
+                        fwupd: false,
+                    };
+                    std::thread::spawn(move || {
+                        let _ = updates_refresh(&sources, None);
+                        let _ = updates_apply(&sources, None);
+                    });
+                }
             }
-            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            glib::ControlFlow::Break
         }
+        Ok(Err(err)) => {
+            tracing::warn!(%err, "updates check failed");
+            cfg.last_error = Some(err);
+            let _ = save_updates_config(&cfg);
+            fire_refresh();
+            glib::ControlFlow::Break
+        }
+        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
     });
 }
 
@@ -208,25 +207,23 @@ pub fn start_apply(on_event: std::rc::Rc<dyn Fn(UpdateProgressEvent)>) {
     let sources = cfg.sources.clone();
     let (tx, rx) = mpsc::channel::<UpdateProgressEvent>();
     std::thread::spawn(move || {
-        let _ = updates_refresh(&sources, Some(tx.clone()));
+        // Apply owns elevation; soft refresh only when PackageKit is present.
         let _ = updates_apply(&sources, Some(tx));
     });
-    glib::timeout_add_local(Duration::from_millis(100), move || {
-        loop {
-            match rx.try_recv() {
-                Ok(ev) => {
-                    let done = matches!(ev, UpdateProgressEvent::Finished { .. });
-                    on_event(ev);
-                    if done {
-                        request_check(true);
-                        return glib::ControlFlow::Break;
-                    }
-                }
-                Err(mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
-                Err(mpsc::TryRecvError::Disconnected) => {
+    glib::timeout_add_local(Duration::from_millis(100), move || loop {
+        match rx.try_recv() {
+            Ok(ev) => {
+                let done = matches!(ev, UpdateProgressEvent::Finished { .. });
+                on_event(ev);
+                if done {
                     request_check(true);
                     return glib::ControlFlow::Break;
                 }
+            }
+            Err(mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                request_check(true);
+                return glib::ControlFlow::Break;
             }
         }
     });

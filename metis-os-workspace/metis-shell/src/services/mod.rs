@@ -59,9 +59,10 @@ pub use tray_menu::{MenuItem as TrayMenuItem, MenuType, TrayMenu};
 pub use updates::{
     handle_notification_action as updates_handle_notification_action,
     is_visible as updates_is_visible, pending_count as updates_pending_count,
-    register_refresh as register_updates_refresh, snooze_hours as updates_snooze_hours,
-    snooze_one_day as updates_snooze_one_day, snooze_tonight as updates_snooze_tonight,
-    snapshot as updates_snapshot, spawn_updates_service, start_apply as updates_start_apply,
+    register_refresh as register_updates_refresh, snapshot as updates_snapshot,
+    snooze_hours as updates_snooze_hours, snooze_one_day as updates_snooze_one_day,
+    snooze_tonight as updates_snooze_tonight, spawn_updates_service,
+    start_apply as updates_start_apply,
 };
 pub use volumes::{
     activate as volumes_activate, eject as volumes_eject, icon_name as volumes_icon_name,

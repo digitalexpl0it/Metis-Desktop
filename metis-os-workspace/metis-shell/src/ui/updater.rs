@@ -42,15 +42,20 @@ pub fn show() {
 }
 
 fn build() -> UpdaterState {
+    // Under Metis the compositor draws SSD; hide GTK CSD to avoid double chrome.
+    let under_metis = std::env::var_os("METIS_SESSION").is_some();
     let window = gtk::Window::builder()
         .title(metis_i18n::tr("Software Updates"))
         .default_width(520)
         .default_height(480)
         .resizable(true)
+        .decorated(!under_metis)
         .build();
     window.add_css_class("metis-updater");
+    window.add_css_class("background");
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    root.add_css_class("metis-updater-root");
     root.set_margin_top(16);
     root.set_margin_bottom(16);
     root.set_margin_start(20);
@@ -58,6 +63,7 @@ fn build() -> UpdaterState {
 
     let header = gtk::Label::new(Some(&metis_i18n::tr("Software Updates")));
     header.add_css_class("title-2");
+    header.add_css_class("metis-updater-title");
     header.set_halign(gtk::Align::Start);
     root.append(&header);
 
@@ -87,9 +93,11 @@ fn build() -> UpdaterState {
         .hexpand(true)
         .min_content_height(120)
         .build();
+    scroller.add_css_class("metis-updater-scroll");
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);
     list.add_css_class("boxed-list");
+    list.add_css_class("metis-updater-list");
     scroller.set_child(Some(&list));
     root.append(&scroller);
 
@@ -106,6 +114,7 @@ fn build() -> UpdaterState {
 
     let log_toggle = gtk::ToggleButton::with_label(&metis_i18n::tr("Show log"));
     log_toggle.set_halign(gtk::Align::Start);
+    log_toggle.add_css_class("metis-updater-log-toggle");
     root.append(&log_toggle);
 
     let log_revealer = gtk::Revealer::builder()
@@ -144,8 +153,10 @@ fn build() -> UpdaterState {
     actions.set_halign(gtk::Align::End);
     actions.set_margin_top(8);
     let later_btn = gtk::Button::with_label(&metis_i18n::tr("Later"));
+    later_btn.add_css_class("metis-updater-btn");
     let install_btn = gtk::Button::with_label(&metis_i18n::tr("Install"));
     install_btn.add_css_class("suggested-action");
+    install_btn.add_css_class("metis-updater-btn");
     actions.append(&later_btn);
     actions.append(&install_btn);
     root.append(&actions);
@@ -184,47 +195,49 @@ fn build() -> UpdaterState {
 
             let applying_cb = applying.clone();
             let install_btn = btn.clone();
-            let on_event: Rc<dyn Fn(UpdateProgressEvent)> = Rc::new(move |ev| {
-                match ev {
-                    UpdateProgressEvent::Log { line } => {
-                        let mut end = handles.log_buffer.end_iter();
-                        handles.log_buffer.insert(&mut end, &format!("{line}\n"));
-                    }
-                    UpdateProgressEvent::Progress { percent, item } => {
-                        handles
-                            .progress
-                            .set_fraction(f64::from(percent.clamp(0, 100)) / 100.0);
-                        if let Some(name) = item {
-                            handles.status.set_text(&name);
-                        }
-                    }
-                    UpdateProgressEvent::Phase { name } => {
+            let on_event: Rc<dyn Fn(UpdateProgressEvent)> = Rc::new(move |ev| match ev {
+                UpdateProgressEvent::Log { line } => {
+                    let mut end = handles.log_buffer.end_iter();
+                    handles.log_buffer.insert(&mut end, &format!("{line}\n"));
+                }
+                UpdateProgressEvent::Progress { percent, item } => {
+                    handles
+                        .progress
+                        .set_fraction(f64::from(percent.clamp(0, 100)) / 100.0);
+                    if let Some(name) = item {
                         handles.status.set_text(&name);
                     }
-                    UpdateProgressEvent::Finished {
-                        ok,
-                        error,
-                        reboot_required,
-                    } => {
-                        applying_cb.set(false);
-                        install_btn.set_sensitive(true);
-                        handles.progress.set_fraction(if ok { 1.0 } else { handles.progress.fraction() });
-                        if ok {
-                            handles
-                                .status
-                                .set_text(&metis_i18n::tr("Updates installed"));
-                        } else {
-                            handles.status.set_text(
-                                &error.unwrap_or_else(|| metis_i18n::tr("Update failed")),
-                            );
-                        }
-                        handles.reboot_banner.set_visible(reboot_required);
-                        WINDOW.with(|cell| {
-                            if let Some(state) = cell.borrow().as_ref() {
-                                refresh_content(state);
-                            }
-                        });
+                }
+                UpdateProgressEvent::Phase { name } => {
+                    handles.status.set_text(&name);
+                }
+                UpdateProgressEvent::Finished {
+                    ok,
+                    error,
+                    reboot_required,
+                } => {
+                    applying_cb.set(false);
+                    install_btn.set_sensitive(true);
+                    handles.progress.set_fraction(if ok {
+                        1.0
+                    } else {
+                        handles.progress.fraction()
+                    });
+                    if ok {
+                        handles
+                            .status
+                            .set_text(&metis_i18n::tr("Updates installed"));
+                    } else {
+                        handles
+                            .status
+                            .set_text(&error.unwrap_or_else(|| metis_i18n::tr("Update failed")));
                     }
+                    handles.reboot_banner.set_visible(reboot_required);
+                    WINDOW.with(|cell| {
+                        if let Some(state) = cell.borrow().as_ref() {
+                            refresh_content(state);
+                        }
+                    });
                 }
             });
             services::updates_start_apply(on_event);
@@ -279,23 +292,26 @@ fn refresh_content(state: &UpdaterState) {
     }
 
     if count == 0 {
-        state.summary.set_text(&metis_i18n::tr(
-            "Your system is up to date.",
-        ));
+        state
+            .summary
+            .set_text(&metis_i18n::tr("Your system is up to date."));
         state.install_btn.set_sensitive(false);
         state.later_btn.set_sensitive(false);
     } else {
-        state.summary.set_text(
-            &metis_i18n::tr("%1 update(s) available.")
-                .replace("%1", &count.to_string()),
-        );
+        state
+            .summary
+            .set_text(&metis_i18n::tr("%1 update(s) available.").replace("%1", &count.to_string()));
         if !state.applying.get() {
             state.install_btn.set_sensitive(true);
             state.later_btn.set_sensitive(true);
         }
     }
 
-    append_section(&state.list, &metis_i18n::tr("System packages"), &snap.packages);
+    append_section(
+        &state.list,
+        &metis_i18n::tr("System packages"),
+        &snap.packages,
+    );
     append_section(&state.list, &metis_i18n::tr("Flatpak"), &snap.flatpaks);
     append_section(&state.list, &metis_i18n::tr("Firmware"), &snap.firmware);
 
@@ -307,11 +323,7 @@ fn refresh_content(state: &UpdaterState) {
     }
 }
 
-fn append_section(
-    list: &gtk::ListBox,
-    title: &str,
-    items: &[metis_remote::UpdateItem],
-) {
+fn append_section(list: &gtk::ListBox, title: &str, items: &[metis_remote::UpdateItem]) {
     if items.is_empty() {
         return;
     }
