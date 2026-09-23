@@ -15,8 +15,8 @@ use gtk::prelude::*;
 use metis_config::ThemeMode;
 
 use crate::pages::appearance_common::{
-    color_dialog_button, current_wallpaper, font_picker_button, hex_to_rgba, rgba_to_hex,
-    ColorSwatchButton,
+    ColorSwatchButton, color_dialog_button, current_wallpaper, font_picker_button, hex_to_rgba,
+    rgba_to_hex,
 };
 use crate::{runtime, ui};
 use metis_i18n::tr;

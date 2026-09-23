@@ -36,14 +36,13 @@ pub fn load_window_thumbs(windows: &[WindowInfo]) -> Option<ThumbSet> {
 
     wait_for_files(&paths, Duration::from_millis(450));
 
-    if ids.iter().any(|id| !thumb_path(*id).is_file()) {
-        if let Ok(CompositorEvent::WindowThumbs { .. }) =
+    if ids.iter().any(|id| !thumb_path(*id).is_file())
+        && let Ok(CompositorEvent::WindowThumbs { .. }) =
             metis_protocol::send_compositor_command(&CompositorCommand::CaptureWindowThumbs {
                 ids: ids.clone(),
             })
-        {
-            wait_for_files(&paths, Duration::from_millis(250));
-        }
+    {
+        wait_for_files(&paths, Duration::from_millis(250));
     }
 
     let mut textures = HashMap::new();
@@ -82,15 +81,14 @@ pub fn load_workspace_thumbs(output: &str, workspaces: &[u32]) -> Option<Workspa
 
     wait_for_files(&paths, Duration::from_millis(500));
 
-    if paths.iter().any(|p| !p.is_file()) {
-        if let Ok(CompositorEvent::WorkspaceThumbs { .. }) =
+    if paths.iter().any(|p| !p.is_file())
+        && let Ok(CompositorEvent::WorkspaceThumbs { .. }) =
             metis_protocol::send_compositor_command(&CompositorCommand::CaptureWorkspaceThumbs {
                 output: output.to_string(),
                 workspaces: workspaces.to_vec(),
             })
-        {
-            wait_for_files(&paths, Duration::from_millis(300));
-        }
+    {
+        wait_for_files(&paths, Duration::from_millis(300));
     }
 
     let mut textures = HashMap::new();

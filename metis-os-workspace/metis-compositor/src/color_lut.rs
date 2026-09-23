@@ -14,7 +14,7 @@ use std::hash::{Hash, Hasher};
 use bytemuck::{Pod, Zeroable};
 use lcms2::{Intent, PixelFormat, Profile, Transform};
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::renderer::gles::{ffi, GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture, ffi};
 use smithay::backend::renderer::{Bind, ImportMem, Offscreen};
 use smithay::utils::{Buffer, Size};
 
@@ -204,7 +204,8 @@ impl ColorLutRuntime {
 }
 
 unsafe fn compile_lut_blit(gl: &ffi::Gles2) -> Result<LutBlitProgram, String> {
-    let vs = r#"#version 100
+    unsafe {
+        let vs = r#"#version 100
 attribute vec2 pos;
 varying vec2 v_uv;
 void main() {
@@ -212,7 +213,7 @@ void main() {
     gl_Position = vec4(pos, 0.0, 1.0);
 }
 "#;
-    let fs = r#"#version 100
+        let fs = r#"#version 100
 precision highp float;
 uniform sampler2D scene;
 uniform sampler2D lut;
@@ -251,21 +252,22 @@ void main() {
 }
 "#;
 
-    let program = link_program(gl, vs, fs)?;
-    let loc_scene = gl.GetUniformLocation(program, c"scene".as_ptr() as *const _);
-    let loc_lut = gl.GetUniformLocation(program, c"lut".as_ptr() as *const _);
-    let loc_lut_size = gl.GetUniformLocation(program, c"lut_size".as_ptr() as *const _);
-    let attrib_pos = gl.GetAttribLocation(program, c"pos".as_ptr() as *const _);
-    if loc_scene < 0 || loc_lut < 0 || loc_lut_size < 0 || attrib_pos < 0 {
-        return Err("LUT blit missing uniform/attrib".into());
+        let program = link_program(gl, vs, fs)?;
+        let loc_scene = gl.GetUniformLocation(program, c"scene".as_ptr() as *const _);
+        let loc_lut = gl.GetUniformLocation(program, c"lut".as_ptr() as *const _);
+        let loc_lut_size = gl.GetUniformLocation(program, c"lut_size".as_ptr() as *const _);
+        let attrib_pos = gl.GetAttribLocation(program, c"pos".as_ptr() as *const _);
+        if loc_scene < 0 || loc_lut < 0 || loc_lut_size < 0 || attrib_pos < 0 {
+            return Err("LUT blit missing uniform/attrib".into());
+        }
+        Ok(LutBlitProgram {
+            program,
+            loc_scene,
+            loc_lut,
+            loc_lut_size,
+            attrib_pos,
+        })
     }
-    Ok(LutBlitProgram {
-        program,
-        loc_scene,
-        loc_lut,
-        loc_lut_size,
-        attrib_pos,
-    })
 }
 
 unsafe fn link_program(
@@ -273,30 +275,32 @@ unsafe fn link_program(
     vs_src: &str,
     fs_src: &str,
 ) -> Result<ffi::types::GLuint, String> {
-    let vs = compile_shader(gl, ffi::VERTEX_SHADER, vs_src)?;
-    let fs = compile_shader(gl, ffi::FRAGMENT_SHADER, fs_src)?;
-    let program = gl.CreateProgram();
-    gl.AttachShader(program, vs);
-    gl.AttachShader(program, fs);
-    gl.LinkProgram(program);
-    gl.DeleteShader(vs);
-    gl.DeleteShader(fs);
-    let mut ok = 0;
-    gl.GetProgramiv(program, ffi::LINK_STATUS, &mut ok);
-    if ok == 0 {
-        let mut len = 0;
-        gl.GetProgramiv(program, ffi::INFO_LOG_LENGTH, &mut len);
-        let mut buf = vec![0u8; len.max(1) as usize];
-        gl.GetProgramInfoLog(
-            program,
-            len,
-            std::ptr::null_mut(),
-            buf.as_mut_ptr() as *mut _,
-        );
-        gl.DeleteProgram(program);
-        return Err(String::from_utf8_lossy(&buf).into_owned());
+    unsafe {
+        let vs = compile_shader(gl, ffi::VERTEX_SHADER, vs_src)?;
+        let fs = compile_shader(gl, ffi::FRAGMENT_SHADER, fs_src)?;
+        let program = gl.CreateProgram();
+        gl.AttachShader(program, vs);
+        gl.AttachShader(program, fs);
+        gl.LinkProgram(program);
+        gl.DeleteShader(vs);
+        gl.DeleteShader(fs);
+        let mut ok = 0;
+        gl.GetProgramiv(program, ffi::LINK_STATUS, &mut ok);
+        if ok == 0 {
+            let mut len = 0;
+            gl.GetProgramiv(program, ffi::INFO_LOG_LENGTH, &mut len);
+            let mut buf = vec![0u8; len.max(1) as usize];
+            gl.GetProgramInfoLog(
+                program,
+                len,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr() as *mut _,
+            );
+            gl.DeleteProgram(program);
+            return Err(String::from_utf8_lossy(&buf).into_owned());
+        }
+        Ok(program)
     }
-    Ok(program)
 }
 
 unsafe fn compile_shader(
@@ -304,27 +308,29 @@ unsafe fn compile_shader(
     kind: ffi::types::GLenum,
     src: &str,
 ) -> Result<ffi::types::GLuint, String> {
-    let shader = gl.CreateShader(kind);
-    let ptr = src.as_ptr() as *const ffi::types::GLchar;
-    let len = src.len() as ffi::types::GLint;
-    gl.ShaderSource(shader, 1, &ptr, &len);
-    gl.CompileShader(shader);
-    let mut ok = 0;
-    gl.GetShaderiv(shader, ffi::COMPILE_STATUS, &mut ok);
-    if ok == 0 {
-        let mut len = 0;
-        gl.GetShaderiv(shader, ffi::INFO_LOG_LENGTH, &mut len);
-        let mut buf = vec![0u8; len.max(1) as usize];
-        gl.GetShaderInfoLog(
-            shader,
-            len,
-            std::ptr::null_mut(),
-            buf.as_mut_ptr() as *mut _,
-        );
-        gl.DeleteShader(shader);
-        return Err(String::from_utf8_lossy(&buf).into_owned());
+    unsafe {
+        let shader = gl.CreateShader(kind);
+        let ptr = src.as_ptr() as *const ffi::types::GLchar;
+        let len = src.len() as ffi::types::GLint;
+        gl.ShaderSource(shader, 1, &ptr, &len);
+        gl.CompileShader(shader);
+        let mut ok = 0;
+        gl.GetShaderiv(shader, ffi::COMPILE_STATUS, &mut ok);
+        if ok == 0 {
+            let mut len = 0;
+            gl.GetShaderiv(shader, ffi::INFO_LOG_LENGTH, &mut len);
+            let mut buf = vec![0u8; len.max(1) as usize];
+            gl.GetShaderInfoLog(
+                shader,
+                len,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr() as *mut _,
+            );
+            gl.DeleteShader(shader);
+            return Err(String::from_utf8_lossy(&buf).into_owned());
+        }
+        Ok(shader)
     }
-    Ok(shader)
 }
 
 fn blit_with_lut(

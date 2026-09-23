@@ -1,6 +1,6 @@
 //! Per-output variable refresh rate (VRR / adaptive sync) via DRM `VRR_ENABLED`.
 
-use metis_config::{output_prefs, OutputsConfig};
+use metis_config::{OutputsConfig, output_prefs};
 use smithay::backend::drm::VrrSupport;
 
 use crate::state::MetisState;

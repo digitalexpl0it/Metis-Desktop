@@ -2,22 +2,26 @@
 name = "metis-shell"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Metis Shell — configurable edge bar and command overlay"
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.8", features = ["v4_10"] }
-glib = "0.19"
-gio = "0.19"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
+glib = "0.22"
+gio = "0.22"
+gio-unix = "0.22"
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
 thiserror = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
-gtk4-layer-shell = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+gtk4-layer-shell = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls-no-provider", "blocking"] }
+# ring (not reqwest's aws-lc default): smaller binaries, no C++ toolchain.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 chrono-tz = "0.10"
-directories = "5"
+directories = "6"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 metis-protocol = { workspace = true }
@@ -30,14 +34,14 @@ metis-capture = { workspace = true }
 ical = "0.11"
 rrule = "0.14.0"
 async-trait = "0.1.89"
-quick-xml = "0.41"
+quick-xml = "0.42"
 url = "2.5.8"
 oo7 = { version = "0.6.0", default-features = false, features = ["tokio", "native_crypto"] }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 futures-util = "0.3"
-sysinfo = "0.33"
-nix = { version = "0.29", features = ["signal", "user"] }
+sysinfo = "0.39"
+nix = { version = "0.31", features = ["signal", "user"] }
 libc = "0.2"
 libpulse-binding = "2.28"
 libpulse-simple-binding = "2.28"

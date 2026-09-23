@@ -33,14 +33,13 @@ struct Inner {
 
 /// Logical-pixel size of the floating HUD's monitor, with a sane fallback.
 fn monitor_size() -> (i32, i32) {
-    if let Some(display) = gtk::gdk::Display::default() {
-        if let Some(obj) = display.monitors().item(0) {
-            if let Ok(monitor) = obj.downcast::<gtk::gdk::Monitor>() {
-                let g = monitor.geometry();
-                if g.width() > 0 && g.height() > 0 {
-                    return (g.width(), g.height());
-                }
-            }
+    if let Some(display) = gtk::gdk::Display::default()
+        && let Some(obj) = display.monitors().item(0)
+        && let Ok(monitor) = obj.downcast::<gtk::gdk::Monitor>()
+    {
+        let g = monitor.geometry();
+        if g.width() > 0 && g.height() > 0 {
+            return (g.width(), g.height());
         }
     }
     (1280, 720)

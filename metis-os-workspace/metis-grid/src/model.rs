@@ -288,7 +288,7 @@ fn clamp_target(layout: &GridLayout, id: &str, mut target: TileRect) -> TileRect
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{apply_preset, TileKind, TilePreset};
+    use crate::{TileKind, TilePreset, apply_preset};
 
     fn widget(id: &str, rect: TileRect, glow: &str) -> GridTile {
         GridTile {

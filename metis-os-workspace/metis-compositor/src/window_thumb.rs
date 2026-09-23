@@ -99,11 +99,11 @@ fn render_window_thumb(
     let geo = window.geometry();
     let mut width = geo.size.w.max(1);
     let mut height = geo.size.h.max(1);
-    if width < 8 || height < 8 {
-        if let Some(r) = state.windows.target_rect(id) {
-            width = r.width.max(1);
-            height = r.height.max(1);
-        }
+    if (width < 8 || height < 8)
+        && let Some(r) = state.windows.target_rect(id)
+    {
+        width = r.width.max(1);
+        height = r.height.max(1);
     }
     if width < 8 || height < 8 {
         return Err("degenerate geometry".into());

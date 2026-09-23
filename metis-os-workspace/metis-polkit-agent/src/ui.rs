@@ -233,22 +233,22 @@ pub fn show_retry(cookie: &str, retry_message: Option<String>) {
 }
 
 fn restore_dialog_after_retry(widget: &gtk::Widget, message: Option<&str>) {
-    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
-        if label.has_css_class("metis-polkit-error") {
-            label.set_label(message.unwrap_or("Authentication failed. Please try again."));
-            label.set_visible(true);
-        }
+    if let Some(label) = widget.downcast_ref::<gtk::Label>()
+        && label.has_css_class("metis-polkit-error")
+    {
+        label.set_label(message.unwrap_or("Authentication failed. Please try again."));
+        label.set_visible(true);
     }
-    if let Some(btn) = widget.downcast_ref::<gtk::Button>() {
-        if btn.has_css_class("suggested-action") {
-            btn.set_sensitive(true);
-        }
+    if let Some(btn) = widget.downcast_ref::<gtk::Button>()
+        && btn.has_css_class("suggested-action")
+    {
+        btn.set_sensitive(true);
     }
-    if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
-        if entry.has_css_class("metis-polkit-password") {
-            entry.set_text("");
-            entry.grab_focus();
-        }
+    if let Some(entry) = widget.downcast_ref::<gtk::Entry>()
+        && entry.has_css_class("metis-polkit-password")
+    {
+        entry.set_text("");
+        entry.grab_focus();
     }
     if let Some(bx) = widget.downcast_ref::<gtk::Box>() {
         let mut child = bx.first_child();

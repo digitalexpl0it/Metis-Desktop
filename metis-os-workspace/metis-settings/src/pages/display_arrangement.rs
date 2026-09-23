@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use metis_config::{load_outputs_config, output_prefs, save_outputs_config, OutputsConfig};
+use metis_config::{OutputsConfig, load_outputs_config, output_prefs, save_outputs_config};
 use metis_protocol::OutputInfo;
 
 const CANVAS_MIN_H: i32 = 220;
@@ -139,13 +139,12 @@ impl ArrangementCanvas {
                     if this_w.dragging.get() {
                         return;
                     }
-                    let alloc = widget.allocation();
+                    let (w, h) = (widget.width(), widget.height());
                     // Ignore sub-pixel / scrollbar jitter — a recompute_layout
                     // storm while the page scrolls feels like a lock-up on the
                     // arrangement card.
-                    if alloc.width() > 0 && alloc.height() > 0 {
-                        this_w
-                            .schedule_layout_for_size(alloc.width() as f64, alloc.height() as f64);
+                    if w > 0 && h > 0 {
+                        this_w.schedule_layout_for_size(w as f64, h as f64);
                     }
                 }
             };
@@ -204,19 +203,17 @@ impl ArrangementCanvas {
     /// Pick up the viewport (or parent) width so layout works before the first
     /// `width` notify, and after rebuilds while the Display stack page is shown.
     fn sync_canvas_size_from_allocation(self: &Rc<Self>) {
-        let alloc = self.viewport.allocation();
-        let mut width = alloc.width().max(0) as f64;
-        let height = alloc
+        let mut width = self.viewport.width().max(0) as f64;
+        let height = self
+            .viewport
             .height()
             .max(self.viewport.height_request())
             .max(CANVAS_MIN_H) as f64;
-        if width < 120.0 {
-            if let Some(parent) = self.viewport.parent() {
-                let palloc = parent.allocation();
-                if palloc.width() > 0 {
-                    width = palloc.width() as f64;
-                }
-            }
+        if width < 120.0
+            && let Some(parent) = self.viewport.parent()
+            && parent.width() > 0
+        {
+            width = parent.width() as f64;
         }
         if width >= 120.0 && height >= 80.0 {
             *self.canvas_size.borrow_mut() = (width, height);
@@ -474,10 +471,10 @@ impl ArrangementCanvas {
     fn selected_index(self: &Rc<Self>) -> usize {
         let name = self.selected_name.borrow().clone();
         let blocks = self.blocks.borrow();
-        if let Some(ref n) = name {
-            if let Some(idx) = blocks.iter().position(|b| &b.name == n) {
-                return idx;
-            }
+        if let Some(ref n) = name
+            && let Some(idx) = blocks.iter().position(|b| &b.name == n)
+        {
+            return idx;
         }
         0
     }
@@ -534,10 +531,10 @@ fn build_blocks(list: &[OutputInfo], cfg: &OutputsConfig) -> Vec<BlockState> {
 }
 
 fn configured_primary_name(cfg: &OutputsConfig, list: &[OutputInfo]) -> Option<String> {
-    if let Some(ref name) = cfg.primary_output {
-        if list.iter().any(|o| o.name == *name && o.enabled) {
-            return Some(name.clone());
-        }
+    if let Some(ref name) = cfg.primary_output
+        && list.iter().any(|o| o.name == *name && o.enabled)
+    {
+        return Some(name.clone());
     }
     list.iter()
         .find(|o| o.primary)
@@ -709,8 +706,8 @@ fn wire_canvas_drag(canvas: &Rc<ArrangementCanvas>) {
                 return;
             };
             widget.add_css_class("metis-display-block-dragging");
-            let alloc = widget.allocation();
-            let origin = (alloc.x() as f64, alloc.y() as f64);
+            let (x, y, width, height) = parent_bounds(widget);
+            let origin = (x, y);
             start_origin.replace(origin);
             last_pos.replace(origin);
             let (bw, bh) = canvas
@@ -718,7 +715,7 @@ fn wire_canvas_drag(canvas: &Rc<ArrangementCanvas>) {
                 .borrow()
                 .get(index)
                 .map(|b| block_canvas_size(b, *canvas.scale.borrow()))
-                .unwrap_or((alloc.width() as f64, alloc.height() as f64));
+                .unwrap_or((width, height));
             tile_size.replace((bw.max(1.0), bh.max(1.0)));
 
             canvas.set_selected(index);
@@ -832,14 +829,35 @@ fn wire_canvas_drag(canvas: &Rc<ArrangementCanvas>) {
     canvas.canvas.add_controller(drag);
 }
 
+/// `(x, y, width, height)` in the parent's coordinates — what the deprecated
+/// `allocation()` returned.
+fn parent_bounds(widget: &impl IsA<gtk::Widget>) -> (f64, f64, f64, f64) {
+    let widget = widget.as_ref();
+    widget
+        .parent()
+        .and_then(|parent| widget.compute_bounds(&parent))
+        .map(|r| {
+            (
+                f64::from(r.x()),
+                f64::from(r.y()),
+                f64::from(r.width()),
+                f64::from(r.height()),
+            )
+        })
+        .unwrap_or((
+            0.0,
+            0.0,
+            f64::from(widget.width()),
+            f64::from(widget.height()),
+        ))
+}
+
 fn hit_block_index(canvas: &ArrangementCanvas, x: f64, y: f64) -> Option<usize> {
     // Prefer the top-most tile when they overlap (later children paint above).
     for (i, widget) in canvas.block_widgets.borrow().iter().enumerate().rev() {
-        let alloc = widget.allocation();
-        let left = alloc.x() as f64;
-        let top = alloc.y() as f64;
-        let right = left + alloc.width() as f64;
-        let bottom = top + alloc.height() as f64;
+        let (left, top, width, height) = parent_bounds(widget);
+        let right = left + width;
+        let bottom = top + height;
         if x >= left && x < right && y >= top && y < bottom {
             return Some(i);
         }

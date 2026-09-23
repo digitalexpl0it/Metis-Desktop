@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
-use zbus::{self, interface, message::Header, Connection};
+use zbus::{self, Connection, interface, message::Header};
 
 use crate::compositor_ipc;
 

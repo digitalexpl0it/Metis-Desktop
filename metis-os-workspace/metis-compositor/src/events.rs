@@ -2,7 +2,7 @@ use std::io::{ErrorKind, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use metis_protocol::{CompositorEvent, SlidingWindow, EVENT_SUBSCRIBER_CAP};
+use metis_protocol::{CompositorEvent, EVENT_SUBSCRIBER_CAP, SlidingWindow};
 
 /// Broadcast compositor events to subscribed shell clients (newline-delimited JSON).
 #[derive(Clone, Default)]

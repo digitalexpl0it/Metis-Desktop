@@ -277,11 +277,11 @@ fn select_list_hhmm(list: &gtk::ListBox, hhmm: &str, use_12h: bool) {
     let mut child = list.first_child();
     while let Some(node) = child {
         child = node.next_sibling();
-        if let Ok(row) = node.downcast::<gtk::ListBoxRow>() {
-            if list_row_hhmm(&row, use_12h).as_deref() == Some(hhmm) {
-                list.select_row(Some(&row));
-                return;
-            }
+        if let Ok(row) = node.downcast::<gtk::ListBoxRow>()
+            && list_row_hhmm(&row, use_12h).as_deref() == Some(hhmm)
+        {
+            list.select_row(Some(&row));
+            return;
         }
     }
 }

@@ -40,6 +40,14 @@ fn main() {
                 .unwrap_or_else(|_| "metis_settings=info,warn".into()),
         )
         .init();
+    // reqwest is built with `rustls-no-provider`; without this every HTTPS
+    // request (sign-in, weather lookup, time sync) would panic.
+    if rustls::crypto::ring::default_provider()
+        .install_default()
+        .is_err()
+    {
+        tracing::debug!("rustls crypto provider already installed");
+    }
 
     metis_i18n::init();
     eprintln!("metis-settings: ui=home-stack (no overlay)");
@@ -83,7 +91,7 @@ fn main() {
     );
 
     // Keep going so remote instances can forward `--page` to the primary.
-    app.connect_handle_local_options(|_app, _dict| -1);
+    app.connect_handle_local_options(|_app, _dict| std::ops::ControlFlow::Continue(()));
 
     app.connect_command_line(|app, cmdline| {
         let launch = launch_from_command_line(cmdline);
@@ -91,7 +99,7 @@ fn main() {
             *slot.borrow_mut() = Some(launch);
         });
         app.activate();
-        0
+        glib::ExitCode::SUCCESS
     });
 
     app.connect_activate(|app| {
@@ -125,10 +133,10 @@ fn launch_from_command_line(cmdline: &gio::ApplicationCommandLine) -> PageLaunch
         if let Some(name) = arg.strip_prefix("--page=") {
             return normalize_launch(name);
         }
-        if arg == "--page" {
-            if let Some(name) = iter.next() {
-                return normalize_launch(&name.to_string_lossy());
-            }
+        if arg == "--page"
+            && let Some(name) = iter.next()
+        {
+            return normalize_launch(&name.to_string_lossy());
         }
     }
     PageLaunch::default()

@@ -223,13 +223,12 @@ pub fn apply_clipboard_event(mime: &str, preview_text: Option<String>, image_pat
 
     let active_id = ENTRIES.with(|cell| {
         let mut entries = cell.borrow_mut();
-        if let Some(first) = entries.first() {
-            if first.mime == mime
-                && first.preview_text == preview_text
-                && first.image_path == image_path
-            {
-                return Some(first.id);
-            }
+        if let Some(first) = entries.first()
+            && first.mime == mime
+            && first.preview_text == preview_text
+            && first.image_path == image_path
+        {
+            return Some(first.id);
         }
         let id = NEXT_ID.with(|n| {
             let mut id = n.borrow_mut();
@@ -298,10 +297,10 @@ pub fn recall_entry(entry: &ClipboardEntry) -> Result<(), String> {
     if entry.preview_text.is_none() && entry.image_path.is_none() {
         return Err("empty clipboard entry".into());
     }
-    if let Some(path) = entry.image_path.as_deref() {
-        if !Path::new(path).exists() {
-            return Err("image no longer available".into());
-        }
+    if let Some(path) = entry.image_path.as_deref()
+        && !Path::new(path).exists()
+    {
+        return Err("image no longer available".into());
     }
 
     let entry = entry.clone();

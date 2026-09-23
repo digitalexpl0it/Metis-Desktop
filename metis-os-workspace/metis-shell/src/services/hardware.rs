@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 /// Percentage step applied per volume / brightness key press.
 const VOLUME_STEP: i32 = 5;
@@ -95,10 +95,10 @@ pub fn dispatch(action: &str) -> bool {
         _ => return false,
     };
     init();
-    if let Some(tx) = TX.get() {
-        if let Err(err) = tx.send(cmd) {
-            tracing::warn!(%err, "hardware worker channel closed");
-        }
+    if let Some(tx) = TX.get()
+        && let Err(err) = tx.send(cmd)
+    {
+        tracing::warn!(%err, "hardware worker channel closed");
     }
     true
 }
@@ -546,12 +546,10 @@ async fn active_player(conn: &zbus::Connection) -> Option<String> {
             "org.mpris.MediaPlayer2.Player",
         )
         .await
+            && let Ok(status) = proxy.get_property::<String>("PlaybackStatus").await
+            && status == "Playing"
         {
-            if let Ok(status) = proxy.get_property::<String>("PlaybackStatus").await {
-                if status == "Playing" {
-                    return Some(name.clone());
-                }
-            }
+            return Some(name.clone());
         }
     }
     players.into_iter().next()

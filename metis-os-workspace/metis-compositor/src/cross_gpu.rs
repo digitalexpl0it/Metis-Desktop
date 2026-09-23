@@ -20,21 +20,21 @@ use smithay::{
         allocator::Fourcc,
         drm::DrmNode,
         renderer::{
+            Bind, ExportMem, ImportMem, Offscreen,
             damage::OutputDamageTracker,
             element::{
-                texture::{TextureBuffer, TextureRenderElement},
                 Kind, RenderElementStates,
+                texture::{TextureBuffer, TextureRenderElement},
             },
             gles::{GlesRenderer, GlesTexture},
-            multigpu::{gbm::GbmGlesBackend, GpuManager},
-            Bind, ExportMem, ImportMem, Offscreen,
+            multigpu::{GpuManager, gbm::GbmGlesBackend},
         },
     },
     output::Output,
     utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform},
 };
 
-use crate::render::{OutputStack, CLEAR_COLOR};
+use crate::render::{CLEAR_COLOR, OutputStack};
 use crate::state::MetisState;
 use crate::udev::UdevOutputId;
 
@@ -120,7 +120,7 @@ pub fn try_transfer_frame(
         let (frame_elements, clear): (Vec<OutputStack>, [f32; 4]) = {
             state.refresh_hdr_content_flag();
             let passthrough = hdr_active && state.hdr_client_content_visible;
-            if let Some(pass) = crate::output_colour::apply_colour_post_pass(
+            match crate::output_colour::apply_colour_post_pass(
                 &mut state.color_lut,
                 &mut state.hdr_encode,
                 renderer,
@@ -132,9 +132,8 @@ pub fn try_transfer_frame(
                 hdr_transfer,
                 passthrough,
             ) {
-                (pass.elements, pass.clear)
-            } else {
-                (elements, CLEAR_COLOR)
+                Some(pass) => (pass.elements, pass.clear),
+                _ => (elements, CLEAR_COLOR),
             }
         };
 

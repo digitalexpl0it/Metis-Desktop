@@ -557,21 +557,21 @@ fn read_load_avg() -> [f64; 3] {
 }
 
 fn read_firewall_status() -> FirewallStatus {
-    if let Ok(out) = std::process::Command::new("ufw").args(["status"]).output() {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            let active = text.contains("Status: active");
-            let summary = text
-                .lines()
-                .find(|l| l.starts_with("Status:"))
-                .unwrap_or("UFW")
-                .to_string();
-            return FirewallStatus {
-                active,
-                backend: "ufw".into(),
-                summary,
-            };
-        }
+    if let Ok(out) = std::process::Command::new("ufw").args(["status"]).output()
+        && out.status.success()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        let active = text.contains("Status: active");
+        let summary = text
+            .lines()
+            .find(|l| l.starts_with("Status:"))
+            .unwrap_or("UFW")
+            .to_string();
+        return FirewallStatus {
+            active,
+            backend: "ufw".into(),
+            summary,
+        };
     }
     if let Ok(out) = std::process::Command::new("systemctl")
         .args(["is-active", "firewalld"])
@@ -864,10 +864,10 @@ fn collect_standalone_discrete_hwmon_temps(out: &mut Vec<GpuTempReading>) {
         if !hwmon_is_discrete_gpu(&name) {
             continue;
         }
-        if let Some(device) = hwmon_pci_device(&path) {
-            if is_integrated_gpu_device(&device) {
-                continue;
-            }
+        if let Some(device) = hwmon_pci_device(&path)
+            && is_integrated_gpu_device(&device)
+        {
+            continue;
         }
         if let Some(temp) = read_hwmon_highest_temp(&path) {
             let label = discrete_hwmon_label(&name);
@@ -1173,7 +1173,7 @@ pub fn short_kernel_version(full: &str) -> String {
 }
 
 pub fn kill_process(pid: u32, force: bool) -> Result<(), String> {
-    use nix::sys::signal::{kill, Signal};
+    use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid as NixPid;
 
     if pid == std::process::id() {
@@ -1207,10 +1207,10 @@ pub fn kill_process_tree(root: u32, all: &[ProcessRow], force: bool) -> Result<(
         if !killable.get(&pid).copied().unwrap_or(false) {
             continue;
         }
-        if let Err(err) = kill_process(pid, force) {
-            if first_err.is_none() {
-                first_err = Some(err);
-            }
+        if let Err(err) = kill_process(pid, force)
+            && first_err.is_none()
+        {
+            first_err = Some(err);
         }
     }
     match first_err {
@@ -1223,10 +1223,10 @@ fn process_children_index(all: &[ProcessRow]) -> std::collections::HashMap<u32, 
     let pids: std::collections::HashSet<u32> = all.iter().map(|p| p.pid).collect();
     let mut map: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
     for proc in all {
-        if let Some(ppid) = proc.parent_pid {
-            if pids.contains(&ppid) {
-                map.entry(ppid).or_default().push(proc.pid);
-            }
+        if let Some(ppid) = proc.parent_pid
+            && pids.contains(&ppid)
+        {
+            map.entry(ppid).or_default().push(proc.pid);
         }
     }
     map

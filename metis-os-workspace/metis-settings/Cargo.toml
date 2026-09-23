@@ -2,15 +2,19 @@
 name = "metis-settings"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Metis Settings 2.0 — Home overview, category sheets, appearance, network, and system configuration"
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.8", features = ["v4_10"] }
-glib = "0.19"
-gio = "0.19"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
+glib = "0.22"
+gio = "0.22"
+gio-unix = "0.22"
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls-no-provider", "blocking"] }
+# ring (not reqwest's aws-lc default): smaller binaries, no C++ toolchain.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

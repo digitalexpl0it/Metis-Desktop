@@ -1,7 +1,7 @@
-use metis_grid::{app_tile_body_rect, cell_to_pixels, PixelRect, TileKind};
+use metis_grid::{PixelRect, TileKind, app_tile_body_rect, cell_to_pixels};
 use smithay::{
     backend::renderer::utils::with_renderer_surface_state,
-    desktop::{layer_map_for_output, PopupKind, PopupManager, WindowSurfaceType},
+    desktop::{PopupKind, PopupManager, WindowSurfaceType, layer_map_for_output},
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, Rectangle},
     wayland::seat::WaylandFocus,
@@ -319,10 +319,10 @@ impl MetisState {
             }
 
             if record.fullscreen {
-                if let Some(geo) = self.space.element_geometry(window) {
-                    if geo.contains(pos.to_i32_round()) {
-                        return Some((window.clone(), loc));
-                    }
+                if let Some(geo) = self.space.element_geometry(window)
+                    && geo.contains(pos.to_i32_round())
+                {
+                    return Some((window.clone(), loc));
                 }
                 continue;
             }
@@ -349,25 +349,24 @@ impl MetisState {
                             return Some((window.clone(), loc));
                         }
                     }
-                } else if let Some(frame) = self.ssd_frame_for_mapped_window(id, window) {
-                    if point_in_rect(x, y, frame) && !point_in_rect(x, y, app_tile_body_rect(frame))
-                    {
-                        return Some((window.clone(), loc));
-                    }
+                } else if let Some(frame) = self.ssd_frame_for_mapped_window(id, window)
+                    && point_in_rect(x, y, frame)
+                    && !point_in_rect(x, y, app_tile_body_rect(frame))
+                {
+                    return Some((window.clone(), loc));
                 }
             }
 
-            if let Some(geo) = self.space.element_geometry(window) {
-                if x >= geo.loc.x
-                    && x < geo.loc.x + geo.size.w
-                    && y >= geo.loc.y
-                    && y < geo.loc.y + geo.size.h
-                {
-                    // Use the mapped origin, not geo.loc (which includes
-                    // geometry.loc shadow offsets). surface_under expects
-                    // coordinates relative to element_location.
-                    return Some((window.clone(), loc));
-                }
+            if let Some(geo) = self.space.element_geometry(window)
+                && x >= geo.loc.x
+                && x < geo.loc.x + geo.size.w
+                && y >= geo.loc.y
+                && y < geo.loc.y + geo.size.h
+            {
+                // Use the mapped origin, not geo.loc (which includes
+                // geometry.loc shadow offsets). surface_under expects
+                // coordinates relative to element_location.
+                return Some((window.clone(), loc));
             }
         }
         None
@@ -500,10 +499,10 @@ impl MetisState {
 
         // Peek-only while auto-hidden so maximized titlebar controls under the
         // (CSS-slid) full layer surface stay clickable. Full strip when shown.
-        if let Some(strip) = self.bar_input_block_rect(output, &output_geo) {
-            if point_in_rect(x, y, strip) {
-                return true;
-            }
+        if let Some(strip) = self.bar_input_block_rect(output, &output_geo)
+            && point_in_rect(x, y, strip)
+        {
+            return true;
         }
 
         let rel = pos - output_geo.loc.to_f64();
@@ -758,14 +757,15 @@ impl MetisState {
                     // Auto-hidden peek: always deliver to the bar root so GTK
                     // gets enter even if layer geometry briefly lags the strip
                     // (margin clear / resize race). Without this the bar stays gone.
-                    if auto_hidden && surface_has_buffer(layer.wl_surface()) {
-                        if let Some(layer_geo) = layers.layer_geometry(layer) {
-                            let local = rel - layer_geo.loc.to_f64();
-                            return Some((
-                                layer.wl_surface().clone(),
-                                (local + layer_geo.loc.to_f64() + output_geo.loc.to_f64()),
-                            ));
-                        }
+                    if auto_hidden
+                        && surface_has_buffer(layer.wl_surface())
+                        && let Some(layer_geo) = layers.layer_geometry(layer)
+                    {
+                        let local = rel - layer_geo.loc.to_f64();
+                        return Some((
+                            layer.wl_surface().clone(),
+                            (local + layer_geo.loc.to_f64() + output_geo.loc.to_f64()),
+                        ));
                     }
                     if !layer_accepts_pointer(layer, &layers, rel) {
                         continue;
@@ -844,12 +844,11 @@ impl MetisState {
             }
         }
 
-        if let DeskHit::AppBody { window_id } = desk_hit {
-            if self.window_id_at(pos) == Some(window_id) {
-                if let Some(hit) = self.window_surface_at(pos) {
-                    return Some(hit);
-                }
-            }
+        if let DeskHit::AppBody { window_id } = desk_hit
+            && self.window_id_at(pos) == Some(window_id)
+            && let Some(hit) = self.window_surface_at(pos)
+        {
+            return Some(hit);
         }
 
         if let Some(hit) = self.window_surface_at(pos) {
@@ -872,12 +871,11 @@ impl MetisState {
 
     /// Keyboard focus follows the same desk/app passthrough rules as pointer routing.
     pub fn focus_target_at(&self, location: Point<f64, Logical>) -> Option<KeyboardFocusTarget> {
-        if self.screenshot_overlay_active() {
-            if let Some(layer) = self.screenshot_overlay_layer() {
-                if layer.can_receive_keyboard_focus() {
-                    return Some(layer.into());
-                }
-            }
+        if self.screenshot_overlay_active()
+            && let Some(layer) = self.screenshot_overlay_layer()
+            && layer.can_receive_keyboard_focus()
+        {
+            return Some(layer.into());
         }
 
         if self.capture_overlay_active() {
@@ -908,17 +906,17 @@ impl MetisState {
         let layers = layer_map_for_output(&output);
 
         for layer_kind in [WlrLayer::Overlay] {
-            if let Some(layer) = layers.layer_under(layer_kind, rel) {
-                if layer.can_receive_keyboard_focus() {
-                    let Some(layer_loc) = layers.layer_geometry(layer).map(|g| g.loc) else {
-                        continue;
-                    };
-                    if layer
-                        .surface_under(rel - layer_loc.to_f64(), WindowSurfaceType::ALL)
-                        .is_some()
-                    {
-                        return Some(layer.clone().into());
-                    }
+            if let Some(layer) = layers.layer_under(layer_kind, rel)
+                && layer.can_receive_keyboard_focus()
+            {
+                let Some(layer_loc) = layers.layer_geometry(layer).map(|g| g.loc) else {
+                    continue;
+                };
+                if layer
+                    .surface_under(rel - layer_loc.to_f64(), WindowSurfaceType::ALL)
+                    .is_some()
+                {
+                    return Some(layer.clone().into());
                 }
             }
         }
@@ -959,26 +957,25 @@ impl MetisState {
 
         match desk_hit {
             DeskHit::AppBody { window_id } => {
-                if self.window_id_at(location) == Some(window_id) {
-                    if let Some((window, _)) = self.topmost_window_at_pointer(location) {
-                        return Some(window.clone().into());
-                    }
+                if self.window_id_at(location) == Some(window_id)
+                    && let Some((window, _)) = self.topmost_window_at_pointer(location)
+                {
+                    return Some(window.clone().into());
                 }
             }
             DeskHit::WidgetTile { .. } | DeskHit::AppHeader { .. } => {
                 for layer_kind in [WlrLayer::Top] {
-                    if let Some(layer) = layers.layer_under(layer_kind, rel) {
-                        if layer.can_receive_keyboard_focus() {
-                            let Some(layer_loc) = layers.layer_geometry(layer).map(|g| g.loc)
-                            else {
-                                continue;
-                            };
-                            if layer
-                                .surface_under(rel - layer_loc.to_f64(), WindowSurfaceType::ALL)
-                                .is_some()
-                            {
-                                return Some(layer.clone().into());
-                            }
+                    if let Some(layer) = layers.layer_under(layer_kind, rel)
+                        && layer.can_receive_keyboard_focus()
+                    {
+                        let Some(layer_loc) = layers.layer_geometry(layer).map(|g| g.loc) else {
+                            continue;
+                        };
+                        if layer
+                            .surface_under(rel - layer_loc.to_f64(), WindowSurfaceType::ALL)
+                            .is_some()
+                        {
+                            return Some(layer.clone().into());
                         }
                     }
                 }
@@ -995,17 +992,17 @@ impl MetisState {
         }
 
         for layer_kind in [WlrLayer::Bottom, WlrLayer::Background] {
-            if let Some(layer) = layers.layer_under(layer_kind, rel) {
-                if layer.can_receive_keyboard_focus() {
-                    let Some(layer_loc) = layers.layer_geometry(layer).map(|g| g.loc) else {
-                        continue;
-                    };
-                    if layer
-                        .surface_under(rel - layer_loc.to_f64(), WindowSurfaceType::ALL)
-                        .is_some()
-                    {
-                        return Some(layer.clone().into());
-                    }
+            if let Some(layer) = layers.layer_under(layer_kind, rel)
+                && layer.can_receive_keyboard_focus()
+            {
+                let Some(layer_loc) = layers.layer_geometry(layer).map(|g| g.loc) else {
+                    continue;
+                };
+                if layer
+                    .surface_under(rel - layer_loc.to_f64(), WindowSurfaceType::ALL)
+                    .is_some()
+                {
+                    return Some(layer.clone().into());
                 }
             }
         }

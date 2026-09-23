@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use metis_config::{load_bar_config, DesktopWidgetInstance};
+use metis_config::{DesktopWidgetInstance, load_bar_config};
 
 use super::font::apply_font;
 

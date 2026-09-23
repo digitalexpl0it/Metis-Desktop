@@ -22,13 +22,13 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use metis_config::BarPosition;
 
 use crate::config::load_clocks_config;
-use crate::services::{spawn_calendar_service, CalCommand, CalendarEvent, LocalEvent};
+use crate::services::{CalCommand, CalendarEvent, LocalEvent, spawn_calendar_service};
+use crate::ui::bar::widgets::clock::Store;
 use crate::ui::bar::widgets::clock::alarms::AlarmsPage;
 use crate::ui::bar::widgets::clock::calendar::{CalendarPage, CreateRequest, EventView};
 use crate::ui::bar::widgets::clock::stopwatch::StopwatchPage;
 use crate::ui::bar::widgets::clock::timer::TimerPage;
 use crate::ui::bar::widgets::clock::world::WorldClocksPage;
-use crate::ui::bar::widgets::clock::Store;
 use crate::ui::icons;
 
 use notif_list::NotificationsCard;
@@ -170,14 +170,13 @@ fn apply_window_layout(center: &Center, layout: &NcLayout, slide_margin: i32) {
 }
 
 fn primary_monitor_height() -> i32 {
-    if let Some(display) = gdk::Display::default() {
-        if let Some(obj) = display.monitors().item(0) {
-            if let Ok(monitor) = obj.downcast::<gdk::Monitor>() {
-                let h = monitor.geometry().height();
-                if h > 0 {
-                    return h;
-                }
-            }
+    if let Some(display) = gdk::Display::default()
+        && let Some(obj) = display.monitors().item(0)
+        && let Ok(monitor) = obj.downcast::<gdk::Monitor>()
+    {
+        let h = monitor.geometry().height();
+        if h > 0 {
+            return h;
         }
     }
     1080
@@ -306,8 +305,8 @@ fn set_slide_margin(center: &Center, margin: i32) {
 /// Animate layer-shell slide-edge margin with ease-out cubic. A new call bumps
 /// `anim_gen` so a reverse mid-slide cancels the previous tick cleanly.
 fn animate_slide_margin(center: Rc<Center>, target: i32, on_done: impl FnOnce(&Center) + 'static) {
-    let gen = center.anim_gen.get().wrapping_add(1);
-    center.anim_gen.set(gen);
+    let r#gen = center.anim_gen.get().wrapping_add(1);
+    center.anim_gen.set(r#gen);
     center.animating.set(true);
     let start = center.slide_margin.get();
     let delta = target - start;
@@ -321,7 +320,7 @@ fn animate_slide_margin(center: Rc<Center>, target: i32, on_done: impl FnOnce(&C
     let mut on_done = Some(on_done);
 
     glib::timeout_add_local(StdDuration::from_millis(16), move || {
-        if center.anim_gen.get() != gen {
+        if center.anim_gen.get() != r#gen {
             return glib::ControlFlow::Break;
         }
         let elapsed = glib::monotonic_time() - start_at;
@@ -445,7 +444,7 @@ fn build_center() -> Rc<Center> {
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
     window.set_keyboard_mode(KeyboardMode::Exclusive);
-    window.set_namespace("metis-notification-center");
+    window.set_namespace(Some("metis-notification-center"));
     // exclusive_zone / margins applied in apply_window_layout (DontCare + bar inset).
     window.set_default_size(PANEL_WIDTH, 800);
     window.set_size_request(PANEL_WIDTH, -1);
@@ -645,10 +644,10 @@ fn build_center() -> Rc<Center> {
     glib::timeout_add_local(StdDuration::from_secs(1), move || {
         date_label_tick.set_label(&Local::now().format("%A %-d %B").to_string());
         CENTER.with(|c| {
-            if let Some(center) = c.borrow().as_ref() {
-                if center.open.get() {
-                    center.world.refresh();
-                }
+            if let Some(center) = c.borrow().as_ref()
+                && center.open.get()
+            {
+                center.world.refresh();
             }
         });
         glib::ControlFlow::Continue

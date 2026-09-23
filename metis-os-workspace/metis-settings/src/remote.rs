@@ -78,12 +78,12 @@ fn default_true() -> bool {
 }
 
 fn metis_remote_bin() -> String {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("metis-remote");
-            if sibling.is_file() {
-                return sibling.to_string_lossy().into_owned();
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join("metis-remote");
+        if sibling.is_file() {
+            return sibling.to_string_lossy().into_owned();
         }
     }
     "metis-remote".into()
@@ -213,23 +213,23 @@ pub fn connection_hint(snap: &RemoteSnapshot) -> String {
 
 /// Split `host:port` from [`connection_hint`] (last `:` separates port).
 pub fn parse_connection_hint(hint: &str) -> (String, u16) {
-    if let Some((host, port_s)) = hint.rsplit_once(':') {
-        if let Ok(port) = port_s.parse::<u16>() {
-            if !host.is_empty() && port != 0 {
-                return (host.to_string(), port);
-            }
-        }
+    if let Some((host, port_s)) = hint.rsplit_once(':')
+        && let Ok(port) = port_s.parse::<u16>()
+        && !host.is_empty()
+        && port != 0
+    {
+        return (host.to_string(), port);
     }
     (hint.to_string(), 3389)
 }
 
 fn metis_viewer_bin() -> String {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("metis-viewer");
-            if sibling.is_file() {
-                return sibling.to_string_lossy().into_owned();
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join("metis-viewer");
+        if sibling.is_file() {
+            return sibling.to_string_lossy().into_owned();
         }
     }
     "metis-viewer".into()
@@ -254,18 +254,18 @@ pub fn open_viewer(
             cmd.env_remove("GTK_THEME");
         }
     }
-    if let Some(h) = host {
-        if !h.is_empty() {
-            cmd.args(["--host", h]);
-        }
+    if let Some(h) = host
+        && !h.is_empty()
+    {
+        cmd.args(["--host", h]);
     }
     if let Some(p) = port {
         cmd.args(["--port", &p.to_string()]);
     }
-    if let Some(u) = username {
-        if !u.is_empty() {
-            cmd.args(["--user", u]);
-        }
+    if let Some(u) = username
+        && !u.is_empty()
+    {
+        cmd.args(["--user", u]);
     }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())

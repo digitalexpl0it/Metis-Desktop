@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use metis_config::{
-    load_dashboard_config, save_dashboard_config, DashboardConfig, DashboardWidgetId,
-    KNOWN_PROCESS_MONITORS,
+    DashboardConfig, DashboardWidgetId, KNOWN_PROCESS_MONITORS, load_dashboard_config,
+    save_dashboard_config,
 };
 
 use crate::ui;

@@ -15,9 +15,10 @@ use smithay::{
     desktop::Window,
     input::pointer::{Focus, GrabStartData as PointerGrabStartData},
     reexports::calloop::LoopHandle,
-    utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER},
+    utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size},
     wayland::{
         selection::{
+            SelectionTarget,
             data_device::{
                 clear_data_device_selection, current_data_device_selection_userdata,
                 request_data_device_client_selection, set_data_device_selection,
@@ -26,13 +27,12 @@ use smithay::{
                 clear_primary_selection, current_primary_selection_userdata,
                 request_primary_client_selection, set_primary_selection,
             },
-            SelectionTarget,
         },
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     },
     xwayland::{
-        xwm::{Reorder, ResizeEdge as X11ResizeEdge, XwmId},
         X11Surface, X11Wm, XWayland, XWaylandEvent, XwmHandler,
+        xwm::{Reorder, ResizeEdge as X11ResizeEdge, XwmId},
     },
 };
 
@@ -93,6 +93,7 @@ impl MetisState {
             &self.display_handle,
             None,
             std::iter::empty::<(String, String)>(),
+            std::iter::empty::<String>(),
             open_abstract,
             Stdio::null(),
             Stdio::null(),
@@ -297,21 +298,20 @@ impl MetisState {
         let size_grew = new_size.w > old.w + 32 || new_size.h > old.h + 32;
 
         // Near-monitor borderless games: true fullscreen (only after a real grow).
-        if size_grew {
-            if let Some(rect) =
+        if size_grew
+            && let Some(rect) =
                 self.borderless_output_rect_for(id, new_size.w, new_size.h, undecorated)
-            {
-                tracing::info!(
-                    id,
-                    x11_window = window.window_id(),
-                    ?rect,
-                    size = ?new_size,
-                    "x11: size change → borderless flush + fullscreen"
-                );
-                self.windows.set_target_rect(id, rect);
-                self.set_fullscreen(id, true, None);
-                return;
-            }
+        {
+            tracing::info!(
+                id,
+                x11_window = window.window_id(),
+                ?rect,
+                size = ?new_size,
+                "x11: size change → borderless flush + fullscreen"
+            );
+            self.windows.set_target_rect(id, rect);
+            self.set_fullscreen(id, true, None);
+            return;
         }
 
         // Only re-center when the client grew — shrinking/oscillating sizes must
@@ -545,16 +545,17 @@ impl XwmHandler for MetisState {
         // is still honored, so this only blocks background launchers stealing from
         // an active game. User-initiated raises (dock/taskbar) go through
         // `activate_window_by_id` directly and are unaffected.
-        if let Some(focused) = self.focused_window_id() {
-            if focused != id && self.window_is_running_game(focused) {
-                tracing::info!(
-                    requester = id,
-                    focused,
-                    x11_window = window.window_id(),
-                    "x11: blocked _NET_ACTIVE_WINDOW focus-steal while a game is focused"
-                );
-                return;
-            }
+        if let Some(focused) = self.focused_window_id()
+            && focused != id
+            && self.window_is_running_game(focused)
+        {
+            tracing::info!(
+                requester = id,
+                focused,
+                x11_window = window.window_id(),
+                "x11: blocked _NET_ACTIVE_WINDOW focus-steal while a game is focused"
+            );
+            return;
         }
         self.activate_window_by_id(id);
     }
@@ -585,12 +586,11 @@ impl XwmHandler for MetisState {
             );
         }
         if window.is_fullscreen() {
-            if let Some(elem) = self.x11_element(&window) {
-                if let Some(output) = self.output_for_x11_element(&elem) {
-                    if let Some(geo) = self.space.output_geometry(&output) {
-                        let _ = window.configure(geo);
-                    }
-                }
+            if let Some(elem) = self.x11_element(&window)
+                && let Some(output) = self.output_for_x11_element(&elem)
+                && let Some(geo) = self.space.output_geometry(&output)
+            {
+                let _ = window.configure(geo);
             }
             return;
         }
@@ -620,10 +620,10 @@ impl XwmHandler for MetisState {
             .get(id)
             .is_some_and(|r| r.maximized || r.fullscreen)
         {
-            if let Some(output) = self.output_for_x11_element(&elem) {
-                if let Some(out_geo) = self.space.output_geometry(&output) {
-                    let _ = window.configure(out_geo);
-                }
+            if let Some(output) = self.output_for_x11_element(&elem)
+                && let Some(out_geo) = self.space.output_geometry(&output)
+            {
+                let _ = window.configure(out_geo);
             }
             return;
         }
@@ -744,10 +744,10 @@ impl XwmHandler for MetisState {
             return;
         };
         if let Some(id) = self.windows.id_for_x11_window(window.window_id()) {
-            if let Some(record) = self.windows.get(id) {
-                if record.maximized || record.fullscreen {
-                    return;
-                }
+            if let Some(record) = self.windows.get(id)
+                && (record.maximized || record.fullscreen)
+            {
+                return;
             }
             // Float it so the drag has no snap-back to a grid tile.
             self.floating.insert(id);
@@ -777,14 +777,12 @@ impl XwmHandler for MetisState {
     }
 
     fn allow_selection_access(&mut self, xwm: XwmId, _selection: SelectionTarget) -> bool {
-        if let Some(keyboard) = self.seat.get_keyboard() {
-            if let Some(KeyboardFocusTarget::Window(w)) = keyboard.current_focus() {
-                if let Some(surface) = w.x11_surface() {
-                    if surface.xwm_id() == Some(xwm) {
-                        return true;
-                    }
-                }
-            }
+        if let Some(keyboard) = self.seat.get_keyboard()
+            && let Some(KeyboardFocusTarget::Window(w)) = keyboard.current_focus()
+            && let Some(surface) = w.x11_surface()
+            && surface.xwm_id() == Some(xwm)
+        {
+            return true;
         }
         false
     }

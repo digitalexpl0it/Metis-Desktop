@@ -50,7 +50,7 @@ pub struct Viewport {
 
 #[cfg(has_libeis)]
 #[link(name = "eis")]
-extern "C" {
+unsafe extern "C" {
     fn eis_new(user_data: *mut std::ffi::c_void) -> *mut Eis;
     fn eis_unref(eis: *mut Eis);
     fn eis_setup_backend_fd(ctx: *mut Eis) -> i32;
@@ -298,34 +298,40 @@ pub fn unregister_viewport(mapping_id: &str) {
 
 #[cfg(has_libeis)]
 unsafe fn remove_device(device: *mut EisDevice) {
-    if device.is_null() {
-        return;
+    unsafe {
+        if device.is_null() {
+            return;
+        }
+        eis_device_pause(device);
+        eis_device_remove(device);
+        eis_device_unref(device);
     }
-    eis_device_pause(device);
-    eis_device_remove(device);
-    eis_device_unref(device);
 }
 
 #[cfg(has_libeis)]
 unsafe fn propagate_device(device: *mut EisDevice) {
-    eis_device_add(device);
-    eis_device_resume(device);
+    unsafe {
+        eis_device_add(device);
+        eis_device_resume(device);
+    }
 }
 
 #[cfg(has_libeis)]
 unsafe fn teardown_client(client: &mut ClientState) {
-    if let Some(addr) = client.rel_pointer.take() {
-        remove_device(addr as *mut EisDevice);
-    }
-    if let Some(addr) = client.keyboard.take() {
-        remove_device(addr as *mut EisDevice);
-    }
-    if let Some(addr) = client.abs_pointer.take() {
-        remove_device(addr as *mut EisDevice);
-    }
-    if client.seat != 0 {
-        eis_seat_unref(client.seat as *mut EisSeat);
-        client.seat = 0;
+    unsafe {
+        if let Some(addr) = client.rel_pointer.take() {
+            remove_device(addr as *mut EisDevice);
+        }
+        if let Some(addr) = client.keyboard.take() {
+            remove_device(addr as *mut EisDevice);
+        }
+        if let Some(addr) = client.abs_pointer.take() {
+            remove_device(addr as *mut EisDevice);
+        }
+        if client.seat != 0 {
+            eis_seat_unref(client.seat as *mut EisSeat);
+            client.seat = 0;
+        }
     }
 }
 
@@ -388,98 +394,105 @@ fn refresh_absolute_devices(_hub: &mut EisHub) {}
 
 #[cfg(has_libeis)]
 unsafe fn attach_default_keymap(device: *mut EisDevice) -> bool {
-    use xkbcommon::xkb::{Context, Keymap, KEYMAP_FORMAT_TEXT_V1};
+    unsafe {
+        use xkbcommon::xkb::{Context, KEYMAP_FORMAT_TEXT_V1, Keymap};
 
-    let ctx = Context::new(0);
-    let rules = std::env::var("XKB_DEFAULT_RULES").unwrap_or_else(|_| "evdev".into());
-    let model = std::env::var("XKB_DEFAULT_MODEL").unwrap_or_default();
-    let layout = std::env::var("XKB_DEFAULT_LAYOUT").unwrap_or_else(|_| "us".into());
-    let variant = std::env::var("XKB_DEFAULT_VARIANT").unwrap_or_default();
-    let keymap = match Keymap::new_from_names(&ctx, &rules, &model, &layout, &variant, None, 0) {
-        Some(k) => k,
-        None => {
-            tracing::warn!("EIS: failed to compile XKB keymap");
+        let ctx = Context::new(0);
+        let rules = std::env::var("XKB_DEFAULT_RULES").unwrap_or_else(|_| "evdev".into());
+        let model = std::env::var("XKB_DEFAULT_MODEL").unwrap_or_default();
+        let layout = std::env::var("XKB_DEFAULT_LAYOUT").unwrap_or_else(|_| "us".into());
+        let variant = std::env::var("XKB_DEFAULT_VARIANT").unwrap_or_default();
+        let keymap = match Keymap::new_from_names(&ctx, &rules, &model, &layout, &variant, None, 0)
+        {
+            Some(k) => k,
+            None => {
+                tracing::warn!("EIS: failed to compile XKB keymap");
+                return false;
+            }
+        };
+        let text = keymap.get_as_string(KEYMAP_FORMAT_TEXT_V1);
+        let bytes = text.as_bytes();
+        if bytes.is_empty() {
+            tracing::warn!("EIS: empty XKB keymap");
             return false;
         }
-    };
-    let text = keymap.get_as_string(KEYMAP_FORMAT_TEXT_V1);
-    let bytes = text.as_bytes();
-    if bytes.is_empty() {
-        tracing::warn!("EIS: empty XKB keymap");
-        return false;
-    }
 
-    let fd = libc::memfd_create(
-        c"metis-xkb".as_ptr(),
-        libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
-    );
-    if fd < 0 {
-        tracing::warn!("EIS: memfd_create failed for XKB keymap");
-        return false;
-    }
-    let written = libc::write(fd, bytes.as_ptr() as *const libc::c_void, bytes.len());
-    if written < 0 || written as usize != bytes.len() {
-        let _ = libc::close(fd);
-        tracing::warn!("EIS: failed to write XKB keymap to memfd");
-        return false;
-    }
-    if libc::lseek(fd, 0, libc::SEEK_SET) < 0 {
-        let _ = libc::close(fd);
-        tracing::warn!("EIS: failed to seek XKB keymap memfd");
-        return false;
-    }
+        let fd = libc::memfd_create(
+            c"metis-xkb".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        );
+        if fd < 0 {
+            tracing::warn!("EIS: memfd_create failed for XKB keymap");
+            return false;
+        }
+        let written = libc::write(fd, bytes.as_ptr() as *const libc::c_void, bytes.len());
+        if written < 0 || written as usize != bytes.len() {
+            let _ = libc::close(fd);
+            tracing::warn!("EIS: failed to write XKB keymap to memfd");
+            return false;
+        }
+        if libc::lseek(fd, 0, libc::SEEK_SET) < 0 {
+            let _ = libc::close(fd);
+            tracing::warn!("EIS: failed to seek XKB keymap memfd");
+            return false;
+        }
 
-    let keymap_obj = eis_device_new_keymap(device, EIS_KEYMAP_TYPE_XKB, fd, bytes.len());
-    let _ = libc::close(fd);
-    if keymap_obj.is_null() {
-        tracing::warn!("EIS: eis_device_new_keymap failed");
-        return false;
+        let keymap_obj = eis_device_new_keymap(device, EIS_KEYMAP_TYPE_XKB, fd, bytes.len());
+        let _ = libc::close(fd);
+        if keymap_obj.is_null() {
+            tracing::warn!("EIS: eis_device_new_keymap failed");
+            return false;
+        }
+        eis_keymap_add(keymap_obj);
+        eis_keymap_unref(keymap_obj);
+        tracing::info!(bytes = bytes.len(), "EIS: attached XKB keymap");
+        true
     }
-    eis_keymap_add(keymap_obj);
-    eis_keymap_unref(keymap_obj);
-    tracing::info!(bytes = bytes.len(), "EIS: attached XKB keymap");
-    true
 }
 
 #[cfg(has_libeis)]
 unsafe fn add_relative_pointer(seat: *mut EisSeat, client: &mut ClientState) {
-    if client.rel_pointer.is_some() {
-        return;
+    unsafe {
+        if client.rel_pointer.is_some() {
+            return;
+        }
+        let device = eis_seat_new_device(seat);
+        if device.is_null() {
+            tracing::warn!("EIS: failed to create relative pointer device");
+            return;
+        }
+        eis_device_configure_name(device, c"metis relative pointer".as_ptr());
+        eis_device_configure_capability(device, EIS_DEVICE_CAP_POINTER);
+        eis_device_configure_capability(device, EIS_DEVICE_CAP_BUTTON);
+        eis_device_configure_capability(device, EIS_DEVICE_CAP_SCROLL);
+        propagate_device(device);
+        client.rel_pointer = Some(device as usize);
+        tracing::info!("EIS: relative pointer device added");
     }
-    let device = eis_seat_new_device(seat);
-    if device.is_null() {
-        tracing::warn!("EIS: failed to create relative pointer device");
-        return;
-    }
-    eis_device_configure_name(device, c"metis relative pointer".as_ptr());
-    eis_device_configure_capability(device, EIS_DEVICE_CAP_POINTER);
-    eis_device_configure_capability(device, EIS_DEVICE_CAP_BUTTON);
-    eis_device_configure_capability(device, EIS_DEVICE_CAP_SCROLL);
-    propagate_device(device);
-    client.rel_pointer = Some(device as usize);
-    tracing::info!("EIS: relative pointer device added");
 }
 
 #[cfg(has_libeis)]
 unsafe fn add_keyboard(seat: *mut EisSeat, client: &mut ClientState) {
-    if client.keyboard.is_some() {
-        return;
+    unsafe {
+        if client.keyboard.is_some() {
+            return;
+        }
+        let device = eis_seat_new_device(seat);
+        if device.is_null() {
+            tracing::warn!("EIS: failed to create keyboard device");
+            return;
+        }
+        eis_device_configure_name(device, c"metis keyboard".as_ptr());
+        eis_device_configure_capability(device, EIS_DEVICE_CAP_KEYBOARD);
+        if !attach_default_keymap(device) {
+            eis_device_unref(device);
+            tracing::warn!("EIS: skipping keyboard — keymap unavailable");
+            return;
+        }
+        propagate_device(device);
+        client.keyboard = Some(device as usize);
+        tracing::info!("EIS: keyboard device added");
     }
-    let device = eis_seat_new_device(seat);
-    if device.is_null() {
-        tracing::warn!("EIS: failed to create keyboard device");
-        return;
-    }
-    eis_device_configure_name(device, c"metis keyboard".as_ptr());
-    eis_device_configure_capability(device, EIS_DEVICE_CAP_KEYBOARD);
-    if !attach_default_keymap(device) {
-        eis_device_unref(device);
-        tracing::warn!("EIS: skipping keyboard — keymap unavailable");
-        return;
-    }
-    propagate_device(device);
-    client.keyboard = Some(device as usize);
-    tracing::info!("EIS: keyboard device added");
 }
 
 #[cfg(has_libeis)]
@@ -507,28 +520,24 @@ fn handle_seat_bind(ev: *mut EisEvent) {
 
         if wants_pointer && client.rel_pointer.is_none() {
             add_relative_pointer(seat, client);
-        } else if !wants_pointer {
-            if let Some(addr) = client.rel_pointer.take() {
-                remove_device(addr as *mut EisDevice);
-            }
+        } else if !wants_pointer && let Some(addr) = client.rel_pointer.take() {
+            remove_device(addr as *mut EisDevice);
         }
 
         if wants_keyboard && client.keyboard.is_none() {
             add_keyboard(seat, client);
-        } else if !wants_keyboard {
-            if let Some(addr) = client.keyboard.take() {
-                remove_device(addr as *mut EisDevice);
-            }
+        } else if !wants_keyboard && let Some(addr) = client.keyboard.take() {
+            remove_device(addr as *mut EisDevice);
         }
     }
 
     if wants_abs {
         refresh_absolute_devices(&mut hub);
-    } else if let Some(client) = hub.client.as_mut() {
-        if let Some(addr) = client.abs_pointer.take() {
-            unsafe {
-                remove_device(addr as *mut EisDevice);
-            }
+    } else if let Some(client) = hub.client.as_mut()
+        && let Some(addr) = client.abs_pointer.take()
+    {
+        unsafe {
+            remove_device(addr as *mut EisDevice);
         }
     }
 
@@ -583,22 +592,23 @@ fn handle_client_connect(eis_client: *mut EisClient) {
     }
 
     let hub_arc = hub();
-    if let Ok(mut hub) = hub_arc.lock() {
-        if let Some(mut old) = hub.client.take() {
-            unsafe {
-                teardown_client(&mut old);
+    match hub_arc.lock() {
+        Ok(mut hub) => {
+            if let Some(mut old) = hub.client.take() {
+                unsafe {
+                    teardown_client(&mut old);
+                }
             }
+            hub.client = Some(ClientState {
+                seat: seat_ref as usize,
+                rel_pointer: None,
+                keyboard: None,
+                abs_pointer: None,
+            });
         }
-        hub.client = Some(ClientState {
-            seat: seat_ref as usize,
-            rel_pointer: None,
-            keyboard: None,
-            abs_pointer: None,
-        });
-    } else {
-        unsafe {
+        _ => unsafe {
             eis_seat_unref(seat_ref);
-        }
+        },
     }
     tracing::info!("EIS client connected");
 }
@@ -649,18 +659,18 @@ fn handle_event(ev: *mut EisEvent) {
                 return;
             }
             let hub_arc = hub();
-            if let Ok(mut hub) = hub_arc.lock() {
-                if let Some(client) = hub.client.as_mut() {
-                    let addr = device as usize;
-                    if client.rel_pointer == Some(addr) {
-                        client.rel_pointer = None;
-                    }
-                    if client.keyboard == Some(addr) {
-                        client.keyboard = None;
-                    }
-                    if client.abs_pointer == Some(addr) {
-                        client.abs_pointer = None;
-                    }
+            if let Ok(mut hub) = hub_arc.lock()
+                && let Some(client) = hub.client.as_mut()
+            {
+                let addr = device as usize;
+                if client.rel_pointer == Some(addr) {
+                    client.rel_pointer = None;
+                }
+                if client.keyboard == Some(addr) {
+                    client.keyboard = None;
+                }
+                if client.abs_pointer == Some(addr) {
+                    client.abs_pointer = None;
                 }
             }
             unsafe {
@@ -669,11 +679,11 @@ fn handle_event(ev: *mut EisEvent) {
         }
         EIS_EVENT_CLIENT_DISCONNECT => {
             let hub_arc = hub();
-            if let Ok(mut hub) = hub_arc.lock() {
-                if let Some(mut client) = hub.client.take() {
-                    unsafe {
-                        teardown_client(&mut client);
-                    }
+            if let Ok(mut hub) = hub_arc.lock()
+                && let Some(mut client) = hub.client.take()
+            {
+                unsafe {
+                    teardown_client(&mut client);
                 }
             }
             tracing::info!("EIS client disconnected");

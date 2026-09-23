@@ -1,14 +1,14 @@
 //! ScreenCast frame pump — Wayland capture → PipeWire.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use wayland_client::protocol::wl_shm::Format;
 
-use metis_capture::dmabuf::format_is_bgr_order;
 use metis_capture::CaptureOptions;
+use metis_capture::dmabuf::format_is_bgr_order;
 
 use crate::capture::session::CaptureSession;
 use crate::pipewire::PipeWireHub;

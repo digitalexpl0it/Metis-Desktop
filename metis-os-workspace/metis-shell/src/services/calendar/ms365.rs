@@ -137,10 +137,10 @@ impl Ms365Provider {
     }
 
     async fn access_token(&self) -> ProviderResult<String> {
-        if let Some((token, expiry)) = self.token.lock().ok().and_then(|g| g.clone()) {
-            if Instant::now() < expiry {
-                return Ok(token);
-            }
+        if let Some((token, expiry)) = self.token.lock().ok().and_then(|g| g.clone())
+            && Instant::now() < expiry
+        {
+            return Ok(token);
         }
         let refresh = secrets::get(&self.account_id, secrets::MS_REFRESH_TOKEN)
             .await?

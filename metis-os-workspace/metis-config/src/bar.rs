@@ -1,4 +1,24 @@
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
+
 use serde::{Deserialize, Serialize};
+
+/// Hot-path cache: compositor housekeeping used to `read_to_string`+parse
+/// `bar.json` dozens of times per second. Invalidate on mtime change / save.
+static BAR_CONFIG_CACHE: Mutex<Option<(Option<SystemTime>, BarConfig)>> = Mutex::new(None);
+
+static MIGRATE_PERSISTED: AtomicBool = AtomicBool::new(false);
+
+fn bar_config_mtime(path: &std::path::Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+fn invalidate_bar_config_cache() {
+    if let Ok(mut guard) = BAR_CONFIG_CACHE.lock() {
+        *guard = None;
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -127,11 +147,7 @@ pub const PILL_SIDE_INSET: i32 = SHADOW_PAD - 4;
 /// desktop) and must not be mistaken for edge distance — distance is solely
 /// `margin_top` on the layer-shell margin.
 pub fn bar_layer_shadow_pad(cfg: &BarConfig) -> i32 {
-    if cfg.margin_top == 0 {
-        0
-    } else {
-        SHADOW_PAD
-    }
+    if cfg.margin_top == 0 { 0 } else { SHADOW_PAD }
 }
 
 /// Side inset for the pill within the layer so stadium/rounded ends and their
@@ -584,22 +600,46 @@ pub fn bar_config_path() -> std::path::PathBuf {
 
 pub fn load_bar_config() -> BarConfig {
     let path = bar_config_path();
+    let mtime = bar_config_mtime(&path);
+    if let Ok(guard) = BAR_CONFIG_CACHE.lock()
+        && let Some((cached_mtime, cfg)) = guard.as_ref()
+        && *cached_mtime == mtime
+    {
+        return cfg.clone();
+    }
+
+    let mut parsed_from_disk = false;
     let mut cfg = if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(parsed) = serde_json::from_str(&text) {
-                parsed
-            } else {
-                tracing::warn!("bar.json parse failed — using defaults");
-                BarConfig::default()
-            }
-        } else {
+        let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+        // Concurrent migrate/save can briefly truncate the file; retry once so we
+        // do not fall through to Default and persist an empty `taskbar_pinned`.
+        if text.trim().is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            text = std::fs::read_to_string(&path).unwrap_or_default();
+        }
+        if text.trim().is_empty() {
+            tracing::warn!("bar.json empty during read — skipping migrate persist");
             BarConfig::default()
+        } else {
+            match serde_json::from_str::<BarConfig>(&text) {
+                Ok(parsed) => {
+                    parsed_from_disk = true;
+                    parsed
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "bar.json parse failed — using defaults (not rewriting disk)");
+                    BarConfig::default()
+                }
+            }
         }
     } else {
         BarConfig::default()
     };
-    migrate_bar_config(&mut cfg);
+    migrate_bar_config(&mut cfg, parsed_from_disk);
     sanitize_bar_config(&mut cfg);
+    if let Ok(mut guard) = BAR_CONFIG_CACHE.lock() {
+        *guard = Some((mtime, cfg.clone()));
+    }
     cfg
 }
 
@@ -626,8 +666,45 @@ fn looks_like_hex_color(s: &str) -> bool {
     matches!(body.len(), 3 | 6 | 8) && body.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Persist bar config after a migrate step.
+///
+/// Re-reads `taskbar_pinned` from disk so a concurrent dock pin/unpin (or a
+/// stale in-memory empty list) cannot wipe the user's pinned apps when we only
+/// meant to tweak `widgets`.
+fn persist_migrated_bar(cfg: &mut BarConfig) {
+    if let Ok(text) = std::fs::read_to_string(bar_config_path())
+        && let Ok(disk) = serde_json::from_str::<BarConfig>(&text)
+        && cfg.taskbar_pinned.is_empty()
+        && !disk.taskbar_pinned.is_empty()
+    {
+        cfg.taskbar_pinned = disk.taskbar_pinned;
+    }
+    // Recovery: if the dock pin list is empty but the Metis Menu still has
+    // pinned apps, seed the dock once (migrate wipe / lost bar.json).
+    if cfg.taskbar_pinned.is_empty() {
+        let menu_pins = crate::menu::load_menu_config().pinned;
+        if !menu_pins.is_empty() {
+            cfg.taskbar_pinned = menu_pins;
+        }
+    }
+    sanitize_bar_config(cfg);
+    if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
+        let path = bar_config_path();
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, &json).is_ok() {
+            let _ = std::fs::rename(tmp, path);
+            invalidate_bar_config_cache();
+        }
+    }
+}
+
 /// Upgrade layouts saved before the eww-style pill redesign.
-fn migrate_bar_config(cfg: &mut BarConfig) {
+///
+/// `allow_persist` is false when the in-memory config did not come from a
+/// successful on-disk parse — never rewrite `bar.json` from that fallback, or
+/// we can wipe `taskbar_pinned` during a concurrent write race.
+fn migrate_bar_config(cfg: &mut BarConfig, allow_persist: bool) {
+    let mut dirty = false;
     let legacy = [
         BarWidgetId::Workspaces,
         BarWidgetId::Spacer,
@@ -663,9 +740,7 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
         cfg.margin_top = default_margin_top();
         cfg.margin_h = default_margin_h();
         cfg.full_width = default_full_width();
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
-        }
+        dirty = true;
     }
     if cfg.clock.time_format == "%H:%M" {
         cfg.clock.time_format = default_time_format();
@@ -692,9 +767,7 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
             })
             .unwrap_or(cfg.widgets.len());
         cfg.widgets.insert(pos, BarWidgetId::Weather);
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
-        }
+        dirty = true;
     }
 
     // Insert the taskbar/dock into pre-existing layouts that predate it, just
@@ -707,9 +780,7 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
             .map(|i| i + 1)
             .unwrap_or(0);
         cfg.widgets.insert(pos, BarWidgetId::Tasks);
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
-        }
+        dirty = true;
     }
 
     // Insert the Bluetooth indicator after Network in layouts that predate it.
@@ -721,9 +792,7 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
             .map(|i| i + 1)
             .unwrap_or(cfg.widgets.len());
         cfg.widgets.insert(pos, BarWidgetId::Bluetooth);
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
-        }
+        dirty = true;
     }
 
     // VPN sits immediately after Network (before Bluetooth when present).
@@ -735,9 +804,7 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
             .map(|i| i + 1)
             .unwrap_or(cfg.widgets.len());
         cfg.widgets.insert(pos, BarWidgetId::Vpn);
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
-        }
+        dirty = true;
     }
 
     // Insert the clipboard history widget before notifications in older layouts.
@@ -748,9 +815,7 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
             .position(|w| matches!(w, BarWidgetId::Notifications))
             .unwrap_or(cfg.widgets.len());
         cfg.widgets.insert(pos, BarWidgetId::Clipboard);
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
-        }
+        dirty = true;
     }
 
     // Insert the system tray widget immediately left of the weather cluster.
@@ -761,9 +826,7 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
             .position(|w| matches!(w, BarWidgetId::Weather))
             .unwrap_or(cfg.widgets.len());
         cfg.widgets.insert(pos, BarWidgetId::Tray);
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
-        }
+        dirty = true;
     } else {
         // Reposition tray if it was placed elsewhere in an older layout.
         let weather_pos = cfg
@@ -774,19 +837,20 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
             .widgets
             .iter()
             .position(|w| matches!(w, BarWidgetId::Tray));
-        if let (Some(wpos), Some(tpos)) = (weather_pos, tray_pos) {
-            if tpos != wpos.saturating_sub(1) {
-                cfg.widgets.remove(tpos);
-                let insert_at = cfg
-                    .widgets
-                    .iter()
-                    .position(|w| matches!(w, BarWidgetId::Weather))
-                    .unwrap_or(cfg.widgets.len());
-                cfg.widgets.insert(insert_at, BarWidgetId::Tray);
-                if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-                    let _ = std::fs::write(bar_config_path(), json);
-                }
-            }
+        // The tray cluster is `[Tray, Updates?]` directly left of Weather. Must
+        // stay consistent with the Updates rule below or migrate never converges.
+        if let (Some(wpos), Some(tpos)) = (weather_pos, tray_pos)
+            && tpos + 1 != tray_cluster_anchor(&cfg.widgets, wpos)
+        {
+            cfg.widgets.remove(tpos);
+            let insert_at = cfg
+                .widgets
+                .iter()
+                .position(|w| matches!(w, BarWidgetId::Weather))
+                .map(|w| tray_cluster_anchor(&cfg.widgets, w))
+                .unwrap_or(cfg.widgets.len());
+            cfg.widgets.insert(insert_at, BarWidgetId::Tray);
+            dirty = true;
         }
     }
 
@@ -803,9 +867,7 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
                     .unwrap_or(cfg.widgets.len())
             });
         cfg.widgets.insert(pos, BarWidgetId::RemovableVolumes);
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
-        }
+        dirty = true;
     } else if let (Some(tray_pos), Some(vol_pos)) = (
         cfg.widgets
             .iter()
@@ -813,18 +875,17 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
         cfg.widgets
             .iter()
             .position(|w| matches!(w, BarWidgetId::RemovableVolumes)),
-    ) {
-        if vol_pos != tray_pos.saturating_sub(1) {
-            cfg.widgets.remove(vol_pos);
-            let insert_at = cfg
-                .widgets
-                .iter()
-                .position(|w| matches!(w, BarWidgetId::Tray))
-                .unwrap_or(cfg.widgets.len());
-            cfg.widgets.insert(insert_at, BarWidgetId::RemovableVolumes);
-            if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-                let _ = std::fs::write(bar_config_path(), json);
-            }
+    ) && vol_pos != tray_pos.saturating_sub(1)
+    {
+        cfg.widgets.remove(vol_pos);
+        let insert_at = cfg
+            .widgets
+            .iter()
+            .position(|w| matches!(w, BarWidgetId::Tray))
+            .unwrap_or(cfg.widgets.len());
+        cfg.widgets.insert(insert_at, BarWidgetId::RemovableVolumes);
+        if allow_persist {
+            persist_migrated_bar(cfg);
         }
     }
 
@@ -869,11 +930,7 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
             }
             _ => {}
         }
-        if changed {
-            if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-                let _ = std::fs::write(bar_config_path(), json);
-            }
-        }
+        dirty |= changed;
     }
 
     // Phase 13: Notification Center merges the bell into the clock. Strip the
@@ -884,9 +941,28 @@ fn migrate_bar_config(cfg: &mut BarConfig) {
     {
         cfg.widgets
             .retain(|w| !matches!(w, BarWidgetId::Notifications));
-        if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-            let _ = std::fs::write(bar_config_path(), json);
+        dirty = true;
+    }
+
+    if dirty && allow_persist {
+        // At most one migrate write per process. Every write bumps the mtime,
+        // which re-triggers the shell's bar rebuild and the compositor reflow;
+        // a non-convergent rule would otherwise rewrite bar.json forever.
+        if MIGRATE_PERSISTED.swap(true, Ordering::AcqRel) {
+            tracing::warn!("bar.json migrate did not converge — not rewriting again");
+        } else {
+            persist_migrated_bar(cfg);
         }
+    }
+}
+
+/// Index where the tray belongs: right before Weather, or before an Updates
+/// widget that already sits right before Weather.
+fn tray_cluster_anchor(widgets: &[BarWidgetId], weather_pos: usize) -> usize {
+    if weather_pos > 0 && widgets[weather_pos - 1] == BarWidgetId::Updates {
+        weather_pos - 1
+    } else {
+        weather_pos
     }
 }
 
@@ -911,5 +987,66 @@ pub fn save_bar_config(config: &BarConfig) -> std::io::Result<()> {
     let path = bar_config_path();
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json)?;
-    std::fs::rename(tmp, path)
+    std::fs::rename(tmp, &path)?;
+    invalidate_bar_config_cache();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn migrated(widgets: Vec<BarWidgetId>) -> Vec<BarWidgetId> {
+        let mut cfg = BarConfig {
+            widgets,
+            ..BarConfig::default()
+        };
+        migrate_bar_config(&mut cfg, false);
+        cfg.widgets
+    }
+
+    #[test]
+    fn default_layout_is_a_migrate_fixed_point() {
+        let defaults = default_widgets();
+        assert_eq!(migrated(defaults.clone()), defaults);
+    }
+
+    #[test]
+    fn migrate_converges_for_misplaced_tray_and_updates() {
+        use BarWidgetId::*;
+        let inputs = [
+            vec![
+                Workspaces,
+                Tasks,
+                Spacer,
+                Updates,
+                RemovableVolumes,
+                Tray,
+                Weather,
+                Clock,
+            ],
+            vec![
+                Workspaces,
+                Tasks,
+                Spacer,
+                Tray,
+                Weather,
+                Updates,
+                RemovableVolumes,
+                Clock,
+            ],
+            vec![Tray, Workspaces, Tasks, Spacer, Weather, Clock],
+        ];
+        for input in inputs {
+            let once = migrated(input);
+            assert_eq!(migrated(once.clone()), once, "migrate must be idempotent");
+            let tray = once.iter().position(|w| *w == Tray);
+            let upd = once.iter().position(|w| *w == Updates);
+            let vol = once.iter().position(|w| *w == RemovableVolumes);
+            let weather = once.iter().position(|w| *w == Weather);
+            assert_eq!(vol.map(|v| v + 1), tray);
+            assert_eq!(tray.map(|t| t + 1), upd);
+            assert_eq!(upd.map(|u| u + 1), weather);
+        }
+    }
 }

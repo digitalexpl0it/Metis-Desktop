@@ -31,13 +31,13 @@ pub fn viewer_config_path() -> std::path::PathBuf {
 
 pub fn load_viewer_config() -> ViewerConfig {
     let path = viewer_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str(&text) {
-                return cfg;
-            }
-            tracing::warn!("viewer.json parse failed — using defaults");
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+    {
+        if let Ok(cfg) = serde_json::from_str(&text) {
+            return cfg;
         }
+        tracing::warn!("viewer.json parse failed — using defaults");
     }
     ViewerConfig::default()
 }
@@ -89,7 +89,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("metis")).unwrap();
         // SAFETY: serialized test; restored before unlock.
-        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
 
         let entry = ViewerHost {
             host: "192.168.1.10".into(),
@@ -105,7 +106,8 @@ mod tests {
         let cfg = load_viewer_config();
         assert!(cfg.recent.is_empty());
 
-        std::env::remove_var("XDG_CONFIG_HOME");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

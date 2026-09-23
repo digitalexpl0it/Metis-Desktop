@@ -2,6 +2,7 @@
 name = "metis-config"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Shared Metis configuration types, file IO, and theme tokens (no GTK)"
 
@@ -9,5 +10,5 @@ description = "Shared Metis configuration types, file IO, and theme tokens (no G
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-directories = "5"
+directories = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }

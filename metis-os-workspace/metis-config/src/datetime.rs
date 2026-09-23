@@ -66,13 +66,13 @@ pub fn datetime_config_path() -> std::path::PathBuf {
 
 pub fn load_datetime_config() -> DateTimeConfig {
     let path = datetime_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str::<DateTimeConfig>(&text) {
-                return cfg;
-            }
-            tracing::warn!("datetime.json parse failed — using defaults");
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+    {
+        if let Ok(cfg) = serde_json::from_str::<DateTimeConfig>(&text) {
+            return cfg;
         }
+        tracing::warn!("datetime.json parse failed — using defaults");
     }
     DateTimeConfig::default()
 }

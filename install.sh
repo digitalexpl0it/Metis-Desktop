@@ -2,7 +2,8 @@
 # Bootstrap Metis from a git clone: install distro deps, then
 # `run-metis.sh --install-session` (release build → /usr/local + greeter entry).
 #
-# Supported: Ubuntu 24.04 / 26.04, Debian 13 (trixie), Arch Linux.
+# Supported: Ubuntu 26.04+, Debian 13 (trixie)+, Arch Linux. NixOS uses the flake.
+# Floor: GTK >= 4.18, gtk4-layer-shell >= 1.0, Rust >= 1.95 (see Cargo.toml rust-version).
 #
 # Usage (from repo root):
 #   ./install.sh
@@ -34,12 +35,21 @@ Usage: ./install.sh [options]
   --with-remote   Also install gnome-remote-desktop + FreeRDP client packages
   -h, --help      Show this help
 
-Supported distros: Ubuntu 24.04, Ubuntu 26.04, Debian 13 (trixie), Arch Linux.
+Supported distros: Ubuntu 26.04+, Debian 13 (trixie)+, Arch Linux.
+NixOS: use the flake module instead (see nix/README.md).
 EOF
 }
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+# Minimum rustc; keep in sync with `rust-version` in metis-os-workspace/Cargo.toml.
+METIS_MIN_RUST="1.95.0"
+
+# True when dotted version $1 >= $2.
+version_ge() {
+  [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" == "$2" ]]
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -63,24 +73,31 @@ resolve_deps_file() {
 
   case "$id" in
     ubuntu)
-      case "$ver" in
-        24.04) echo "$DEPS_DIR/ubuntu-24.04.sh" ;;
-        26.04) echo "$DEPS_DIR/ubuntu-26.04.sh" ;;
-        *) die "unsupported Ubuntu VERSION_ID=$ver (need 24.04 or 26.04)" ;;
-      esac
+      if [[ -n "$ver" ]] && version_ge "$ver" "26.04"; then
+        echo "$DEPS_DIR/ubuntu-26.04.sh"
+      else
+        die "unsupported Ubuntu VERSION_ID=${ver:-unknown}; Metis needs Ubuntu 26.04 or newer
+(GTK >= 4.18 and gtk4-layer-shell >= 1.0; Ubuntu 24.04 ships GTK 4.14)."
+      fi
       ;;
     debian)
-      if [[ "$ver" == "13" || "$codename" == "trixie" ]]; then
+      # Testing/sid have no VERSION_ID; they are newer than trixie.
+      if [[ -n "$ver" ]] && version_ge "$ver" "13"; then
+        echo "$DEPS_DIR/debian-13.sh"
+      elif [[ -z "$ver" && -n "$codename" && ! "$codename" =~ ^(buster|bullseye|bookworm)$ ]]; then
         echo "$DEPS_DIR/debian-13.sh"
       else
-        die "unsupported Debian ($ver / $codename); need Debian 13 (trixie)"
+        die "unsupported Debian (${ver:-?} / ${codename:-?}); Metis needs Debian 13 (trixie) or newer."
       fi
       ;;
     arch)
       echo "$DEPS_DIR/arch.sh"
       ;;
+    nixos)
+      die "NixOS: install Metis through the flake module (programs.metis), see nix/README.md."
+      ;;
     *)
-      die "unsupported distro ID=$id. Supported: Ubuntu 24.04/26.04, Debian 13, Arch.
+      die "unsupported distro ID=$id. Supported: Ubuntu 26.04+, Debian 13+, Arch, NixOS (flake).
 See docs/UBUNTU_DEV.md or docs/PACKAGING.md."
       ;;
   esac
@@ -148,10 +165,30 @@ install_pacman_packages() {
   sudo pacman -S "${flags[@]}" "${pkgs[@]}"
 }
 
+rustc_version() {
+  rustc --version 2>/dev/null | awk '{print $2}' | sed 's/-.*//'
+}
+
 ensure_rust() {
   if command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
-    log "Rust: $(rustc --version) / $(cargo --version)"
-    return 0
+    local have
+    have="$(rustc_version)"
+    if [[ -n "$have" ]] && version_ge "$have" "$METIS_MIN_RUST"; then
+      log "Rust: $(rustc --version) / $(cargo --version)"
+      return 0
+    fi
+    if command -v rustup >/dev/null 2>&1; then
+      log "Rust ${have:-?} is older than $METIS_MIN_RUST — running rustup update stable…"
+      rustup update stable
+      rustup default stable >/dev/null
+      have="$(rustc_version)"
+      version_ge "${have:-0}" "$METIS_MIN_RUST" \
+        || die "rustc ${have:-?} still older than $METIS_MIN_RUST after rustup update"
+      log "Rust: $(rustc --version)"
+      return 0
+    fi
+    die "rustc ${have:-?} is older than $METIS_MIN_RUST (distro rustc packages lag behind).
+Remove the distro rust/cargo packages and install rustup: https://rustup.rs"
   fi
   log "Rust toolchain not found — installing via rustup…"
   if [[ "$YES" -ne 1 ]]; then
@@ -172,8 +209,8 @@ ensure_gtk4_layer_shell() {
   fi
   if [[ "${METIS_LAYER_SHELL_FROM_SOURCE:-1}" != "1" ]]; then
     die "gtk4-layer-shell-0 not found via pkg-config after package install.
-Install libgtk4-layer-shell-dev (Ubuntu 26.04 / Debian 13) or build from source
-(Ubuntu 24.04), or set METIS_LAYER_SHELL_FROM_SOURCE=1."
+Install libgtk4-layer-shell-dev (Ubuntu / Debian) or gtk4-layer-shell (Arch),
+or set METIS_LAYER_SHELL_FROM_SOURCE=1 to build it from source."
   fi
   log "Building gtk4-layer-shell $GTK4_LAYER_SHELL_TAG from source…"
   local src="/tmp/gtk4-layer-shell-metis"
@@ -192,6 +229,17 @@ Install libgtk4-layer-shell-dev (Ubuntu 26.04 / Debian 13) or build from source
   export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
   pkg-config --exists gtk4-layer-shell-0 || die "gtk4-layer-shell still missing after source build"
   log "gtk4-layer-shell: $(pkg-config --modversion gtk4-layer-shell-0)"
+}
+
+ensure_gtk_floor() {
+  local gtk
+  gtk="$(pkg-config --modversion gtk4 2>/dev/null || true)"
+  [[ -n "$gtk" ]] || die "gtk4 not found via pkg-config (install the GTK 4 development package)"
+  version_ge "$gtk" "4.18" || die "GTK $gtk is too old; Metis needs GTK >= 4.18."
+  log "GTK: $gtk"
+  local layer
+  layer="$(pkg-config --modversion gtk4-layer-shell-0 2>/dev/null || true)"
+  version_ge "${layer:-0}" "1.0" || die "gtk4-layer-shell ${layer:-?} is too old; Metis needs >= 1.0."
 }
 
 warn_mixed_install() {
@@ -260,6 +308,7 @@ esac
 
 ensure_rust
 ensure_gtk4_layer_shell
+ensure_gtk_floor
 warn_mixed_install
 
 if [[ "$DEPS_ONLY" -eq 1 ]]; then

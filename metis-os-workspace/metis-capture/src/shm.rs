@@ -3,8 +3,8 @@
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 
 use wayland_client::{
-    protocol::{wl_buffer::WlBuffer, wl_shm::Format, wl_shm::WlShm, wl_shm_pool::WlShmPool},
     Dispatch, QueueHandle,
+    protocol::{wl_buffer::WlBuffer, wl_shm::Format, wl_shm::WlShm, wl_shm_pool::WlShmPool},
 };
 
 #[derive(Debug, Clone, Copy)]

@@ -14,11 +14,11 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use fontdue::Font;
-use metis_grid::{PixelRect, APP_TILE_HEADER_PX};
+use metis_grid::{APP_TILE_HEADER_PX, PixelRect};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
-use smithay::backend::renderer::element::{render_elements, Id, Kind};
+use smithay::backend::renderer::element::{Id, Kind, render_elements};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Color32F, ImportMem};
@@ -498,10 +498,10 @@ impl DecorationRuntime {
         if !w.overlay_compact {
             let tx = frame.x + TITLE_LEFT_PAD;
             let max_text_w = (min_x - BTN_GAP - tx).max(0);
-            if max_text_w > 8 {
-                if let Some(elem) = self.title_element(renderer, w, tx, max_text_w, header, bar_y) {
-                    out.push(elem);
-                }
+            if max_text_w > 8
+                && let Some(elem) = self.title_element(renderer, w, tx, max_text_w, header, bar_y)
+            {
+                out.push(elem);
             }
         }
 
@@ -933,26 +933,33 @@ impl DecorationRuntime {
                 &border,
                 border_px,
             ) {
-                if let Ok(texture) =
-                    renderer.import_memory(&pixels, Fourcc::Abgr8888, Size::from((tw, th)), false)
+                match renderer.import_memory(&pixels, Fourcc::Abgr8888, Size::from((tw, th)), false)
                 {
-                    let buffer =
-                        TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
-                    self.titles.insert(
-                        w.id,
-                        CachedTitle {
-                            text: w.title.clone(),
-                            color,
-                            pill,
-                            border,
-                            border_px,
-                            width: tw,
-                            height: th,
-                            buffer,
-                        },
-                    );
-                } else {
-                    return None;
+                    Ok(texture) => {
+                        let buffer = TextureBuffer::from_texture(
+                            renderer,
+                            texture,
+                            1,
+                            Transform::Normal,
+                            None,
+                        );
+                        self.titles.insert(
+                            w.id,
+                            CachedTitle {
+                                text: w.title.clone(),
+                                color,
+                                pill,
+                                border,
+                                border_px,
+                                width: tw,
+                                height: th,
+                                buffer,
+                            },
+                        );
+                    }
+                    _ => {
+                        return None;
+                    }
                 }
             } else {
                 self.titles.remove(&w.id);
@@ -1702,12 +1709,11 @@ pub(crate) fn load_font_with_data() -> Option<(Font, Vec<u8>)> {
         if let Ok(out) = std::process::Command::new("fc-match")
             .args(["-f", "%{file}", query])
             .output()
+            && out.status.success()
         {
-            if out.status.success() {
-                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !p.is_empty() {
-                    candidates.push(p.into());
-                }
+            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !p.is_empty() {
+                candidates.push(p.into());
             }
         }
     }
@@ -1724,11 +1730,11 @@ pub(crate) fn load_font_with_data() -> Option<(Font, Vec<u8>)> {
     );
 
     for path in candidates {
-        if let Ok(bytes) = std::fs::read(&path) {
-            if let Ok(font) = Font::from_bytes(bytes.clone(), fontdue::FontSettings::default()) {
-                tracing::info!(path = %path.display(), "decoration: loaded title font");
-                return Some((font, bytes));
-            }
+        if let Ok(bytes) = std::fs::read(&path)
+            && let Ok(font) = Font::from_bytes(bytes.clone(), fontdue::FontSettings::default())
+        {
+            tracing::info!(path = %path.display(), "decoration: loaded title font");
+            return Some((font, bytes));
         }
     }
     tracing::warn!("decoration: no title font found; titles will be blank");

@@ -18,14 +18,17 @@ Pick the artifact that matches your OS:
 
 | File suffix | Target |
 |-------------|--------|
-| `…amd64.ubuntu24.04.deb` | Ubuntu 24.04 (noble) |
-| `…amd64.ubuntu26.04.deb` | Ubuntu 26.04 |
-| `…amd64.debian13.deb` | Debian 13 (trixie) |
+| `…amd64.ubuntu26.04.deb` | Ubuntu 26.04+ |
+| `…amd64.debian13.deb` | Debian 13 (trixie)+ |
+
+Ubuntu 24.04 is no longer supported: Metis needs GTK ≥ 4.18 and gtk4-layer-shell
+≥ 1.0 (noble ships GTK 4.14). The debs declare `libgtk-4-1 (>= 4.18)` so apt
+refuses to install on older systems.
 
 ```bash
 # Ubuntu 26.04: enable universe if apt reports libseat1 / kitty / layer-shell missing
 sudo apt update
-sudo apt install ./metis-desktop_VERSION-1_amd64.ubuntu24.04.deb
+sudo apt install ./metis-desktop_VERSION-1_amd64.ubuntu26.04.deb
 dpkg -l metis-desktop
 command -v metis-remote metis-settings metis-session
 ```
@@ -48,7 +51,7 @@ If `apt upgrade` already swapped you onto Ubuntu’s math `metis`:
 
 ```bash
 sudo apt remove metis
-sudo apt install ./metis-desktop_*.ubuntu24.04.deb   # or matching suite
+sudo apt install ./metis-desktop_*.ubuntu26.04.deb   # or matching suite
 ```
 
 Do **not** mix a `/usr` package install with `./install.sh` / `--install-session`
@@ -58,8 +61,8 @@ Do **not** mix a `/usr` package install with `./install.sh` / `--install-session
 
 | Field | Role |
 |-------|------|
-| **Depends** | Required to start a Metis session (GTK4, seat, DRM, PipeWire, kitty, …) |
-| **Bundled** | `libgtk4-layer-shell` on Ubuntu 24.04 only; 26.04 / Debian 13 use `libgtk4-layer-shell0` |
+| **Depends** | Required to start a Metis session (GTK ≥ 4.18, `libgtk4-layer-shell0` ≥ 1.0, seat, DRM, PipeWire, kitty, …) |
+| **Bundled** | Nothing by default; `BUNDLE_GTK4_LAYER_SHELL=1` is a fallback for build images without `libgtk4-layer-shell-dev` |
 | **Recommends** | keyring, portals helpers, volumes, **nftables** (apt installs by default) |
 | **Suggests** | GRD, FreeRDP, GameMode, Flatpak, BT, printers, biometrics |
 
@@ -74,12 +77,14 @@ cd Metis
 ./install.sh --with-remote    # also GRD + FreeRDP packages
 ```
 
-Supported: **Ubuntu 24.04 / 26.04**, **Debian 13**, **Arch Linux**. Dep lists live in
+Supported: **Ubuntu 26.04+**, **Debian 13+**, **Arch Linux** (NixOS uses the flake). Dep lists live in
 [`metis-os-workspace/scripts/deps/`](../metis-os-workspace/scripts/deps/).
-Build deps include **`libclang-dev`** (bindgen for PipeWire/`libspa-sys`). On
-Ubuntu 24.04, gtk4-layer-shell is fetched via
+Build deps include **`libclang-dev`** (bindgen for PipeWire/`libspa-sys`). Rust
+≥ 1.95 is required; the installer uses rustup (distro `rustc` packages are too
+old) and runs `rustup update` when an older toolchain is found. With
+`METIS_LAYER_SHELL_FROM_SOURCE=1`, gtk4-layer-shell is fetched via
 [`scripts/fetch-gtk4-layer-shell.sh`](../metis-os-workspace/scripts/fetch-gtk4-layer-shell.sh)
-(tarball with retries) when building from source.
+(tarball with retries) and built into `/usr/local`.
 
 This installs to **`/usr/local`** via `run-metis.sh --install-session`. Prefer the
 `.deb` for production machines.
@@ -105,7 +110,6 @@ See [`nix/README.md`](../nix/README.md). Enable `programs.metis` and set
 
 ```bash
 cd metis-os-workspace
-VERSION=0.1.0.12 DISTRO_SUITE=ubuntu24.04 ./scripts/package-deb.sh
 VERSION=0.1.0.12 DISTRO_SUITE=ubuntu26.04 ./scripts/package-deb.sh
 VERSION=0.1.0.12 DISTRO_SUITE=debian13 ./scripts/package-deb.sh
 # → dist/metis-desktop_${VERSION}-1_amd64.${DISTRO_SUITE}.deb
@@ -114,9 +118,9 @@ VERSION=0.1.0.12 DISTRO_SUITE=debian13 ./scripts/package-deb.sh
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `VERSION` | *(required)* | Package / GitHub version (e.g. `0.1.0.13`) |
-| `DISTRO_SUITE` | `ubuntu24.04` | `ubuntu24.04` \| `ubuntu26.04` \| `debian13` |
-| `UBUNTU_SUITE` | — | Legacy (`24.04` → `ubuntu24.04`) |
-| `BUNDLE_GTK4_LAYER_SHELL` | suite default | `1` bundles the .so into the deb |
+| `DISTRO_SUITE` | `debian13` | `ubuntu26.04` \| `debian13` |
+| `UBUNTU_SUITE` | — | Legacy (`26.04` → `ubuntu26.04`) |
+| `BUNDLE_GTK4_LAYER_SHELL` | `0` | `1` bundles the .so into the deb |
 | `SKIP_BUILD` | `0` | `1` = stage existing `target/release` only |
 
 ### Crate versions vs GitHub tags
@@ -152,8 +156,10 @@ Shared FHS staging: [`scripts/stage-fhs.sh`](../metis-os-workspace/scripts/stage
 
 Workflow: [`.github/workflows/release-deb.yml`](../.github/workflows/release-deb.yml)
 
-Tag `v*` builds **ubuntu24.04**, **ubuntu26.04**, and **debian13** artifacts and
-attaches them to the GitHub Release.
+Tag `v*` builds **ubuntu26.04** (in an `ubuntu:26.04` container) and **debian13**
+(in a `debian:trixie` container) artifacts and attaches them to the GitHub
+Release. [`ci.yml`](../.github/workflows/ci.yml) runs fmt, clippy, tests, and
+`cargo deny` on Debian 13, the oldest supported platform.
 
 Nix: [`.github/workflows/nix-flake.yml`](../.github/workflows/nix-flake.yml).
 

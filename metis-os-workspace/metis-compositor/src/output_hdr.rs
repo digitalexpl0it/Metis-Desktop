@@ -9,9 +9,9 @@
 
 use std::ffi::CStr;
 
-use metis_config::{output_prefs, OutputsConfig};
+use metis_config::{OutputsConfig, output_prefs};
 use smithay::backend::allocator::Fourcc;
-use smithay::reexports::drm::control::{connector, property, Device as DrmControlDevice};
+use smithay::reexports::drm::control::{Device as DrmControlDevice, connector, property};
 
 use crate::hdr_encode::HdrTransfer;
 use crate::state::MetisState;
@@ -177,12 +177,12 @@ fn sync_hdr_for_crtc(state: &mut MetisState, id: UdevOutputId, want: bool, force
         let Some(transfer) = connector_hdr_capable(device, connector, &name) else {
             if already {
                 clear_hdr_signaling(device, connector, &name, old_blob);
-                if let Some(udev) = state.udev.as_mut() {
-                    if let Some(surface) = udev.surface_mut(id) {
-                        surface.hdr_active = false;
-                        surface.hdr_metadata_blob = None;
-                        surface.hdr_transfer = HdrTransfer::default();
-                    }
+                if let Some(udev) = state.udev.as_mut()
+                    && let Some(surface) = udev.surface_mut(id)
+                {
+                    surface.hdr_active = false;
+                    surface.hdr_metadata_blob = None;
+                    surface.hdr_transfer = HdrTransfer::default();
                 }
                 return true;
             }
@@ -194,12 +194,12 @@ fn sync_hdr_for_crtc(state: &mut MetisState, id: UdevOutputId, want: bool, force
         match apply_hdr_signaling(device, connector, &name, old_blob, transfer) {
             Ok(new_blob) => {
                 tracing::info!(output = %name, ?transfer, "applied HDR output signaling");
-                if let Some(udev) = state.udev.as_mut() {
-                    if let Some(surface) = udev.surface_mut(id) {
-                        surface.hdr_active = true;
-                        surface.hdr_metadata_blob = new_blob;
-                        surface.hdr_transfer = transfer;
-                    }
+                if let Some(udev) = state.udev.as_mut()
+                    && let Some(surface) = udev.surface_mut(id)
+                {
+                    surface.hdr_active = true;
+                    surface.hdr_metadata_blob = new_blob;
+                    surface.hdr_transfer = transfer;
                 }
                 true
             }
@@ -214,12 +214,12 @@ fn sync_hdr_for_crtc(state: &mut MetisState, id: UdevOutputId, want: bool, force
         }
         clear_hdr_signaling(device, connector, &name, old_blob);
         tracing::info!(output = %name, "cleared HDR output signaling");
-        if let Some(udev) = state.udev.as_mut() {
-            if let Some(surface) = udev.surface_mut(id) {
-                surface.hdr_active = false;
-                surface.hdr_metadata_blob = None;
-                surface.hdr_transfer = HdrTransfer::default();
-            }
+        if let Some(udev) = state.udev.as_mut()
+            && let Some(surface) = udev.surface_mut(id)
+        {
+            surface.hdr_active = false;
+            surface.hdr_metadata_blob = None;
+            surface.hdr_transfer = HdrTransfer::default();
         }
         true
     }
@@ -247,10 +247,10 @@ fn connector_hdr_capable(
         match prop_name {
             "HDR_OUTPUT_METADATA" => has_metadata_prop = true,
             "EDID" => {
-                if let property::Value::Blob(id) = info.value_type().convert_value(*value) {
-                    if id != 0 {
-                        edid_blob = Some(id);
-                    }
+                if let property::Value::Blob(id) = info.value_type().convert_value(*value)
+                    && id != 0
+                {
+                    edid_blob = Some(id);
                 }
             }
             _ => {}
@@ -370,10 +370,10 @@ fn apply_hdr_signaling(
             let _ = device.destroy_property_blob(blob_id);
             return Err(format!("set HDR_OUTPUT_METADATA: {err}"));
         }
-        if let Some(old) = old_blob {
-            if old != blob_id {
-                let _ = device.destroy_property_blob(old);
-            }
+        if let Some(old) = old_blob
+            && old != blob_id
+        {
+            let _ = device.destroy_property_blob(old);
         }
         new_blob = Some(blob_id);
         tracing::debug!(output = %name, blob = blob_id, ?transfer, "HDR_OUTPUT_METADATA set");
@@ -381,22 +381,20 @@ fn apply_hdr_signaling(
 
     if let Some(handle) =
         find_prop(device, conn, "Colorspace").or_else(|| find_prop(device, conn, "COLOR_ENCODING"))
+        && let Some(value) = pick_enum_value(device, handle, HDR_COLORSPACE_PREFS)
     {
-        if let Some(value) = pick_enum_value(device, handle, HDR_COLORSPACE_PREFS) {
-            if let Err(err) = device.set_property(conn, handle, value) {
-                tracing::warn!(output = %name, ?err, "failed to set Colorspace for HDR");
-            } else {
-                tracing::debug!(output = %name, value, "Colorspace set for HDR (prefer BT.2020)");
-            }
+        if let Err(err) = device.set_property(conn, handle, value) {
+            tracing::warn!(output = %name, ?err, "failed to set Colorspace for HDR");
+        } else {
+            tracing::debug!(output = %name, value, "Colorspace set for HDR (prefer BT.2020)");
         }
     }
 
     if let Some(handle) =
         find_prop(device, conn, "max bpc").or_else(|| find_prop(device, conn, "max_bpc"))
+        && let Err(err) = device.set_property(conn, handle, 10)
     {
-        if let Err(err) = device.set_property(conn, handle, 10) {
-            tracing::debug!(output = %name, ?err, "max_bpc=10 rejected (optional)");
-        }
+        tracing::debug!(output = %name, ?err, "max_bpc=10 rejected (optional)");
     }
 
     Ok(new_blob)
@@ -408,10 +406,10 @@ fn clear_hdr_signaling(
     name: &str,
     old_blob: Option<u64>,
 ) {
-    if let Some(handle) = find_prop(device, conn, "HDR_OUTPUT_METADATA") {
-        if let Err(err) = device.set_property(conn, handle, 0u64) {
-            tracing::warn!(output = %name, ?err, "failed to clear HDR_OUTPUT_METADATA");
-        }
+    if let Some(handle) = find_prop(device, conn, "HDR_OUTPUT_METADATA")
+        && let Err(err) = device.set_property(conn, handle, 0u64)
+    {
+        tracing::warn!(output = %name, ?err, "failed to clear HDR_OUTPUT_METADATA");
     }
     if let Some(old) = old_blob {
         let _ = device.destroy_property_blob(old);
@@ -555,7 +553,7 @@ mod tests {
         edid[126] = 1; // one extension
         edid[128] = 0x02; // CTA
         edid[130] = 0; // dtd offset 0 → scan until 127
-                       // Data block at 132: tag=7 (extended), length=3, ext_tag=6, eotf=0x04 (ST2084)
+        // Data block at 132: tag=7 (extended), length=3, ext_tag=6, eotf=0x04 (ST2084)
         edid[132] = (7 << 5) | 3;
         edid[133] = 6;
         edid[134] = 0x04;

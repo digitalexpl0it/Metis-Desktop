@@ -15,7 +15,7 @@ use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Texture};
 use smithay::output::Output;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
-use crate::render::{OutputStack, CLEAR_COLOR};
+use crate::render::{CLEAR_COLOR, OutputStack};
 use crate::state::MetisState;
 use crate::window_thumb::thumb_dir;
 

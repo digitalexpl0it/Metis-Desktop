@@ -536,8 +536,8 @@ gamescope -W 1920 -H 1080 -f -- %command%
 ```
 
 Metis stays the session compositor; Gamescope nests inside it for that game
-(frame limit, scaling, FSR). On Ubuntu 24.04, `gamescope` is not in apt — build
-from [source](https://github.com/ValveSoftware/gamescope) if you need it.
+(frame limit, scaling, FSR). Install it with `sudo apt install gamescope`
+(Ubuntu 26.04 / Debian 13) or `sudo pacman -S gamescope` (Arch).
 
 **SteamOS / handheld (experimental).** Valve's SteamOS 3.x uses Gamescope for
 handheld Gaming Mode and KDE for Desktop Mode. Running Metis *on* SteamOS

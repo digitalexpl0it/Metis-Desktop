@@ -15,14 +15,14 @@ use std::sync::mpsc::Receiver;
 use gtk::gdk;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use metis_config::{load_bar_config, load_dashboard_config, BarPosition, DashboardWidgetId};
+use metis_config::{BarPosition, DashboardWidgetId, load_bar_config, load_dashboard_config};
 use metis_i18n::tr;
 
 use crate::services::{
-    format_bytes, format_rate, format_uptime, kill_process, kill_process_tree,
-    short_kernel_version, DashboardSnapshot, GpuTempReading, ProcessClass, ProcessRow,
+    DashboardSnapshot, GpuTempReading, ProcessClass, ProcessRow, format_bytes, format_rate,
+    format_uptime, kill_process, kill_process_tree, short_kernel_version,
 };
-use crate::ui::bar::{ensure_bar_strip_geometry, BarShell};
+use crate::ui::bar::{BarShell, ensure_bar_strip_geometry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ProcessClassFilter {
@@ -391,14 +391,14 @@ fn build_dashboard(shell: &BarShell) -> Dashboard {
     window.add_css_class("metis-dashboard-window");
     window.set_can_focus(true);
     window.init_layer_shell();
-    window.set_namespace("metis-dashboard");
+    window.set_namespace(Some("metis-dashboard"));
     window.set_layer(Layer::Top);
     // Exclusive so SearchEntry / filters receive keys while the panel is open
     // (OnDemand never focuses the layer surface under Metis hit-testing).
     window.set_keyboard_mode(KeyboardMode::Exclusive);
     window.set_exclusive_zone(-1);
     if let Some(monitor) = shell.window.monitor() {
-        window.set_monitor(&monitor);
+        window.set_monitor(Some(&monitor));
     }
     window.set_visible(false);
 
@@ -550,8 +550,10 @@ fn build_dashboard(shell: &BarShell) -> Dashboard {
         if !process_context_menu_open() {
             return;
         }
-        let host = gesture.widget();
-        if let Some(target) = host.pick(x, y, gtk::PickFlags::DEFAULT) {
+        let target = gesture
+            .widget()
+            .and_then(|host| host.pick(x, y, gtk::PickFlags::DEFAULT));
+        if let Some(target) = target {
             let mut node = Some(target);
             while let Some(w) = node {
                 if w.is::<gtk::Popover>() || w.has_css_class("metis-dash-context-menu") {
@@ -571,11 +573,12 @@ fn build_dashboard(shell: &BarShell) -> Dashboard {
             return;
         };
         DASHBOARD.with(|d| {
-            if let Some(dash) = d.borrow().as_ref() {
-                if dash.root == root && dash.current_extent.get() > 0 {
-                    let (w, h) = dash.host_content_size(dash.current_extent.get());
-                    dash.relayout_for_size(w, h);
-                }
+            if let Some(dash) = d.borrow().as_ref()
+                && dash.root == root
+                && dash.current_extent.get() > 0
+            {
+                let (w, h) = dash.host_content_size(dash.current_extent.get());
+                dash.relayout_for_size(w, h);
             }
         });
     });
@@ -813,11 +816,11 @@ impl Dashboard {
         } else if extent > 0 {
             let slf = DASHBOARD.with(|d| d.borrow().clone());
             glib::idle_add_local_once(move || {
-                if let Some(dash) = slf {
-                    if dash.current_extent.get() > 0 {
-                        let (w, h) = dash.host_content_size(dash.current_extent.get());
-                        dash.relayout_for_size(w, h);
-                    }
+                if let Some(dash) = slf
+                    && dash.current_extent.get() > 0
+                {
+                    let (w, h) = dash.host_content_size(dash.current_extent.get());
+                    dash.relayout_for_size(w, h);
                 }
             });
         }
@@ -886,7 +889,7 @@ impl Dashboard {
         }
 
         if let Some(monitor) = self.shell.window.monitor() {
-            self.window.set_monitor(&monitor);
+            self.window.set_monitor(Some(&monitor));
         }
         self.window.set_visible(true);
         self.window.present();
@@ -1652,12 +1655,12 @@ fn dismiss_process_context_menu() {
     // Take the popover out before popdown — the closed handler also touches
     // PROCESS_CONTEXT_MENU, so holding RefMut across popdown aborts the shell.
     let popover = PROCESS_CONTEXT_MENU.with(|slot| slot.borrow_mut().take());
-    if let Some(popover) = popover {
+    if let Some(popover) = popover
+        && popover.parent().is_some()
+    {
+        popover.popdown();
         if popover.parent().is_some() {
-            popover.popdown();
-            if popover.parent().is_some() {
-                popover.unparent();
-            }
+            popover.unparent();
         }
     }
 }
@@ -1762,10 +1765,10 @@ fn show_process_context_menu(
                 *slot.borrow_mut() = None;
             }
         });
-        if let Some(p) = weak.upgrade() {
-            if p.parent().is_some() {
-                p.unparent();
-            }
+        if let Some(p) = weak.upgrade()
+            && p.parent().is_some()
+        {
+            p.unparent();
         }
     });
 
@@ -1785,11 +1788,11 @@ where
         .halign(gtk::Align::Fill)
         .build();
     item.add_css_class("metis-dash-menu-item");
-    if let Some(child) = item.child() {
-        if let Ok(lbl) = child.downcast::<gtk::Label>() {
-            lbl.set_halign(gtk::Align::Start);
-            lbl.set_xalign(0.0);
-        }
+    if let Some(child) = item.child()
+        && let Ok(lbl) = child.downcast::<gtk::Label>()
+    {
+        lbl.set_halign(gtk::Align::Start);
+        lbl.set_xalign(0.0);
     }
     item.connect_clicked(move |_| action());
     panel.append(&item);
@@ -1995,14 +1998,13 @@ fn monitor_size(monitor: Option<&gtk::gdk::Monitor>) -> (i32, i32) {
             return (g.width(), g.height());
         }
     }
-    if let Some(display) = gtk::gdk::Display::default() {
-        if let Some(obj) = display.monitors().item(0) {
-            if let Ok(monitor) = obj.downcast::<gtk::gdk::Monitor>() {
-                let g = monitor.geometry();
-                if g.width() > 0 && g.height() > 0 {
-                    return (g.width(), g.height());
-                }
-            }
+    if let Some(display) = gtk::gdk::Display::default()
+        && let Some(obj) = display.monitors().item(0)
+        && let Ok(monitor) = obj.downcast::<gtk::gdk::Monitor>()
+    {
+        let g = monitor.geometry();
+        if g.width() > 0 && g.height() > 0 {
+            return (g.width(), g.height());
         }
     }
     (1280, 720)

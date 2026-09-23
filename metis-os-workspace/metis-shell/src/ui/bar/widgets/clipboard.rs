@@ -5,9 +5,9 @@ use gtk::prelude::*;
 
 use crate::gtk_cb::ClipboardItemCells;
 use crate::services::{
-    active_entry_id, clear_history, delete_entry, filtered_entries, load_history, page_size,
-    private_mode, recall_entry, register_clipboard_refresh, set_page_size, set_private_mode,
-    toggle_favorite, ClipboardEntry, ClipboardPage,
+    ClipboardEntry, ClipboardPage, active_entry_id, clear_history, delete_entry, filtered_entries,
+    load_history, page_size, private_mode, recall_entry, register_clipboard_refresh, set_page_size,
+    set_private_mode, toggle_favorite,
 };
 use crate::ui::icons;
 
@@ -316,7 +316,7 @@ fn history_thumbnail(path: &str) -> gtk::Widget {
                     let thumb = pixbuf
                         .scale_simple(80, 80, gtk::gdk_pixbuf::InterpType::Bilinear)
                         .unwrap_or(pixbuf);
-                    picture_poll.set_pixbuf(Some(&thumb));
+                    picture_poll.set_paintable(Some(&pixbuf_texture(&thumb)));
                 }
                 glib::ControlFlow::Break
             }
@@ -325,6 +325,25 @@ fn history_thumbnail(path: &str) -> gtk::Widget {
         }
     });
     picture.upcast()
+}
+
+/// Upload an (already downscaled) pixbuf as a texture. `Texture::for_pixbuf`
+/// is deprecated from GTK 4.20.
+fn pixbuf_texture(pixbuf: &gtk::gdk_pixbuf::Pixbuf) -> gtk::gdk::MemoryTexture {
+    let format = if pixbuf.has_alpha() {
+        gtk::gdk::MemoryFormat::R8g8b8a8
+    } else {
+        gtk::gdk::MemoryFormat::R8g8b8
+    };
+    gtk::gdk::MemoryTexture::new(
+        pixbuf.width(),
+        pixbuf.height(),
+        format,
+        &pixbuf.read_pixel_bytes(),
+        usize::try_from(pixbuf.rowstride()).unwrap_or_else(|_| {
+            usize::try_from(pixbuf.width() * pixbuf.n_channels()).unwrap_or_default()
+        }),
+    )
 }
 
 fn icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {

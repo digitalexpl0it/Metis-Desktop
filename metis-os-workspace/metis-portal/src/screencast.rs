@@ -4,26 +4,26 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use ashpd::{
+    MaybeAppID, PortalError, WindowIdentifierType,
     backend::{
         request::RequestImpl,
         screencast::{ScreencastImpl, SelectSourcesResponse},
         session::{CreateSessionResponse, SessionImpl},
     },
     desktop::{
+        CreateSessionOptions, HandleToken,
         screencast::{
             CursorMode, SelectSourcesOptions, SourceType, StartCastOptions, StreamBuilder, Streams,
             StreamsBuilder,
         },
-        CreateSessionOptions, HandleToken,
     },
-    MaybeAppID, PortalError, WindowIdentifierType,
 };
 use async_trait::async_trait;
 use enumflags2::BitFlags;
 
 use metis_capture::CaptureOptions;
 
-use crate::capture::{spawn_screencast_pump, CaptureHub};
+use crate::capture::{CaptureHub, spawn_screencast_pump};
 use crate::compositor_ipc;
 use crate::pipewire::PipeWireHub;
 
@@ -77,10 +77,10 @@ impl RequestImpl for MetisScreencast {
 impl SessionImpl for MetisScreencast {
     async fn session_closed(&self, session_token: HandleToken) -> ashpd::backend::Result<()> {
         let key = session_token.to_string();
-        if let Ok(mut sessions) = self.sessions.lock() {
-            if let Some(mut session) = sessions.remove(&key) {
-                session.stop(&self.pipewire);
-            }
+        if let Ok(mut sessions) = self.sessions.lock()
+            && let Some(mut session) = sessions.remove(&key)
+        {
+            session.stop(&self.pipewire);
         }
         compositor_ipc::end_capture_overlay(None);
         Ok(())
@@ -160,12 +160,12 @@ impl ScreencastImpl for MetisScreencast {
             Arc::clone(&cancel),
         );
 
-        if let Ok(mut sessions) = self.sessions.lock() {
-            if let Some(session) = sessions.get_mut(&session_token.to_string()) {
-                session.streams.push(stream.node_id);
-                session.cancel = cancel;
-                session.pump = Some(pump);
-            }
+        if let Ok(mut sessions) = self.sessions.lock()
+            && let Some(session) = sessions.get_mut(&session_token.to_string())
+        {
+            session.streams.push(stream.node_id);
+            session.cancel = cancel;
+            session.pump = Some(pump);
         }
 
         let pw_stream = StreamBuilder::new(stream.node_id)

@@ -1,6 +1,6 @@
 //! Remote-desktop input injection (gnome-remote-desktop / libei → compositor seat).
 
-use smithay::backend::input::{ButtonState, KeyState};
+use smithay::backend::input::{ButtonState, InputTime, KeyState};
 use smithay::input::pointer::{ButtonEvent, MotionEvent};
 use smithay::utils::SERIAL_COUNTER;
 
@@ -52,7 +52,7 @@ impl MetisState {
             &MotionEvent {
                 location: loc,
                 serial,
-                time: 0,
+                time: InputTime::now(),
             },
         );
         pointer.frame(self);
@@ -81,7 +81,7 @@ impl MetisState {
             &MotionEvent {
                 location: loc,
                 serial,
-                time: 0,
+                time: InputTime::now(),
             },
         );
         pointer.button(
@@ -90,7 +90,7 @@ impl MetisState {
                 button,
                 state,
                 serial,
-                time: 0,
+                time: InputTime::now(),
             },
         );
         pointer.frame(self);
@@ -107,7 +107,7 @@ impl MetisState {
         };
         use smithay::backend::input::{Axis, AxisSource};
         use smithay::input::pointer::AxisFrame;
-        let mut frame = AxisFrame::new(0).source(AxisSource::Finger);
+        let mut frame = AxisFrame::new(InputTime::now()).source(AxisSource::Finger);
         if dx != 0.0 {
             frame = frame.value(Axis::Horizontal, dx);
         }
@@ -122,7 +122,7 @@ impl MetisState {
             &MotionEvent {
                 location: loc,
                 serial: SERIAL_COUNTER.next_serial(),
-                time: 0,
+                time: InputTime::now(),
             },
         );
         pointer.axis(self, frame);
@@ -145,9 +145,14 @@ impl MetisState {
         };
         let serial = SERIAL_COUNTER.next_serial();
         use smithay::backend::input::Keycode;
-        keyboard.input::<(), _>(self, Keycode::new(keycode), state, serial, 0, |_, _, _| {
-            smithay::input::keyboard::FilterResult::Forward
-        });
+        keyboard.input::<(), _>(
+            self,
+            Keycode::new(keycode),
+            state,
+            serial,
+            InputTime::now(),
+            |_, _, _| smithay::input::keyboard::FilterResult::Forward,
+        );
         self.schedule_redraw();
     }
 }

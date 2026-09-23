@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Local;
 
-use crate::{config_dir, ensure_config_dirs, AppConfig};
+use crate::{AppConfig, config_dir, ensure_config_dirs};
 
 /// Stock theme basenames always regenerated from embedded defaults.
 const STOCK_THEMES: &[&str] = &["dark", "light"];

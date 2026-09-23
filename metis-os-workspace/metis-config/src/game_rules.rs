@@ -174,10 +174,10 @@ pub fn game_rules_config_path() -> PathBuf {
 
 pub fn load_game_rules_config() -> GameRulesConfig {
     let path = game_rules_config_path();
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(cfg) = serde_json::from_str(&text) {
-            return cfg;
-        }
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(cfg) = serde_json::from_str(&text)
+    {
+        return cfg;
     }
     GameRulesConfig::default()
 }

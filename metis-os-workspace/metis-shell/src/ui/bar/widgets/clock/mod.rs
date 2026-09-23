@@ -11,7 +11,7 @@ use std::time::Duration as StdDuration;
 use chrono::{Datelike, Local, Timelike};
 use gtk::prelude::*;
 
-use crate::config::{alarm_sound_canberra_id, load_clocks_config, ClockConfig, ClocksConfig};
+use crate::config::{ClockConfig, ClocksConfig, alarm_sound_canberra_id, load_clocks_config};
 use crate::services::{do_not_disturb, notification_count, register_refresh};
 use crate::ui::icons::{self, names};
 

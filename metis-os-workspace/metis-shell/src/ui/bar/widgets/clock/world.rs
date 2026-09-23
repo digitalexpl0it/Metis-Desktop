@@ -160,10 +160,10 @@ impl WorldClocksPage {
             let inner = inner.clone();
             picker_rows.connect_row_activated(move |_, row| {
                 let idx = row.index();
-                if idx >= 0 {
-                    if let Some(name) = inner.tz_names.get(idx as usize) {
-                        inner.add_zone(&name.clone());
-                    }
+                if idx >= 0
+                    && let Some(name) = inner.tz_names.get(idx as usize)
+                {
+                    inner.add_zone(&name.clone());
                 }
             });
         }

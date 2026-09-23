@@ -5,12 +5,12 @@ use smithay::{
         KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
     },
     input::{
-        keyboard::{keysyms, FilterResult},
+        keyboard::{FilterResult, keysyms},
         pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent},
         touch::{DownEvent, MotionEvent as TouchMotionEventWl, UpEvent},
     },
-    utils::{Logical, Point, Serial, SERIAL_COUNTER},
-    wayland::pointer_constraints::{with_pointer_constraint, PointerConstraint},
+    utils::{Logical, Point, SERIAL_COUNTER, Serial},
+    wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint},
 };
 
 use crate::focus::KeyboardFocusTarget;
@@ -371,7 +371,7 @@ impl MetisState {
             InputEvent::Keyboard { event, .. } => {
                 needs_redraw = true;
                 let serial = SERIAL_COUNTER.next_serial();
-                let time = Event::time_msec(&event);
+                let time = Event::time(&event);
                 let key_state = event.state();
 
                 // Anvil-style: Exclusive Top/Overlay layers own the keyboard
@@ -380,21 +380,16 @@ impl MetisState {
                 // the pointer is not over the surface — required for Super-key
                 // menu opens where there was never a click to claim OnDemand focus.
                 if !self.session_is_locked() {
-                    if let Some(layer) = self.exclusive_keyboard_layer() {
-                        if let Some(keyboard) = self.seat.get_keyboard() {
-                            keyboard.set_focus(
-                                self,
-                                Some(KeyboardFocusTarget::from(layer)),
-                                serial,
-                            );
-                        }
+                    if let Some(layer) = self.exclusive_keyboard_layer()
+                        && let Some(keyboard) = self.seat.get_keyboard()
+                    {
+                        keyboard.set_focus(self, Some(KeyboardFocusTarget::from(layer)), serial);
                     }
-                } else if self.protocol_lock.is_locked() {
-                    if let Some(focus) = self.protocol_lock_keyboard_focus() {
-                        if let Some(keyboard) = self.seat.get_keyboard() {
-                            keyboard.set_focus(self, Some(focus), serial);
-                        }
-                    }
+                } else if self.protocol_lock.is_locked()
+                    && let Some(focus) = self.protocol_lock_keyboard_focus()
+                    && let Some(keyboard) = self.seat.get_keyboard()
+                {
+                    keyboard.set_focus(self, Some(focus), serial);
                 }
 
                 let Some(keyboard) = self.seat.get_keyboard() else {
@@ -430,10 +425,10 @@ impl MetisState {
                                     keysyms::KEY_BackSpace => state.lock_backspace(),
                                     keysyms::KEY_Escape => state.lock_clear_input(),
                                     _ => {
-                                        if let Some(c) = keysym.modified_sym().key_char() {
-                                            if !c.is_control() {
-                                                state.lock_push_char(c);
-                                            }
+                                        if let Some(c) = keysym.modified_sym().key_char()
+                                            && !c.is_control()
+                                        {
+                                            state.lock_push_char(c);
                                         }
                                     }
                                 }
@@ -573,34 +568,34 @@ impl MetisState {
                             // Screenshot chords are global (like hardware keys): fire
                             // even while an Exclusive shell layer owns the keyboard
                             // (Metis Menu, Control Center, Notification Center).
-                            if let Some(token) = keysym_to_token(sym, digit_sym) {
-                                if let Some(action) = state.keybinds.lookup(modifiers, &token) {
-                                    let is_screenshot = matches!(
-                                        action,
-                                        KeybindAction::Screenshot
-                                            | KeybindAction::ScreenshotFull
-                                            | KeybindAction::ScreenshotWindow
-                                    );
-                                    let is_task_view_cycle = matches!(
-                                        action,
-                                        KeybindAction::WindowSwitcherNext
-                                            | KeybindAction::WindowSwitcherPrev
-                                    );
-                                    let is_task_view =
-                                        matches!(action, KeybindAction::WorkspaceOverview);
-                                    let allow = if is_screenshot {
-                                        true
-                                    } else if is_task_view_cycle || is_task_view {
-                                        // Keep cycling / toggling once Task View owns
-                                        // the keyboard; otherwise only when free.
-                                        state.task_view_overlay_active()
-                                            || state.exclusive_keyboard_layer().is_none()
-                                    } else {
-                                        state.exclusive_keyboard_layer().is_none()
-                                    };
-                                    if allow && dispatch_keybind(state, action) {
-                                        return FilterResult::Intercept(());
-                                    }
+                            if let Some(token) = keysym_to_token(sym, digit_sym)
+                                && let Some(action) = state.keybinds.lookup(modifiers, &token)
+                            {
+                                let is_screenshot = matches!(
+                                    action,
+                                    KeybindAction::Screenshot
+                                        | KeybindAction::ScreenshotFull
+                                        | KeybindAction::ScreenshotWindow
+                                );
+                                let is_task_view_cycle = matches!(
+                                    action,
+                                    KeybindAction::WindowSwitcherNext
+                                        | KeybindAction::WindowSwitcherPrev
+                                );
+                                let is_task_view =
+                                    matches!(action, KeybindAction::WorkspaceOverview);
+                                let allow = if is_screenshot {
+                                    true
+                                } else if is_task_view_cycle || is_task_view {
+                                    // Keep cycling / toggling once Task View owns
+                                    // the keyboard; otherwise only when free.
+                                    state.task_view_overlay_active()
+                                        || state.exclusive_keyboard_layer().is_none()
+                                } else {
+                                    state.exclusive_keyboard_layer().is_none()
+                                };
+                                if allow && dispatch_keybind(state, action) {
+                                    return FilterResult::Intercept(());
                                 }
                             }
                             // While an Exclusive layer owns the keyboard (menu,
@@ -613,19 +608,17 @@ impl MetisState {
                             if sym == keysyms::KEY_Escape
                                 && !mod_active(&state.keybinds, modifiers)
                                 && !state.session_is_locked()
+                                && let Some(id) = state.focused_window_id()
                             {
-                                if let Some(id) = state.focused_window_id() {
-                                    let app_id =
-                                        state.windows.get(id).and_then(|r| r.app_id.clone());
-                                    if app_id.as_deref().is_some_and(|a| {
-                                        a.starts_with("steam_app_") || a.contains(".exe")
-                                    }) {
-                                        tracing::info!(
-                                            id,
-                                            ?app_id,
-                                            "game-pointer: Esc forwarded to game"
-                                        );
-                                    }
+                                let app_id = state.windows.get(id).and_then(|r| r.app_id.clone());
+                                if app_id.as_deref().is_some_and(|a| {
+                                    a.starts_with("steam_app_") || a.contains(".exe")
+                                }) {
+                                    tracing::info!(
+                                        id,
+                                        ?app_id,
+                                        "game-pointer: Esc forwarded to game"
+                                    );
                                 }
                             }
                         }
@@ -683,7 +676,7 @@ impl MetisState {
                     &RelativeMotionEvent {
                         delta: event.delta(),
                         delta_unaccel: event.delta_unaccel(),
-                        utime: event.time(),
+                        time: event.time(),
                     },
                 );
 
@@ -700,17 +693,15 @@ impl MetisState {
                 let location = self.clamp_to_desktop(current + event.delta());
 
                 // Confined: reject moves that would leave the surface or its region.
-                if pointer_confined {
-                    if let Some((surface, surface_loc)) = under.as_ref() {
-                        let new_under = self.pointer_target_at(location);
-                        let same_surface = new_under.as_ref().map(|(s, _)| s) == Some(surface);
-                        let in_region = confine_region.as_ref().is_none_or(|region| {
-                            region.contains((location - *surface_loc).to_i32_round())
-                        });
-                        if !same_surface || !in_region {
-                            pointer.frame(self);
-                            return;
-                        }
+                if pointer_confined && let Some((surface, surface_loc)) = under.as_ref() {
+                    let new_under = self.pointer_target_at(location);
+                    let same_surface = new_under.as_ref().map(|(s, _)| s) == Some(surface);
+                    let in_region = confine_region.as_ref().is_none_or(|region| {
+                        region.contains((location - *surface_loc).to_i32_round())
+                    });
+                    if !same_surface || !in_region {
+                        pointer.frame(self);
+                        return;
                     }
                 }
 
@@ -732,7 +723,7 @@ impl MetisState {
                         &MotionEvent {
                             location,
                             serial,
-                            time: event.time_msec(),
+                            time: event.time(),
                         },
                     );
                 }
@@ -776,7 +767,7 @@ impl MetisState {
                         &MotionEvent {
                             location: pos,
                             serial,
-                            time: event.time_msec(),
+                            time: event.time(),
                         },
                     );
                 }
@@ -807,15 +798,10 @@ impl MetisState {
                     self.sync_pointer_constraint_phase(surface, &pointer);
                 }
 
-                if ButtonState::Pressed == button_state {
-                    if let Some((surface, _)) = under.as_ref() {
-                        self.trace_game_pointer(
-                            surface,
-                            &pointer,
-                            "pointer button press",
-                            Some(loc),
-                        );
-                    }
+                if ButtonState::Pressed == button_state
+                    && let Some((surface, _)) = under.as_ref()
+                {
+                    self.trace_game_pointer(surface, &pointer, "pointer button press", Some(loc));
                 }
 
                 // Mutter/KWin: no absolute wl_pointer.motion while locked.
@@ -828,7 +814,7 @@ impl MetisState {
                         &MotionEvent {
                             location: loc,
                             serial,
-                            time: event.time_msec(),
+                            time: event.time(),
                         },
                     );
                 }
@@ -901,18 +887,13 @@ impl MetisState {
                         button,
                         state: button_state,
                         serial,
-                        time: event.time_msec(),
+                        time: event.time(),
                     },
                 );
-                if let Some((surface, _)) = under {
-                    if button_state == ButtonState::Pressed {
-                        self.trace_game_pointer(
-                            &surface,
-                            &pointer,
-                            "after pointer button",
-                            Some(loc),
-                        );
-                    }
+                if let Some((surface, _)) = under
+                    && button_state == ButtonState::Pressed
+                {
+                    self.trace_game_pointer(&surface, &pointer, "after pointer button", Some(loc));
                 }
                 pointer.frame(self);
             }
@@ -927,7 +908,7 @@ impl MetisState {
                     event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.
                 }) * mult;
 
-                let mut frame = AxisFrame::new(event.time_msec()).source(source);
+                let mut frame = AxisFrame::new(event.time()).source(source);
                 if horizontal_amount != 0.0 {
                     frame = frame.value(Axis::Horizontal, horizontal_amount);
                 }
@@ -1002,7 +983,7 @@ impl MetisState {
                 slot: evt.slot(),
                 location: loc,
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
     }
@@ -1018,7 +999,7 @@ impl MetisState {
             &UpEvent {
                 slot: evt.slot(),
                 serial,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
     }
@@ -1038,7 +1019,7 @@ impl MetisState {
             &TouchMotionEventWl {
                 slot: evt.slot(),
                 location: loc,
-                time: evt.time_msec(),
+                time: evt.time(),
             },
         );
     }

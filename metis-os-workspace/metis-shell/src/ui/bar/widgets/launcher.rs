@@ -23,11 +23,14 @@ impl LauncherWidget {
         let image = gtk::Image::new();
         image.add_css_class("metis-bar-launcher-icon");
         image.set_pixel_size(ICON_SIZE);
-        if let Some(texture) = load_icon() {
-            image.set_paintable(Some(&texture));
-        } else {
-            // Fall back to a themed icon if the embedded asset fails to decode.
-            image.set_from_icon_name(Some("view-grid-symbolic"));
+        match load_icon() {
+            Some(texture) => {
+                image.set_paintable(Some(&texture));
+            }
+            _ => {
+                // Fall back to a themed icon if the embedded asset fails to decode.
+                image.set_icon_name(Some("view-grid-symbolic"));
+            }
         }
         root.set_child(Some(&image));
 

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::briefing::item::{load_briefing_config, BriefingItem};
+use crate::briefing::item::{BriefingItem, load_briefing_config};
 use crate::briefing::{fetch_headlines, fetch_summary};
 use crate::state::EventPublisher;
 

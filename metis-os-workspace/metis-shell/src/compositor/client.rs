@@ -173,12 +173,11 @@ fn send_command(cmd: CompositorCommand) -> std::io::Result<CompositorEvent> {
     })?;
     stream.set_read_timeout(Some(Duration::from_millis(400)))?;
     let mut payload = serde_json::to_value(&cmd).map_err(std::io::Error::other)?;
-    if let Ok(token) = std::env::var("METIS_IPC_TOKEN") {
-        if !token.is_empty() {
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("token".into(), serde_json::Value::String(token));
-            }
-        }
+    if let Ok(token) = std::env::var("METIS_IPC_TOKEN")
+        && !token.is_empty()
+        && let Some(obj) = payload.as_object_mut()
+    {
+        obj.insert("token".into(), serde_json::Value::String(token));
     }
     let payload = serde_json::to_string(&payload).map_err(std::io::Error::other)?;
     writeln!(stream, "{payload}")?;

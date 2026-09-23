@@ -18,10 +18,10 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 use metis_config::{
-    discover_widget_extensions, find_widget_extension, load_desktop_widgets_config,
-    load_menu_config, save_desktop_widgets_config, DesktopWidgetChromeOverride,
-    DesktopWidgetInstance, DesktopWidgetKind, DesktopWidgetView, DesktopWidgetsConfig,
-    EqualizerBarShape, EqualizerColorMode, EqualizerVizStyle, WidgetExtSettingType,
+    DesktopWidgetChromeOverride, DesktopWidgetInstance, DesktopWidgetKind, DesktopWidgetView,
+    DesktopWidgetsConfig, EqualizerBarShape, EqualizerColorMode, EqualizerVizStyle,
+    WidgetExtSettingType, discover_widget_extensions, find_widget_extension,
+    load_desktop_widgets_config, load_menu_config, save_desktop_widgets_config,
 };
 
 use crate::gtk_cb::OptFn0Cell;

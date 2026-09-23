@@ -1,7 +1,7 @@
 use gtk::prelude::*;
 
 use crate::config::BarPosition;
-use crate::services::{active_workspace_for, dispatch_workspace, WorkspaceSnapshot};
+use crate::services::{WorkspaceSnapshot, active_workspace_for, dispatch_workspace};
 use crate::ui::bar::BarShell;
 use metis_config::load_dashboard_config;
 

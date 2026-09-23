@@ -19,7 +19,7 @@ use smithay::backend::renderer::gles::{
 };
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::utils::{
-    user_data::UserDataMap, Buffer, Physical, Point, Rectangle, Scale, Size, Transform,
+    Buffer, Physical, Point, Rectangle, Scale, Size, Transform, user_data::UserDataMap,
 };
 
 /// Custom texture shader: a 7x7 Gaussian sampled around each texel. The sampling

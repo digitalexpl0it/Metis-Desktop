@@ -52,12 +52,12 @@ pub fn startup_config_path() -> PathBuf {
 
 pub fn load_startup_config() -> StartupConfig {
     let path = startup_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            match serde_json::from_str::<StartupConfig>(&text) {
-                Ok(cfg) => return sanitize_startup_config(cfg),
-                Err(err) => tracing::warn!(%err, "startup.json parse failed — using defaults"),
-            }
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+    {
+        match serde_json::from_str::<StartupConfig>(&text) {
+            Ok(cfg) => return sanitize_startup_config(cfg),
+            Err(err) => tracing::warn!(%err, "startup.json parse failed — using defaults"),
         }
     }
     StartupConfig::default()
@@ -202,10 +202,10 @@ fn read_desktop_exec(path: &Path) -> Option<String> {
             return None;
         }
     }
-    if let Some(te) = try_exec {
-        if !try_exec_ok(&te) {
-            return None;
-        }
+    if let Some(te) = try_exec
+        && !try_exec_ok(&te)
+    {
+        return None;
     }
     exec.filter(|s| !s.trim().is_empty())
 }

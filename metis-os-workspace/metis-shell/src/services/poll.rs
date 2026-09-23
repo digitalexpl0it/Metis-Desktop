@@ -631,11 +631,11 @@ fn run_wifi_connect(ssid: String, password: Option<String>) {
         "connect".to_string(),
         ssid,
     ];
-    if let Some(pw) = password {
-        if !pw.is_empty() {
-            args.push("password".to_string());
-            args.push(pw);
-        }
+    if let Some(pw) = password
+        && !pw.is_empty()
+    {
+        args.push("password".to_string());
+        args.push(pw);
     }
     // Association + DHCP can take many seconds, well past the 600ms read budget,
     // so this runs detached. Success surfaces via the next snapshot's active SSID.
@@ -775,14 +775,13 @@ fn notify_vpn_result(target: &str, connecting: bool, error: Option<String>) {
 }
 
 fn vpn_display_name(target: &str) -> String {
-    if let Ok(guard) = LAST_VPN_NAMES.lock() {
-        if let Some(name) = guard
+    if let Ok(guard) = LAST_VPN_NAMES.lock()
+        && let Some(name) = guard
             .iter()
             .find(|(uuid, name)| uuid == target || name == target)
             .map(|(_, name)| name.clone())
-        {
-            return name;
-        }
+    {
+        return name;
     }
     target.to_string()
 }
@@ -1197,12 +1196,12 @@ fn read_vpn_status() -> Option<Vec<VpnStatus>> {
         });
     }
     // Stamp pending from in-flight ops so the popover can show a spinner.
-    if let Ok(st) = VPN_OP.lock() {
-        if let Some((ref target, _, _)) = st.pending {
-            for v in &mut out {
-                if v.uuid == *target || v.name == *target {
-                    v.pending = true;
-                }
+    if let Ok(st) = VPN_OP.lock()
+        && let Some((ref target, _, _)) = st.pending
+    {
+        for v in &mut out {
+            if v.uuid == *target || v.name == *target {
+                v.pending = true;
             }
         }
     }
@@ -1327,10 +1326,10 @@ fn read_bluetooth_device_battery(
     if let Some(batt) = read_hid_battery_for_address(address) {
         return batt;
     }
-    if let Some(batt) = upower.get(&address.to_ascii_uppercase()) {
-        if batt.percent.is_some() {
-            return *batt;
-        }
+    if let Some(batt) = upower.get(&address.to_ascii_uppercase())
+        && batt.percent.is_some()
+    {
+        return *batt;
     }
     let mut cmd = std::process::Command::new("bluetoothctl");
     cmd.args(["info", address]);
@@ -1494,10 +1493,10 @@ fn read_solaar_batteries() -> HashMap<String, DeviceBattery> {
             current = Some(line.trim().to_ascii_lowercase());
             continue;
         }
-        if let Some(rest) = line.trim().strip_prefix("Battery:") {
-            if let Some(name) = &current {
-                map.insert(name.clone(), parse_solaar_battery(rest));
-            }
+        if let Some(rest) = line.trim().strip_prefix("Battery:")
+            && let Some(name) = &current
+        {
+            map.insert(name.clone(), parse_solaar_battery(rest));
         }
     }
     map
@@ -1510,10 +1509,10 @@ fn parse_solaar_battery(rest: &str) -> DeviceBattery {
     let mut segs = rest.split(',');
     if let Some(level) = segs.next() {
         let level = level.trim().trim_end_matches('.');
-        if let Some(pct) = level.strip_suffix('%') {
-            if let Ok(v) = pct.trim().parse::<f32>() {
-                batt.percent = Some(v.round().clamp(0.0, 100.0) as u8);
-            }
+        if let Some(pct) = level.strip_suffix('%')
+            && let Ok(v) = pct.trim().parse::<f32>()
+        {
+            batt.percent = Some(v.round().clamp(0.0, 100.0) as u8);
         }
     }
     if let Some(status) = segs.next() {
@@ -1535,12 +1534,11 @@ fn parse_solaar_battery(rest: &str) -> DeviceBattery {
 /// falling back to decoding the `0xNN` hex value.
 fn parse_battery_percentage(field: &str) -> Option<u8> {
     let field = field.trim();
-    if let (Some(start), Some(end)) = (field.find('('), field.find(')')) {
-        if start < end {
-            if let Ok(v) = field[start + 1..end].trim().parse::<u16>() {
-                return Some(v.min(100) as u8);
-            }
-        }
+    if let (Some(start), Some(end)) = (field.find('('), field.find(')'))
+        && start < end
+        && let Ok(v) = field[start + 1..end].trim().parse::<u16>()
+    {
+        return Some(v.min(100) as u8);
     }
     let token = field.split_whitespace().next()?;
     let hex = token

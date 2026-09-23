@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ashpd::{
-    backend::settings::{SettingsImpl, SettingsSignalEmitter},
-    desktop::settings::{ColorScheme, Namespace, APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY},
-    zbus::zvariant::{OwnedValue, Value},
     PortalError,
+    backend::settings::{SettingsImpl, SettingsSignalEmitter},
+    desktop::settings::{APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY, ColorScheme, Namespace},
+    zbus::zvariant::{OwnedValue, Value},
 };
 use async_trait::async_trait;
 use metis_config::{
-    load_theme_preference, ThemeMode, SESSION_GTK_DECORATION_LAYOUT, SESSION_WM_BUTTON_LAYOUT,
+    SESSION_GTK_DECORATION_LAYOUT, SESSION_WM_BUTTON_LAYOUT, ThemeMode, load_theme_preference,
 };
 
 const NS_WM: &str = "org.gnome.desktop.wm.preferences";

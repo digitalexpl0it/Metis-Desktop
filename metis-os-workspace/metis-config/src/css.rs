@@ -691,71 +691,114 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         background-color: rgba({text_rgb}, 0.08);
     }}
 
-    /* Software Updates client window — opaque Metis surface (global `window`
-       is transparent for layer-shell surfaces). */
+    /* Software Updates — opaque xdg_toplevel under Metis SSD. Solid rgb() so
+       the shell's global `window {{ transparent }}` cannot leave an alpha hole
+       (layer-shell Overlay was wrong: it covered polkit auth). */
     window.metis-updater,
     window.metis-updater.background {{
-        background-color: {surface_solid} !important;
+        background-color: rgb({raised_rgb});
+        color: {text};
+    }}
+    .metis-updater-shell {{
+        background-color: rgb({raised_rgb});
         color: {text};
     }}
     .metis-updater-root {{
-        background-color: {surface_solid};
+        background-color: rgb({raised_rgb});
+        color: {text};
+        padding: 16px 18px 14px 18px;
+    }}
+    .metis-updater-summary {{
+        font-size: 1.02em;
+        margin-bottom: 2px;
+        padding: 0 2px;
         color: {text};
     }}
-    .metis-updater-title {{
-        color: {text};
-        font-weight: 700;
+    .metis-updater-scroll {{
+        background-color: transparent;
+        border-radius: {rm}px;
+        margin: 4px 0 2px 0;
     }}
     .metis-updater-list {{
-        background-color: {raised};
+        background-color: rgb({surface_rgb}) !important;
         border: 1px solid {border};
         border-radius: {rm}px;
         color: {text};
+        padding: 6px 0;
     }}
     .metis-updater-list row {{
         background-color: transparent;
         color: {text};
-        padding: 2px 4px;
+        padding: 0;
+        margin: 0;
     }}
     .metis-updater-list row:hover {{
         background-color: rgba({accent_rgb}, 0.10);
+    }}
+    .metis-updater-section-row {{
+        padding: 8px 14px 4px 14px;
+    }}
+    .metis-updater-section {{
+        font-weight: 600;
+        font-size: 0.92em;
+        color: {muted};
+    }}
+    .metis-updater-item {{
+        padding: 8px 14px;
+    }}
+    .metis-updater-actions {{
+        margin-top: 8px;
+        padding-top: 4px;
     }}
     .metis-updater-reboot {{
         background-color: rgba({accent_rgb}, 0.14);
         border: 1px solid {border};
         border-radius: {rm}px;
-        padding: 10px 12px;
+        padding: 10px 14px;
         color: {text};
+        margin: 4px 0;
     }}
     .metis-updater-log {{
-        background-color: {raised};
+        background-color: rgb({surface_rgb}) !important;
         color: {text};
         border: 1px solid {border};
         border-radius: {rs}px;
-        padding: 8px;
+        padding: 10px 12px;
         font-family: monospace;
         font-size: 11px;
+        margin-top: 6px;
     }}
     .metis-updater-log text {{
         color: {text};
         background-color: transparent;
     }}
+    .metis-updater-btn {{
+        border-radius: {rs}px;
+        padding: 8px 16px;
+        color: {text};
+        background-color: rgb({surface_rgb});
+        border: 1px solid {border};
+        min-width: 88px;
+    }}
     .metis-updater-btn.suggested-action {{
         background-color: {accent};
         color: {text_on_accent};
-        border-radius: {rs}px;
-        padding: 6px 14px;
+        border-color: {accent};
     }}
     .metis-updater-btn.suggested-action:hover {{
         background-color: {accent2};
         color: {text_on_accent};
     }}
+    .metis-updater-btn:disabled {{
+        opacity: 0.55;
+    }}
     .metis-updater-log-toggle {{
-        background-color: {raised};
+        background-color: rgb({surface_rgb});
         color: {text};
         border: 1px solid {border};
         border-radius: {rs}px;
-        padding: 4px 10px;
+        padding: 6px 12px;
+        margin-top: 2px;
     }}
 
     .metis-bar-task-pick.focused {{
@@ -4260,6 +4303,8 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         notif_card_bg = notif_card_bg,
         dash_shadow = dash_shadow,
         text_rgb = text_rgb,
+        surface_rgb = surface_rgb,
+        raised_rgb = raised_rgb,
         accent_rgb = accent_rgb,
         overlay_card_bg = overlay_card_bg,
         overlay_dot = overlay_dot,

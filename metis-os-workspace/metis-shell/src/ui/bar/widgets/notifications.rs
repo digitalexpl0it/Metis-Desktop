@@ -4,7 +4,7 @@
 
 use gtk::prelude::*;
 
-use crate::services::{do_not_disturb, notification_count, register_refresh, BarNotification};
+use crate::services::{BarNotification, do_not_disturb, notification_count, register_refresh};
 use crate::ui::icons::{self, names};
 use std::rc::Rc;
 
@@ -108,21 +108,19 @@ where
         any = true;
     }
 
-    if !any {
-        if let Some(entry) = notif.desktop_entry.clone() {
-            let button = gtk::Button::with_label(&metis_i18n::tr("Open"));
-            button.add_css_class("metis-notif-action");
-            button.add_css_class("suggested-action");
-            let id = notif.id;
-            let on_done = on_done.clone();
-            button.connect_clicked(move |_| {
-                launch_desktop_entry(&entry);
-                crate::services::close_notification(id, 2);
-                on_done();
-            });
-            row.append(&button);
-            any = true;
-        }
+    if !any && let Some(entry) = notif.desktop_entry.clone() {
+        let button = gtk::Button::with_label(&metis_i18n::tr("Open"));
+        button.add_css_class("metis-notif-action");
+        button.add_css_class("suggested-action");
+        let id = notif.id;
+        let on_done = on_done.clone();
+        button.connect_clicked(move |_| {
+            launch_desktop_entry(&entry);
+            crate::services::close_notification(id, 2);
+            on_done();
+        });
+        row.append(&button);
+        any = true;
     }
 
     any.then_some(row)
@@ -132,7 +130,7 @@ pub(crate) fn launch_desktop_entry(entry: &str) {
     use gio::prelude::*;
     let candidates = [entry.to_string(), format!("{entry}.desktop")];
     for id in candidates {
-        if let Some(app) = gio::DesktopAppInfo::new(&id) {
+        if let Some(app) = gio_unix::DesktopAppInfo::new(&id) {
             match app.launch(&[], None::<&gio::AppLaunchContext>) {
                 Ok(()) => return,
                 Err(err) => tracing::warn!(%err, desktop = %id, "notify: failed to launch app"),

@@ -198,11 +198,7 @@ fn friendly_name_from_bus(bus_name: &str) -> Option<String> {
         return None;
     }
     let name = humanize_identifier(last);
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
+    if name.is_empty() { None } else { Some(name) }
 }
 
 fn humanize_tray_id(id: &str) -> String {

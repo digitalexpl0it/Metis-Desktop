@@ -6,13 +6,13 @@ const ICON_SIZE: i32 = 18;
 pub fn image(name: &str) -> gtk::Image {
     let image = gtk::Image::new();
     image.add_css_class("metis-bar-icon");
-    image.set_from_icon_name(Some(name));
+    image.set_icon_name(Some(name));
     image.set_pixel_size(ICON_SIZE);
     image
 }
 
 pub fn set_icon(image: &gtk::Image, name: &str) {
-    image.set_from_icon_name(Some(name));
+    image.set_icon_name(Some(name));
     image.set_pixel_size(ICON_SIZE);
 }
 
@@ -43,11 +43,7 @@ pub mod names {
     }
 
     pub fn notification(dnd: bool) -> &'static str {
-        if dnd {
-            NOTIFICATION_DND
-        } else {
-            NOTIFICATION
-        }
+        if dnd { NOTIFICATION_DND } else { NOTIFICATION }
     }
 
     pub fn bluetooth(powered: bool, connected: bool) -> &'static str {

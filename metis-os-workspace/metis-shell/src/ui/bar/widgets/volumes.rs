@@ -81,12 +81,12 @@ fn build_volume_button(entry: &VolumeEntry) -> gtk::Button {
 
     let icon = gtk::Image::from_icon_name(services::volumes_icon_name(entry.kind));
     icon.set_pixel_size(18);
-    if entry.kind == VolumeKind::Locked {
-        if let Some(display) = gdk::Display::default() {
-            let theme = gtk::IconTheme::for_display(&display);
-            if !theme.has_icon("drive-harddisk-encrypted-symbolic") {
-                icon.set_icon_name(Some("changes-prevent-symbolic"));
-            }
+    if entry.kind == VolumeKind::Locked
+        && let Some(display) = gdk::Display::default()
+    {
+        let theme = gtk::IconTheme::for_display(&display);
+        if !theme.has_icon("drive-harddisk-encrypted-symbolic") {
+            icon.set_icon_name(Some("changes-prevent-symbolic"));
         }
     }
     btn.set_child(Some(&icon));
@@ -214,10 +214,10 @@ fn show_context_menu(anchor: &gtk::Button, entry: &VolumeEntry) {
     popover.connect_closed(move |_| {
         let weak = weak.clone();
         glib::idle_add_local_once(move || {
-            if let Some(p) = weak.upgrade() {
-                if p.parent().is_some() {
-                    p.unparent();
-                }
+            if let Some(p) = weak.upgrade()
+                && p.parent().is_some()
+            {
+                p.unparent();
             }
             VOLUME_MENU.with(|cell| {
                 if cell

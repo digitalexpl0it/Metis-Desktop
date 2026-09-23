@@ -5,9 +5,9 @@
 //! below the pointer (cursor is composited after the scene in the DRM path).
 
 use metis_config::OutputsConfig;
-use smithay::backend::renderer::element::solid::SolidColorRenderElement;
-use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::Color32F;
+use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::utils::{Physical, Rectangle, Size};
 
 use crate::state::MetisState;
@@ -56,10 +56,10 @@ pub fn should_render_night_light(state: &MetisState, target: &RenderTargetInfo<'
     if state.image_capture.screencast_active() || state.image_capture.has_pending() {
         return false;
     }
-    if let Some(name) = target.output_name {
-        if crate::output_hdr::hdr_active_for_output(state, name) {
-            return false;
-        }
+    if let Some(name) = target.output_name
+        && crate::output_hdr::hdr_active_for_output(state, name)
+    {
+        return false;
     }
     let cfg = state.output_runtime.cached();
     night_light_active(cfg, target.output_name)

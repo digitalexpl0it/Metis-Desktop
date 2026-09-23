@@ -99,7 +99,7 @@ pub fn reapply() {
     let tokens = active_tokens();
     PROVIDER.with(|p| {
         if let Some(provider) = p.borrow().as_ref() {
-            provider.load_from_data(&opaque_viewer_css(&tokens));
+            provider.load_from_string(&opaque_viewer_css(&tokens));
         }
     });
 }

@@ -337,7 +337,9 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
                         sections_poll.lan_sw.set_sensitive(true);
                         remote::notify_sharing(
                             &tr("Desktop sharing on"),
-                            &tr("Session sharing is starting. Clients can connect when status shows ready."),
+                            &tr(
+                                "Session sharing is starting. Clients can connect when status shows ready.",
+                            ),
                         );
                         let snap = remote::load_snapshot();
                         if snap.lan_only && !snap.firewall_applied {
@@ -1005,7 +1007,9 @@ fn render_firewall_status(sections: &Sections, snap: &RemoteSnapshot) {
         )
     } else if !sharing_on {
         (
-            tr("LAN only is on. Firewall rules apply automatically when you enable desktop sharing."),
+            tr(
+                "LAN only is on. Firewall rules apply automatically when you enable desktop sharing.",
+            ),
             false,
         )
     } else if sections.firewall_pending.get() && !snap.firewall_applied {

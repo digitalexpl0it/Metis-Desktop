@@ -26,14 +26,14 @@ use smithay::backend::renderer::element::{Id, Kind};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Color32F, ImportMem, Texture};
-use smithay::reexports::calloop::channel::{channel, Channel, Event, Sender};
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::RegistrationToken;
+use smithay::reexports::calloop::channel::{Channel, Event, Sender, channel};
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size, Transform};
 
 use crate::focus::KeyboardFocusTarget;
-use crate::lock_auth_cues::{detect_auth_cues, AuthCues};
-use crate::night_light::{premultiply, RenderTargetInfo};
+use crate::lock_auth_cues::{AuthCues, detect_auth_cues};
+use crate::night_light::{RenderTargetInfo, premultiply};
 use crate::render::OutputStack;
 use crate::state::MetisState;
 
@@ -952,24 +952,23 @@ impl MetisState {
             LockBackgroundSource::Picture | LockBackgroundSource::Gradient => {
                 let sig = self.lock.bg_signature();
                 let key = (size.w, size.h, sig);
-                if !self.lock.bg_cache.contains_key(&key) {
-                    if let Some(pixels) = self.decode_lock_bg_pixels(size) {
-                        if let Ok(texture) = renderer.import_memory(
-                            &pixels,
-                            Fourcc::Abgr8888,
-                            (size.w, size.h).into(),
-                            false,
-                        ) {
-                            let buffer = TextureBuffer::from_texture(
-                                renderer,
-                                texture.clone(),
-                                1,
-                                Transform::Normal,
-                                None,
-                            );
-                            self.lock.bg_cache.insert(key, (texture, buffer));
-                        }
-                    }
+                if !self.lock.bg_cache.contains_key(&key)
+                    && let Some(pixels) = self.decode_lock_bg_pixels(size)
+                    && let Ok(texture) = renderer.import_memory(
+                        &pixels,
+                        Fourcc::Abgr8888,
+                        (size.w, size.h).into(),
+                        false,
+                    )
+                {
+                    let buffer = TextureBuffer::from_texture(
+                        renderer,
+                        texture.clone(),
+                        1,
+                        Transform::Normal,
+                        None,
+                    );
+                    self.lock.bg_cache.insert(key, (texture, buffer));
                 }
                 if let Some((texture, buffer)) = self.lock.bg_cache.get(&key) {
                     if blur {
@@ -1101,7 +1100,7 @@ struct PamConv {
 enum PamHandle {}
 
 #[link(name = "pam")]
-extern "C" {
+unsafe extern "C" {
     fn pam_start(
         service: *const c_char,
         user: *const c_char,
@@ -1129,39 +1128,41 @@ unsafe extern "C" fn converse(
     resp: *mut *mut PamResponse,
     appdata_ptr: *mut c_void,
 ) -> c_int {
-    if num_msg <= 0 || msg.is_null() || resp.is_null() || appdata_ptr.is_null() {
-        return PAM_CONV_ERR;
-    }
-    let data = &*(appdata_ptr as *const ConvData);
-    let n = num_msg as usize;
-    let responses = libc::calloc(n, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
-    if responses.is_null() {
-        return PAM_BUF_ERR;
-    }
-    for i in 0..n {
-        let message = *msg.add(i);
-        let out = responses.add(i);
-        (*out).resp = std::ptr::null_mut();
-        (*out).resp_retcode = 0;
-        if message.is_null() {
-            continue;
+    unsafe {
+        if num_msg <= 0 || msg.is_null() || resp.is_null() || appdata_ptr.is_null() {
+            return PAM_CONV_ERR;
         }
-        match (*message).msg_style {
-            PAM_PROMPT_ECHO_OFF => {
-                (*out).resp = libc::strdup(data.password.as_ptr());
-            }
-            PAM_PROMPT_ECHO_ON => {
-                (*out).resp = libc::strdup(data.user.as_ptr());
-            }
-            PAM_TEXT_INFO | PAM_ERROR_MSG => {
-                // Acknowledge; modules may free(resp). Empty string is safe.
-                (*out).resp = libc::strdup(c"".as_ptr());
-            }
-            _ => {}
+        let data = &*(appdata_ptr as *const ConvData);
+        let n = num_msg as usize;
+        let responses = libc::calloc(n, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
+        if responses.is_null() {
+            return PAM_BUF_ERR;
         }
+        for i in 0..n {
+            let message = *msg.add(i);
+            let out = responses.add(i);
+            (*out).resp = std::ptr::null_mut();
+            (*out).resp_retcode = 0;
+            if message.is_null() {
+                continue;
+            }
+            match (*message).msg_style {
+                PAM_PROMPT_ECHO_OFF => {
+                    (*out).resp = libc::strdup(data.password.as_ptr());
+                }
+                PAM_PROMPT_ECHO_ON => {
+                    (*out).resp = libc::strdup(data.user.as_ptr());
+                }
+                PAM_TEXT_INFO | PAM_ERROR_MSG => {
+                    // Acknowledge; modules may free(resp). Empty string is safe.
+                    (*out).resp = libc::strdup(c"".as_ptr());
+                }
+                _ => {}
+            }
+        }
+        *resp = responses;
+        PAM_SUCCESS
     }
-    *resp = responses;
-    PAM_SUCCESS
 }
 
 /// Authenticate `user`/`password` against the given PAM `service`. Returns true
@@ -1209,10 +1210,10 @@ fn pam_check(service: &str, user: &str, password: &str) -> bool {
 /// Resolve the current user's login name (env first, then the passwd database).
 fn current_username() -> Option<String> {
     for var in ["USER", "LOGNAME"] {
-        if let Ok(v) = std::env::var(var) {
-            if !v.is_empty() {
-                return Some(v);
-            }
+        if let Ok(v) = std::env::var(var)
+            && !v.is_empty()
+        {
+            return Some(v);
         }
     }
     // Safe libc fallback: getpwuid(getuid()) then copy the name out.
@@ -1221,12 +1222,11 @@ fn current_username() -> Option<String> {
         let pw = libc::getpwuid(uid);
         if !pw.is_null() {
             let name = (*pw).pw_name;
-            if !name.is_null() {
-                if let Ok(s) = std::ffi::CStr::from_ptr(name).to_str() {
-                    if !s.is_empty() {
-                        return Some(s.to_string());
-                    }
-                }
+            if !name.is_null()
+                && let Ok(s) = std::ffi::CStr::from_ptr(name).to_str()
+                && !s.is_empty()
+            {
+                return Some(s.to_string());
             }
         }
     }
@@ -1410,12 +1410,12 @@ fn run_power_action(btn: PowerButton) {
 
 /// Resolve `metis-remote` next to the compositor binary (dev/install layout).
 fn metis_remote_bin() -> std::path::PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("metis-remote");
-            if sibling.is_file() {
-                return sibling;
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join("metis-remote");
+        if sibling.is_file() {
+            return sibling;
         }
     }
     std::path::PathBuf::from("metis-remote")
@@ -1453,12 +1453,13 @@ pub(crate) fn spawn_metis_remote(args: &[&str]) {
 fn current_display_name() -> Option<String> {
     unsafe {
         let pw = libc::getpwuid(libc::getuid());
-        if !pw.is_null() && !(*pw).pw_gecos.is_null() {
-            if let Ok(gecos) = std::ffi::CStr::from_ptr((*pw).pw_gecos).to_str() {
-                let name = gecos.split(',').next().unwrap_or("").trim();
-                if !name.is_empty() {
-                    return Some(name.to_string());
-                }
+        if !pw.is_null()
+            && !(*pw).pw_gecos.is_null()
+            && let Ok(gecos) = std::ffi::CStr::from_ptr((*pw).pw_gecos).to_str()
+        {
+            let name = gecos.split(',').next().unwrap_or("").trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
             }
         }
     }
@@ -1770,9 +1771,5 @@ fn point_in_tri(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> f
     let d3 = edge(p, c, a);
     let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
     let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
-    if has_neg && has_pos {
-        0.0
-    } else {
-        1.0
-    }
+    if has_neg && has_pos { 0.0 } else { 1.0 }
 }

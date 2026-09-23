@@ -6,7 +6,7 @@ pub use layer_shell::handle_layer_commit;
 
 use std::os::unix::io::OwnedFd;
 
-use crate::clipboard::{serve_compositor_selection, MetisSelectionUserData};
+use crate::clipboard::{MetisSelectionUserData, serve_compositor_selection};
 use crate::state::MetisState;
 use smithay::wayland::selection::data_device::current_data_device_selection_userdata;
 use smithay::wayland::selection::primary_selection::current_primary_selection_userdata;
@@ -14,17 +14,19 @@ use smithay::wayland::selection::primary_selection::current_primary_selection_us
 use smithay::input::dnd::{DnDGrab, DndGrabHandler, GrabType, Source};
 use smithay::input::pointer::{Focus, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Serial};
 use smithay::wayland::output::OutputHandler;
-use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraintsHandler};
+use smithay::wayland::pointer_constraints::{
+    ConstraintRemove, PointerConstraintsHandler, with_pointer_constraint,
+};
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::selection::data_device::{
-    set_data_device_focus, DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
+    DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler, set_data_device_focus,
 };
 use smithay::wayland::selection::primary_selection::{
-    set_primary_focus, PrimarySelectionHandler, PrimarySelectionState,
+    PrimarySelectionHandler, PrimarySelectionState, set_primary_focus,
 };
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 
@@ -90,15 +92,15 @@ impl SelectionHandler for MetisState {
         source: Option<SelectionSource>,
         _seat: Seat<Self>,
     ) {
-        if ty == SelectionTarget::Clipboard {
-            if let Some(ref source) = source {
-                self.queue_clipboard_capture(source.mime_types());
-            }
+        if ty == SelectionTarget::Clipboard
+            && let Some(ref source) = source
+        {
+            self.queue_clipboard_capture(source.mime_types());
         }
-        if let Some(xwm) = self.xwm.as_mut() {
-            if let Err(err) = xwm.new_selection(ty, source.map(|s| s.mime_types())) {
-                tracing::warn!(?err, ?ty, "failed to mirror Wayland selection to XWayland");
-            }
+        if let Some(xwm) = self.xwm.as_mut()
+            && let Err(err) = xwm.new_selection(ty, source.map(|s| s.mime_types()))
+        {
+            tracing::warn!(?err, ?ty, "failed to mirror Wayland selection to XWayland");
         }
     }
 
@@ -124,10 +126,10 @@ impl SelectionHandler for MetisState {
         if compositor_owned {
             if !user_data.has_payload() {
                 // XWayland advertised Wayland mimes; bytes live on the X11 side.
-                if let Some(xwm) = self.xwm.as_mut() {
-                    if let Err(err) = xwm.send_selection(ty, mime_type, fd) {
-                        tracing::warn!(?err, ?ty, "failed to read X11 selection for Wayland paste");
-                    }
+                if let Some(xwm) = self.xwm.as_mut()
+                    && let Err(err) = xwm.send_selection(ty, mime_type, fd)
+                {
+                    tracing::warn!(?err, ?ty, "failed to read X11 selection for Wayland paste");
                 }
                 return;
             }
@@ -139,10 +141,10 @@ impl SelectionHandler for MetisState {
             return;
         }
 
-        if let Some(xwm) = self.xwm.as_mut() {
-            if let Err(err) = xwm.send_selection(ty, mime_type, fd) {
-                tracing::warn!(?err, ?ty, "failed to send Wayland selection to XWayland");
-            }
+        if let Some(xwm) = self.xwm.as_mut()
+            && let Err(err) = xwm.send_selection(ty, mime_type, fd)
+        {
+            tracing::warn!(?err, ?ty, "failed to send Wayland selection to XWayland");
         }
     }
 }
@@ -223,8 +225,24 @@ impl PointerConstraintsHandler for MetisState {
         }
     }
 
-    fn remove_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+    fn remove_constraint(
+        &mut self,
+        surface: &WlSurface,
+        pointer: &PointerHandle<Self>,
+        removal: ConstraintRemove,
+    ) {
         use smithay::reexports::wayland_server::Resource;
+        // Pointer-leave only deactivates the constraint; motion re-activates it
+        // on re-entry. Tear-down below is for the client destroying it.
+        if matches!(removal, ConstraintRemove::PointerLeave(_)) {
+            self.trace_game_pointer(
+                surface,
+                pointer,
+                "pointer constraint deactivated (leave)",
+                None,
+            );
+            return;
+        }
         let surface_id = surface.id();
         self.trace_game_pointer(surface, pointer, "pointer constraint removed", None);
         self.pointer_constraint_phases.remove(&surface_id);
@@ -233,21 +251,20 @@ impl PointerConstraintsHandler for MetisState {
         }
         let should_restore =
             with_pointer_constraint(surface, pointer, |constraint| constraint.is_none());
-        if should_restore {
-            if let Some((hint_surface, hint_location)) = self.cursor_position_hint.take() {
-                if let Some(origin) = self.surface_space_origin(&hint_surface) {
-                    let restore = origin + hint_location;
-                    self.trace_game_pointer_at(
-                        surface,
-                        "restoring cursor from position hint",
-                        Some(restore),
-                        None,
-                        false,
-                        false,
-                    );
-                    pointer.set_location(restore);
-                }
-            }
+        if should_restore
+            && let Some((hint_surface, hint_location)) = self.cursor_position_hint.take()
+            && let Some(origin) = self.surface_space_origin(&hint_surface)
+        {
+            let restore = origin + hint_location;
+            self.trace_game_pointer_at(
+                surface,
+                "restoring cursor from position hint",
+                Some(restore),
+                None,
+                false,
+                false,
+            );
+            pointer.set_location(restore);
         }
     }
 

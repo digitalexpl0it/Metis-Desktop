@@ -1,15 +1,16 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ashpd::{
+    MaybeAppID, PortalError, WindowIdentifierType,
     backend::{request::RequestImpl, screenshot::ScreenshotImpl},
     desktop::{
-        screenshot::{ColorOptions, Screenshot, ScreenshotOptions},
         Color, HandleToken,
+        screenshot::{AvailableTargets, ColorOptions, Screenshot, ScreenshotOptions},
     },
-    MaybeAppID, PortalError, WindowIdentifierType,
 };
 use async_trait::async_trait;
+use enumflags2::BitFlags;
 
 use crate::capture::CaptureHub;
 use crate::compositor_ipc;
@@ -41,6 +42,11 @@ impl RequestImpl for MetisScreenshot {
 
 #[async_trait]
 impl ScreenshotImpl for MetisScreenshot {
+    /// `screenshot_png` always captures the full screen; advertise only that.
+    fn available_targets(&self) -> BitFlags<AvailableTargets> {
+        BitFlags::from(AvailableTargets::Screen)
+    }
+
     async fn screenshot(
         &self,
         _token: HandleToken,

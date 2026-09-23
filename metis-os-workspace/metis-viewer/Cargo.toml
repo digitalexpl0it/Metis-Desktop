@@ -2,6 +2,7 @@
 name = "metis-viewer"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Metis RDP viewer — GTK connect UI over FreeRDP (GRD host unchanged)"
 
@@ -10,9 +11,9 @@ name = "metis-viewer"
 path = "src/main.rs"
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.8", features = ["v4_10"] }
-glib = "0.19"
-gio = "0.19"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
+glib = "0.22"
+gio = "0.22"
 metis-config = { workspace = true }
 metis-i18n = { workspace = true }
 tracing = { workspace = true }

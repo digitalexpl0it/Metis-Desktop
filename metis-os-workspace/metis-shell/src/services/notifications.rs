@@ -60,10 +60,10 @@ pub fn set_action_sender(tx: UnboundedSender<NotifyOutgoing>) {
 
 fn send_outgoing(msg: NotifyOutgoing) {
     ACTION_TX.with(|cell| {
-        if let Some(tx) = cell.borrow().as_ref() {
-            if let Err(err) = tx.send(msg) {
-                tracing::debug!(%err, "notify: outgoing channel closed");
-            }
+        if let Some(tx) = cell.borrow().as_ref()
+            && let Err(err) = tx.send(msg)
+        {
+            tracing::debug!(%err, "notify: outgoing channel closed");
         }
     });
 }

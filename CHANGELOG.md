@@ -5,6 +5,36 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-09-22]
+
+### Changed
+
+- **Supported platforms** — Ubuntu 26.04+, Debian 13 (trixie)+, Arch Linux, and
+  NixOS 26.05+. **Ubuntu 24.04 is dropped** (GTK 4.14 is below the new GTK 4.18
+  floor). Floor is Debian 13: GTK ≥ 4.18, GLib ≥ 2.84, gtk4-layer-shell ≥ 1.0,
+  PipeWire ≥ 1.4. `install.sh` accepts newer releases (Ubuntu 26.10+, Debian
+  14/testing), checks GTK/layer-shell versions before building, and upgrades
+  rustup toolchains older than 1.95. Debs declare `libgtk-4-1 (>= 4.18)` and
+  `libgtk4-layer-shell0 (>= 1.0)`; the PKGBUILD pins matching minimums.
+- **Toolchain** — Rust edition 2024, `rust-version = "1.95"` (workspace MSRV).
+- **Framework upgrades** — gtk4-rs 0.11 (`v4_18`), glib/gio/gdk-pixbuf 0.22,
+  gtk4-layer-shell 0.8, Smithay master (`79bbed5`), reqwest 0.13 (rustls + ring),
+  sysinfo 0.39, nix 0.31, quick-xml 0.42, png 0.18, fluent 0.17, gettext-rs 0.8,
+  xkbcommon 0.9, pipewire 0.10, directories 6. Deprecated GTK APIs replaced
+  (`compute_point`/`compute_bounds`, `gdk::MemoryTexture` for clipboard images,
+  `gio-unix` `DesktopAppInfo`).
+- **CI** — quality gate runs in a `debian:trixie` container (support floor);
+  release debs build in `ubuntu:26.04` and `debian:trixie` containers. The
+  `ubuntu24.04` deb and its bundled layer-shell are gone.
+
+### Fixed
+
+- **Cursor lag / lock-ups** — `bar.json` migration now converges and persists at
+  most once, instead of rewriting the file (and live-reloading the bar) every
+  second.
+- **Updater** — closing the window (Later or the title-bar close) no longer
+  crashes the edge bar; the Updates bar icon reappears after snooze expiry.
+
 ## [2026-09-21]
 
 ### Added

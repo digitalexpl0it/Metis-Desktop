@@ -53,7 +53,7 @@ fn overlay() -> Rc<RefCell<Toast>> {
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
         window.set_keyboard_mode(KeyboardMode::None);
-        window.set_namespace("metis-toast");
+        window.set_namespace(Some("metis-toast"));
         window.set_anchor(Edge::Top, true);
         window.set_anchor(Edge::Right, true);
         window.set_margin(Edge::Top, TOP_MARGIN);
@@ -134,10 +134,10 @@ pub fn show(note: &BarNotification) {
             count += 1;
             child = c.next_sibling();
         }
-        if count > MAX_TOASTS as i32 {
-            if let Some(first) = t.stack.first_child() {
-                t.stack.remove(&first);
-            }
+        if count > MAX_TOASTS as i32
+            && let Some(first) = t.stack.first_child()
+        {
+            t.stack.remove(&first);
         }
     }
 

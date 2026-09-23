@@ -2,6 +2,7 @@
 name = "metis-secrets"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Credential storage for Metis via the freedesktop Secret Service (oo7)"
 

@@ -87,11 +87,11 @@ impl WindowStateStore {
 
     fn save(&self) {
         let path = window_state_path();
-        if let Some(parent) = path.parent() {
-            if let Err(err) = std::fs::create_dir_all(parent) {
-                tracing::warn!(%err, "failed to create config dir for windows.json");
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            tracing::warn!(%err, "failed to create config dir for windows.json");
+            return;
         }
         match serde_json::to_string_pretty(self) {
             Ok(json) => {

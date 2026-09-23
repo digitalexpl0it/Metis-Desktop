@@ -14,7 +14,7 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::{Buffer as AllocBuffer, Fourcc, Modifier};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
-use smithay::backend::renderer::{buffer_type, Bind, BufferType, ExportMem, Offscreen, Texture};
+use smithay::backend::renderer::{Bind, BufferType, ExportMem, Offscreen, Texture, buffer_type};
 use smithay::output::{Output, WeakOutput};
 use smithay::reexports::wayland_server::protocol::{wl_buffer::WlBuffer, wl_shm};
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform};
@@ -27,7 +27,7 @@ use smithay::wayland::image_copy_capture::{
     BufferConstraints, CaptureFailureReason, DmabufConstraints, Frame, ImageCopyCaptureHandler,
     ImageCopyCaptureState, Session, SessionRef,
 };
-use smithay::wayland::shm::{with_buffer_contents, with_buffer_contents_mut, BufferAccessError};
+use smithay::wayland::shm::{BufferAccessError, with_buffer_contents, with_buffer_contents_mut};
 
 use crate::render::CLEAR_COLOR;
 use crate::state::MetisState;

@@ -16,7 +16,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use crate::config::{load_weather_config, TempUnit};
+use crate::config::{TempUnit, load_weather_config};
 
 const REFRESH_SECS: u64 = 15 * 60;
 /// Retry sooner than the normal refresh when a fetch fails (e.g. offline at
@@ -698,11 +698,7 @@ fn metno_symbol_to_code(symbol: &str) -> (i64, Option<bool>) {
     let code = if base.contains("thunder") {
         95
     } else if base.contains("snowshowers") {
-        if heavy {
-            86
-        } else {
-            85
-        }
+        if heavy { 86 } else { 85 }
     } else if base.contains("snow") {
         if heavy {
             75
@@ -713,11 +709,7 @@ fn metno_symbol_to_code(symbol: &str) -> (i64, Option<bool>) {
         }
     } else if base.contains("sleet") {
         // Freezing/mixed precip — closest WMO bucket is freezing rain.
-        if heavy {
-            67
-        } else {
-            66
-        }
+        if heavy { 67 } else { 66 }
     } else if base.contains("rainshowers") {
         if heavy {
             82
@@ -946,12 +938,12 @@ mod tests {
     #[test]
     fn detects_system_location_offline() {
         // This machine has tzdata; ensure offline detection yields coordinates.
-        if let Some(tz) = system_timezone() {
-            if let Some(geo) = tz_geo(&tz) {
-                assert!(geo.lat.abs() <= 90.0);
-                assert!(geo.lon.abs() <= 180.0);
-                eprintln!("detected: {} ({}, {})", geo.name, geo.lat, geo.lon);
-            }
+        if let Some(tz) = system_timezone()
+            && let Some(geo) = tz_geo(&tz)
+        {
+            assert!(geo.lat.abs() <= 90.0);
+            assert!(geo.lon.abs() <= 180.0);
+            eprintln!("detected: {} ({}, {})", geo.name, geo.lat, geo.lon);
         }
     }
 }

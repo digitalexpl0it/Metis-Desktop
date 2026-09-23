@@ -331,10 +331,10 @@ fn resolve_icon(entry: &DirEntry) -> gtk::Image {
         return gtk::Image::from_icon_name("folder");
     }
     if entry.is_desktop {
-        if let Some(info) = gio::DesktopAppInfo::from_filename(&entry.path) {
-            if let Some(icon) = AppInfoExt::icon(&info) {
-                return gtk::Image::from_gicon(&icon);
-            }
+        if let Some(info) = gio_unix::DesktopAppInfo::from_filename(&entry.path)
+            && let Some(icon) = AppInfoExt::icon(&info)
+        {
+            return gtk::Image::from_gicon(&icon);
         }
         return gtk::Image::from_icon_name("application-x-executable");
     }
@@ -343,12 +343,11 @@ fn resolve_icon(entry: &DirEntry) -> gtk::Image {
         "standard::icon",
         gio::FileQueryInfoFlags::NONE,
         None::<&gio::Cancellable>,
-    ) {
-        if let Some(icon) = info.icon() {
-            return gtk::Image::from_gicon(&icon);
-        }
+    ) && let Some(icon) = info.icon()
+    {
+        return gtk::Image::from_gicon(&icon);
     }
-    let (ctype, _) = gio::content_type_guess(Some(entry.path.as_os_str()), &[]);
+    let (ctype, _) = gio::content_type_guess(Some(entry.path.as_os_str()), None);
     gtk::Image::from_gicon(&gio::content_type_get_icon(&ctype))
 }
 
@@ -365,7 +364,7 @@ fn open_path(path: &Path, is_dir: bool, is_desktop: bool) {
 }
 
 fn launch_desktop_file(path: &Path) {
-    let Some(info) = gio::DesktopAppInfo::from_filename(path) else {
+    let Some(info) = gio_unix::DesktopAppInfo::from_filename(path) else {
         tracing::warn!(path = %path.display(), "not a valid .desktop file");
         open_with_default(path);
         return;
@@ -543,14 +542,13 @@ fn attach_background_menu_flow(flow: &gtk::FlowBox, parent_dir: Rc<PathBuf>) {
         let Some(flow) = flow_weak.upgrade() else {
             return;
         };
-        if let Some(child) = flow.child_at_pos(x as i32, y as i32) {
-            if child
+        if let Some(child) = flow.child_at_pos(x as i32, y as i32)
+            && child
                 .child()
                 .and_then(|c| c.downcast::<gtk::Button>().ok())
                 .is_some()
-            {
-                return;
-            }
+        {
+            return;
         }
         show_background_menu(flow.upcast_ref::<gtk::Widget>(), &parent_dir, x, y);
         gesture.set_state(gtk::EventSequenceState::Claimed);
@@ -822,15 +820,15 @@ fn toast_error(message: &str) {
 
 fn expand_path(raw: &str) -> PathBuf {
     let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed == "~/Desktop" || trimmed == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join("Desktop");
-        }
+    if (trimmed.is_empty() || trimmed == "~/Desktop" || trimmed == "~")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join("Desktop");
     }
-    if let Some(rest) = trimmed.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
+    if let Some(rest) = trimmed.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest);
     }
     PathBuf::from(trimmed)
 }

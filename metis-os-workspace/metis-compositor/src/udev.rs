@@ -15,46 +15,45 @@ use input::DeviceCapability;
 use smithay::{
     backend::{
         allocator::{
+            Fourcc,
             format::FormatSet,
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
-            Fourcc,
         },
         drm::{
+            DrmDevice, DrmDeviceFd, DrmEvent, DrmEventMetadata, DrmEventTime, DrmNode, DrmSurface,
+            NodeType,
             compositor::FrameFlags,
             exporter::gbm::{GbmFramebufferExporter, NodeFilter},
             output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements},
-            DrmDevice, DrmDeviceFd, DrmEvent, DrmEventMetadata, DrmEventTime, DrmNode, DrmSurface,
-            NodeType,
         },
         egl::{EGLDevice, EGLDisplay},
         input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
+            ImportDma, ImportEgl, ImportMemWl,
             element::{
-                default_primary_scanout_output_compare,
+                Kind, RenderElementStates, default_primary_scanout_output_compare,
                 memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
                 utils::select_dmabuf_feedback,
-                Kind, RenderElementStates,
             },
             gles::GlesRenderer,
-            multigpu::{gbm::GbmGlesBackend, GpuManager},
-            ImportDma, ImportEgl, ImportMemWl,
+            multigpu::{GpuManager, gbm::GbmGlesBackend},
         },
-        session::{libseat::LibSeatSession, Event as SessionEvent, Session},
-        udev::{all_gpus, primary_gpu, UdevBackend, UdevEvent},
+        session::{Event as SessionEvent, Session, libseat::LibSeatSession},
+        udev::{UdevBackend, UdevEvent, all_gpus, primary_gpu},
     },
     desktop::utils::{
-        surface_presentation_feedback_flags_from_states, surface_primary_scanout_output,
-        update_surface_primary_scanout_output, OutputPresentationFeedback,
+        OutputPresentationFeedback, surface_presentation_feedback_flags_from_states,
+        surface_primary_scanout_output, update_surface_primary_scanout_output,
     },
     input::pointer::CursorImageStatus,
     output::{Mode as WlMode, Output, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{
-            timer::{TimeoutAction, Timer},
             EventLoop, LoopHandle, RegistrationToken,
+            timer::{TimeoutAction, Timer},
         },
-        drm::control::{connector, crtc, Device as DrmControlDevice, Mode},
+        drm::control::{Device as DrmControlDevice, Mode, connector, crtc},
         input::Libinput,
         rustix::fs::OFlags,
         wayland_protocols::wp::{
@@ -69,7 +68,7 @@ use smithay::{
             DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState,
             ImportNotifier,
         },
-        drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjState},
+        drm_syncobj::{DrmSyncobjState, supports_syncobj_eventfd},
         presentation::{PresentationState, Refresh},
     },
 };
@@ -80,7 +79,7 @@ use smithay_drm_extras::{
 use xcursor::parser::Image as XCursorImage;
 
 use crate::night_light::RenderTargetInfo;
-use crate::render::{OutputStack, CLEAR_COLOR};
+use crate::render::{CLEAR_COLOR, OutputStack};
 use crate::state::MetisState;
 
 /// Color formats we ask the DRM compositor to consider, in preference order:
@@ -358,28 +357,28 @@ pub fn init_udev(
 
     // 4. dmabuf global from the primary renderer's formats so EGL/GPU clients
     //    (GTK) can submit hardware buffers; also bind wl_drm for legacy EGL.
-    if let Some(gpus) = udev.gpus.as_mut() {
-        if let Ok(mut renderer) = gpus.single_renderer(&udev.render_node) {
-            let renderer = renderer.as_mut();
-            if let Err(err) = renderer.bind_wl_display(&state.display_handle) {
-                tracing::info!(?err, "wl_drm (EGL) bind unavailable");
-            }
-            let dmabuf_formats = renderer.dmabuf_formats();
-            udev.capture_dmabuf_formats = dmabuf_formats.clone();
-            if let Ok(default_feedback) =
-                DmabufFeedbackBuilder::new(udev.render_node.dev_id(), dmabuf_formats).build()
-            {
-                let mut dmabuf_state = DmabufState::new();
-                let global = dmabuf_state.create_global_with_default_feedback::<MetisState>(
-                    &state.display_handle,
-                    &default_feedback,
-                );
-                udev.dmabuf_state = Some((dmabuf_state, global));
-                tracing::info!("dmabuf global created");
-            }
-            let shm_formats = renderer.shm_formats();
-            state.shm_state.update_formats(shm_formats);
+    if let Some(gpus) = udev.gpus.as_mut()
+        && let Ok(mut renderer) = gpus.single_renderer(&udev.render_node)
+    {
+        let renderer = renderer.as_mut();
+        if let Err(err) = renderer.bind_wl_display(&state.display_handle) {
+            tracing::info!(?err, "wl_drm (EGL) bind unavailable");
         }
+        let dmabuf_formats = renderer.dmabuf_formats();
+        udev.capture_dmabuf_formats = dmabuf_formats.clone();
+        if let Ok(default_feedback) =
+            DmabufFeedbackBuilder::new(udev.render_node.dev_id(), dmabuf_formats).build()
+        {
+            let mut dmabuf_state = DmabufState::new();
+            let global = dmabuf_state.create_global_with_default_feedback::<MetisState>(
+                &state.display_handle,
+                &default_feedback,
+            );
+            udev.dmabuf_state = Some((dmabuf_state, global));
+            tracing::info!("dmabuf global created");
+        }
+        let shm_formats = renderer.shm_formats();
+        state.shm_state.update_formats(shm_formats);
     }
 
     // 5. libinput: feed real input devices into the shared, backend-agnostic
@@ -395,14 +394,13 @@ pub fn init_udev(
     loop_handle
         .insert_source(libinput_backend, move |mut event, _, state| {
             if let InputEvent::DeviceAdded { device } = &mut event {
-                if device.has_capability(DeviceCapability::Keyboard) {
-                    if let Some(led_state) = state
+                if device.has_capability(DeviceCapability::Keyboard)
+                    && let Some(led_state) = state
                         .seat
                         .get_keyboard()
                         .map(|keyboard| keyboard.led_state())
-                    {
-                        device.led_update(led_state.into());
-                    }
+                {
+                    device.led_update(led_state.into());
                 }
                 if device.has_capability(DeviceCapability::Touch) {
                     state.ensure_touch_device();
@@ -610,10 +608,10 @@ fn gpu_has_connected_output(node: DrmNode) -> bool {
         if !name.starts_with(&format!("{card}-")) {
             continue;
         }
-        if let Ok(status) = std::fs::read_to_string(entry.path().join("status")) {
-            if status.trim() == "connected" {
-                return true;
-            }
+        if let Ok(status) = std::fs::read_to_string(entry.path().join("status"))
+            && status.trim() == "connected"
+        {
+            return true;
         }
     }
     false
@@ -727,8 +725,10 @@ fn build_surface_dmabuf_feedback(
     let scanout_feedback = builder
         .add_preference_tranche(
             surface.device_fd().dev_id().ok()?,
-            Some(TrancheFlags::Scanout),
+            TrancheFlags::Scanout,
             planes_formats,
+            // Feedback (and so scanout tranches) exists from dmabuf v4.
+            4u32..=6,
         )
         .build()
         .ok()?;
@@ -820,7 +820,7 @@ fn render_local_output_frame(
                 "HDR client content visible — skipping SDR→HDR encode (pass-through)"
             );
         }
-        if let Some(pass) = crate::output_colour::apply_colour_post_pass(
+        match crate::output_colour::apply_colour_post_pass(
             &mut state.color_lut,
             &mut state.hdr_encode,
             renderer,
@@ -832,9 +832,8 @@ fn render_local_output_frame(
             hdr_transfer,
             passthrough,
         ) {
-            (pass.elements, pass.clear)
-        } else {
-            (elements, CLEAR_COLOR)
+            Some(pass) => (pass.elements, pass.clear),
+            _ => (elements, CLEAR_COLOR),
         }
     };
 
@@ -1220,12 +1219,12 @@ impl MetisState {
         }
         // While a portal screencast holds an image-copy session, keep repainting
         // so capture frames are produced even when the desktop is visually static.
-        if self.image_capture.screencast_active() || self.image_capture.has_pending() {
-            if let Some(udev) = self.udev.as_mut() {
-                for surface in udev.surfaces_mut() {
-                    if !surface.user_disabled {
-                        surface.pending = true;
-                    }
+        if (self.image_capture.screencast_active() || self.image_capture.has_pending())
+            && let Some(udev) = self.udev.as_mut()
+        {
+            for surface in udev.surfaces_mut() {
+                if !surface.user_disabled {
+                    surface.pending = true;
                 }
             }
         }
@@ -1563,40 +1562,38 @@ impl MetisState {
                     });
                     self.send_layer_frames(&out, now);
 
-                    if let Some(states) = frame_states.as_ref() {
-                        if self.output_scanout_promoted(&out, states) {
-                            tracing::trace!(
-                                output = %out.name(),
-                                scanout_promoted = true,
-                                "direct primary-plane scanout"
-                            );
-                        }
+                    if let Some(states) = frame_states.as_ref()
+                        && self.output_scanout_promoted(&out, states)
+                    {
+                        tracing::trace!(
+                            output = %out.name(),
+                            scanout_promoted = true,
+                            "direct primary-plane scanout"
+                        );
                     }
 
                     // Per-surface dmabuf feedback: tell a surface that was scanned
                     // out directly (a fullscreen game on the primary plane) to keep
                     // allocating scannable buffers; everyone else gets the render
                     // feedback. Requires the render states captured this frame.
-                    if let Some(states) = frame_states.as_ref() {
-                        if let Some(udev) = self.udev.as_ref() {
-                            if let Some(feedback) =
-                                udev.surface(id).and_then(|s| s.dmabuf_feedback.as_ref())
-                            {
-                                for window in self.space.elements() {
-                                    window.send_dmabuf_feedback(
-                                        &out,
-                                        surface_primary_scanout_output,
-                                        |surface, _| {
-                                            select_dmabuf_feedback(
-                                                surface,
-                                                states,
-                                                &feedback.render_feedback,
-                                                &feedback.scanout_feedback,
-                                            )
-                                        },
-                                    );
-                                }
-                            }
+                    if let Some(states) = frame_states.as_ref()
+                        && let Some(udev) = self.udev.as_ref()
+                        && let Some(feedback) =
+                            udev.surface(id).and_then(|s| s.dmabuf_feedback.as_ref())
+                    {
+                        for window in self.space.elements() {
+                            window.send_dmabuf_feedback(
+                                &out,
+                                surface_primary_scanout_output,
+                                |surface, _| {
+                                    select_dmabuf_feedback(
+                                        surface,
+                                        states,
+                                        &feedback.render_feedback,
+                                        &feedback.scanout_feedback,
+                                    )
+                                },
+                            );
                         }
                     }
                 }
@@ -1772,10 +1769,10 @@ impl MetisState {
             SessionEvent::ActivateSession => {
                 tracing::info!("session resumed");
                 if let Some(udev) = self.udev.as_mut() {
-                    if let Some(li) = udev.libinput.as_mut() {
-                        if let Err(err) = li.resume() {
-                            tracing::warn!(?err, "failed to resume libinput");
-                        }
+                    if let Some(li) = udev.libinput.as_mut()
+                        && let Err(err) = li.resume()
+                    {
+                        tracing::warn!(?err, "failed to resume libinput");
                     }
                     for backend in udev.backends.values_mut() {
                         if let Err(err) = backend.drm_output_manager.lock().activate(false) {
@@ -1809,10 +1806,10 @@ impl MetisState {
             tracing::warn!(vt, "refusing VT switch while session is locked");
             return;
         }
-        if let Some(udev) = self.udev.as_mut() {
-            if let Err(err) = udev.session.change_vt(vt) {
-                tracing::warn!(?err, vt, "failed to change VT");
-            }
+        if let Some(udev) = self.udev.as_mut()
+            && let Err(err) = udev.session.change_vt(vt)
+        {
+            tracing::warn!(?err, vt, "failed to change VT");
         }
     }
 

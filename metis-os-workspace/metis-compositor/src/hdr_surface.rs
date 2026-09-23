@@ -13,8 +13,8 @@
 //! Requires `METIS_COLOR_MGMT=1` (or default-on after upstream wayland-rs fix)
 //! for clients to advertise descriptions.
 
-use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::wayland::seat::WaylandFocus;
 
 use crate::color_management::NamedTransferFunction;

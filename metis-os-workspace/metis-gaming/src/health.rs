@@ -5,10 +5,10 @@ use std::path::Path;
 use metis_config::load_gaming_config;
 
 use crate::detect::{
-    binary_in_path, detect_steam, flatpak_has_app, gamemode_installed, hybrid_gpu_summary,
-    i386_vulkan_likely_missing, mark_nvidia_reboot_required, mesa_vulkan_amd64_missing,
-    nvidia_driver_loaded, nvidia_gpu_present, nvidia_reboot_required, pipewire_or_pulse_available,
-    steam_devices_installed, user_in_input_group, SteamInstall,
+    SteamInstall, binary_in_path, detect_steam, flatpak_has_app, gamemode_installed,
+    hybrid_gpu_summary, i386_vulkan_likely_missing, mark_nvidia_reboot_required,
+    mesa_vulkan_amd64_missing, nvidia_driver_loaded, nvidia_gpu_present, nvidia_reboot_required,
+    pipewire_or_pulse_available, steam_devices_installed, user_in_input_group,
 };
 use crate::flatpak::{flatpak_steam_needs_optimize, optimize_flatpak_gaming};
 
@@ -330,12 +330,12 @@ fn metis_remote_bin() -> String {
     if Path::new(INSTALLED).is_file() {
         return INSTALLED.into();
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("metis-remote");
-            if sibling.is_file() {
-                return sibling.to_string_lossy().into_owned();
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join("metis-remote");
+        if sibling.is_file() {
+            return sibling.to_string_lossy().into_owned();
         }
     }
     "metis-remote".into()

@@ -52,9 +52,9 @@ mod workspace_thumb;
 mod xwayland;
 
 use smithay::reexports::{calloop::EventLoop, wayland_server::Display};
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
 
 use crate::state::MetisState;
 
@@ -138,11 +138,7 @@ fn select_backend() -> Backend {
     }
     let nested =
         std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
-    if nested {
-        Backend::Winit
-    } else {
-        Backend::Drm
-    }
+    if nested { Backend::Winit } else { Backend::Drm }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -347,10 +343,10 @@ fn update_standalone_activation_env(display: &str) {
     if let Some(gtk_theme) = metis_config::appearance_gtk_theme_env(theme_mode) {
         vars.push(format!("GTK_THEME={gtk_theme}"));
     }
-    if let Ok(session_id) = std::env::var("XDG_SESSION_ID") {
-        if !session_id.is_empty() {
-            vars.push(format!("XDG_SESSION_ID={session_id}"));
-        }
+    if let Ok(session_id) = std::env::var("XDG_SESSION_ID")
+        && !session_id.is_empty()
+    {
+        vars.push(format!("XDG_SESSION_ID={session_id}"));
     }
     let refs: Vec<&str> = vars.iter().map(String::as_str).collect();
     push_activation_environment(&refs);
@@ -396,22 +392,25 @@ fn start_portal_stack(wayland_display: String) {
 fn start_portal_watchdog(wayland_display: String) {
     std::thread::Builder::new()
         .name("metis-portal-watchdog".into())
-        .spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(8));
-            if std::env::var_os("METIS_NO_PORTAL").is_some() {
-                continue;
+        .spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(8));
+                if std::env::var_os("METIS_NO_PORTAL").is_some() {
+                    continue;
+                }
+                let portal_ok =
+                    session_bus_name_active("org.freedesktop.impl.portal.desktop.metis");
+                let screencast_ok = session_bus_name_active("org.gnome.Mutter.ScreenCast");
+                if portal_ok && screencast_ok {
+                    continue;
+                }
+                tracing::warn!(
+                    portal_ok,
+                    screencast_ok,
+                    "metis-portal D-Bus services missing — respawning"
+                );
+                spawn_metis_portal(&wayland_display);
             }
-            let portal_ok = session_bus_name_active("org.freedesktop.impl.portal.desktop.metis");
-            let screencast_ok = session_bus_name_active("org.gnome.Mutter.ScreenCast");
-            if portal_ok && screencast_ok {
-                continue;
-            }
-            tracing::warn!(
-                portal_ok,
-                screencast_ok,
-                "metis-portal D-Bus services missing — respawning"
-            );
-            spawn_metis_portal(&wayland_display);
         })
         .expect("spawn portal watchdog thread");
 }
@@ -672,16 +671,18 @@ fn start_polkit_agent_watchdog() {
     }
     std::thread::Builder::new()
         .name("metis-polkit-watchdog".into())
-        .spawn(|| loop {
-            std::thread::sleep(std::time::Duration::from_secs(10));
-            if std::env::var_os("METIS_NO_POLKIT_AGENT").is_some() {
-                continue;
+        .spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                if std::env::var_os("METIS_NO_POLKIT_AGENT").is_some() {
+                    continue;
+                }
+                if metis_polkit_agent_running() {
+                    continue;
+                }
+                tracing::warn!("metis-polkit-agent missing — respawning");
+                ensure_polkit_agent();
             }
-            if metis_polkit_agent_running() {
-                continue;
-            }
-            tracing::warn!("metis-polkit-agent missing — respawning");
-            ensure_polkit_agent();
         })
         .expect("spawn polkit agent watchdog");
 }

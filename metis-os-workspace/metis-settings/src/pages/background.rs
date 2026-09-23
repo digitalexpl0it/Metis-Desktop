@@ -17,8 +17,8 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::pages::appearance_common::{
-    color_dialog_button, current_wallpaper, hex_to_rgba, list_wallpaper_sections, rgba_to_hex,
-    WallpaperSection,
+    WallpaperSection, color_dialog_button, current_wallpaper, hex_to_rgba, list_wallpaper_sections,
+    rgba_to_hex,
 };
 use crate::{runtime, ui};
 use metis_i18n::tr;
@@ -751,8 +751,8 @@ impl WallpaperBrowser {
             self.root.remove(&child);
         }
         self.page_widgets.borrow_mut().clear();
-        let gen = self.load_gen.get().wrapping_add(1);
-        self.load_gen.set(gen);
+        let r#gen = self.load_gen.get().wrapping_add(1);
+        self.load_gen.set(r#gen);
 
         let filters = self.available_filters();
         if filters.len() > 2 {
@@ -837,9 +837,9 @@ impl WallpaperBrowser {
         self.root.append(&flow);
 
         for path in pending {
-            self.queue_thumb_load(path, gen);
+            self.queue_thumb_load(path, r#gen);
         }
-        self.preload_adjacent(page, pages, &filtered, gen);
+        self.preload_adjacent(page, pages, &filtered, r#gen);
 
         if total == 0 {
             let empty = gtk::Label::new(Some(&tr("No pictures found. Add one above.")));
@@ -897,7 +897,7 @@ impl WallpaperBrowser {
         }
     }
 
-    fn queue_thumb_load(self: &Rc<Self>, path: PathBuf, gen: u64) {
+    fn queue_thumb_load(self: &Rc<Self>, path: PathBuf, r#gen: u64) {
         if self.thumb_cache.borrow().contains_key(&path) {
             self.apply_thumb(&path);
             // Still warm the compositor RGBA cache in the background so a click
@@ -909,7 +909,7 @@ impl WallpaperBrowser {
         let tx = self.thumb_tx.clone();
         std::thread::spawn(move || {
             if let Ok(png) = decode_thumb_png(&path) {
-                let _ = tx.send((path.clone(), png, gen));
+                let _ = tx.send((path.clone(), png, r#gen));
             }
             warm_wallpaper_rgba_cache(&path);
         });
@@ -918,7 +918,7 @@ impl WallpaperBrowser {
     fn drain_loaded_thumbs(&self) {
         loop {
             let next = self.thumb_rx.borrow().try_recv();
-            let Ok((path, png, gen)) = next else {
+            let Ok((path, png, r#gen)) = next else {
                 break;
             };
             let bytes = glib::Bytes::from_owned(png);
@@ -926,7 +926,7 @@ impl WallpaperBrowser {
                 continue;
             };
             self.thumb_cache.borrow_mut().insert(path.clone(), texture);
-            if self.load_gen.get() == gen {
+            if self.load_gen.get() == r#gen {
                 self.apply_thumb(&path);
             }
         }
@@ -951,7 +951,7 @@ impl WallpaperBrowser {
         page: usize,
         pages: usize,
         filtered: &[(WallpaperSection, PathBuf)],
-        gen: u64,
+        r#gen: u64,
     ) {
         let mut warm = Vec::new();
         for adj in [page.checked_sub(1), Some(page + 1)].into_iter().flatten() {
@@ -970,7 +970,7 @@ impl WallpaperBrowser {
             }
         }
         for path in warm {
-            self.queue_thumb_load(path, gen);
+            self.queue_thumb_load(path, r#gen);
         }
     }
 }

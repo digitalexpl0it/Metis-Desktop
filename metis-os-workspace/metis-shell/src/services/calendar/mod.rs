@@ -18,14 +18,14 @@ pub use provider::EventProvider;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::OnceLock;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Days, Local, TimeZone};
 
-use crate::config::{load_calendars_config, AccountKind};
+use crate::config::{AccountKind, load_calendars_config};
 
 use caldav::CalDavProvider;
 use local::LocalProvider;
@@ -123,10 +123,10 @@ fn service_loop(
                 save_dismissed(&dismissed);
             }
             Ok(CalCommand::Delete(id)) => {
-                if let Some(event) = cache.iter().find(|e| e.id == id).cloned() {
-                    if let Err(e) = rt.block_on(delete_event(&providers, &event)) {
-                        tracing::warn!(error = %e, "calendar delete failed");
-                    }
+                if let Some(event) = cache.iter().find(|e| e.id == id).cloned()
+                    && let Err(e) = rt.block_on(delete_event(&providers, &event))
+                {
+                    tracing::warn!(error = %e, "calendar delete failed");
                 }
                 cache = do_refresh(rt, &providers, since, until);
                 last_full = Instant::now();
@@ -177,13 +177,13 @@ fn watch_signature() -> u64 {
     let mut sig = 0u64;
     if let Ok(entries) = std::fs::read_dir(local_dir()) {
         for entry in entries.flatten() {
-            if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
-                if let Ok(d) = modified.duration_since(std::time::UNIX_EPOCH) {
-                    sig = sig
-                        .wrapping_mul(31)
-                        .wrapping_add(d.as_secs())
-                        .wrapping_add(u64::from(d.subsec_nanos()));
-                }
+            if let Ok(modified) = entry.metadata().and_then(|m| m.modified())
+                && let Ok(d) = modified.duration_since(std::time::UNIX_EPOCH)
+            {
+                sig = sig
+                    .wrapping_mul(31)
+                    .wrapping_add(d.as_secs())
+                    .wrapping_add(u64::from(d.subsec_nanos()));
             }
         }
     }

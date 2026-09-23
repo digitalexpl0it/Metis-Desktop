@@ -102,10 +102,10 @@ pub fn wallpaper_config_path() -> PathBuf {
 
 pub fn load_wallpaper_config() -> WallpaperConfig {
     let path = wallpaper_config_path();
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(cfg) = serde_json::from_str(&text) {
-            return cfg;
-        }
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(cfg) = serde_json::from_str(&text)
+    {
+        return cfg;
     }
     WallpaperConfig::default()
 }
@@ -243,26 +243,26 @@ pub fn bundled_wallpaper_dirs() -> Vec<PathBuf> {
         PathBuf::from("/usr/local/share/metis/wallpapers"),
         &mut dirs,
     );
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            for rel in ["../share/metis/wallpapers", "../../share/metis/wallpapers"] {
-                push(parent.join(rel), &mut dirs);
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        for rel in ["../share/metis/wallpapers", "../../share/metis/wallpapers"] {
+            push(parent.join(rel), &mut dirs);
         }
     }
     // Dev / uninstalled: workspace assets + exe-relative asset trees.
     if dirs.is_empty() {
         push(bundled_wallpaper_dir(), &mut dirs);
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                for rel in [
-                    "assets/wallpapers",
-                    "../assets/wallpapers",
-                    "../../assets/wallpapers",
-                    "../../../assets/wallpapers",
-                ] {
-                    push(parent.join(rel), &mut dirs);
-                }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(parent) = exe.parent()
+        {
+            for rel in [
+                "assets/wallpapers",
+                "../assets/wallpapers",
+                "../../assets/wallpapers",
+                "../../../assets/wallpapers",
+            ] {
+                push(parent.join(rel), &mut dirs);
             }
         }
     }
@@ -387,10 +387,10 @@ pub fn default_wallpaper_path() -> Option<PathBuf> {
 /// Parse a `#rrggbb` hex colour into an RGB triplet, falling back to black.
 pub fn parse_hex_rgb(hex: &str) -> [u8; 3] {
     let h = hex.trim().trim_start_matches('#');
-    if h.len() == 6 {
-        if let Ok(v) = u32::from_str_radix(h, 16) {
-            return [(v >> 16) as u8, (v >> 8) as u8, v as u8];
-        }
+    if h.len() == 6
+        && let Ok(v) = u32::from_str_radix(h, 16)
+    {
+        return [(v >> 16) as u8, (v >> 8) as u8, v as u8];
     }
     [0, 0, 0]
 }

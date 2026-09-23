@@ -83,10 +83,10 @@ fn yubico_usb_present(usb_devices: &Path) -> bool {
     };
     for entry in entries.flatten() {
         let vendor = entry.path().join("idVendor");
-        if let Ok(text) = std::fs::read_to_string(&vendor) {
-            if text.trim().eq_ignore_ascii_case(YUBICO_VENDOR) {
-                return true;
-            }
+        if let Ok(text) = std::fs::read_to_string(&vendor)
+            && text.trim().eq_ignore_ascii_case(YUBICO_VENDOR)
+        {
+            return true;
         }
     }
     false

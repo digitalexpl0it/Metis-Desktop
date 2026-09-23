@@ -261,10 +261,10 @@ fn read_solaar_batteries() -> HashMap<String, DeviceBattery> {
             current = Some(line.trim().to_ascii_lowercase());
             continue;
         }
-        if let Some(rest) = line.trim().strip_prefix("Battery:") {
-            if let Some(name) = &current {
-                map.insert(name.clone(), parse_solaar_battery(rest));
-            }
+        if let Some(rest) = line.trim().strip_prefix("Battery:")
+            && let Some(name) = &current
+        {
+            map.insert(name.clone(), parse_solaar_battery(rest));
         }
     }
     map
@@ -276,10 +276,10 @@ fn parse_solaar_battery(rest: &str) -> DeviceBattery {
     let mut segs = rest.split(',');
     if let Some(level) = segs.next() {
         let level = level.trim().trim_end_matches('.');
-        if let Some(pct) = level.strip_suffix('%') {
-            if let Ok(v) = pct.trim().parse::<f32>() {
-                batt.percent = Some(v.round().clamp(0.0, 100.0) as u8);
-            }
+        if let Some(pct) = level.strip_suffix('%')
+            && let Ok(v) = pct.trim().parse::<f32>()
+        {
+            batt.percent = Some(v.round().clamp(0.0, 100.0) as u8);
         }
     }
     if let Some(status) = segs.next() {
@@ -333,12 +333,11 @@ fn run_with_timeout(bin: &str, args: &[&str], timeout: Duration) -> String {
 /// then fall back to decoding the `0xNN` hex value, then a bare integer.
 fn parse_battery_percentage(field: &str) -> Option<u8> {
     let field = field.trim();
-    if let (Some(start), Some(end)) = (field.find('('), field.find(')')) {
-        if start < end {
-            if let Ok(v) = field[start + 1..end].trim().parse::<u16>() {
-                return Some(v.min(100) as u8);
-            }
-        }
+    if let (Some(start), Some(end)) = (field.find('('), field.find(')'))
+        && start < end
+        && let Ok(v) = field[start + 1..end].trim().parse::<u16>()
+    {
+        return Some(v.min(100) as u8);
     }
     let token = field.split_whitespace().next()?;
     if let Some(hex) = token

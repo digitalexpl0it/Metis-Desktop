@@ -3,11 +3,11 @@
 //! Sandbox-friendly apps read `power-saver-enabled` via GIO's PowerProfileMonitor.
 //! Metis mirrors the active profile from `powerprofilesctl`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use zbus::{interface, Connection};
+use zbus::{Connection, interface};
 
 const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
 

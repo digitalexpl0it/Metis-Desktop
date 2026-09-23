@@ -28,6 +28,13 @@
   src,
 }:
 
+assert lib.assertMsg (lib.versionAtLeast rustPlatform.rust.rustc.version "1.95")
+  "metis-desktop needs rustc >= 1.95 (workspace rust-version); use a newer nixpkgs";
+assert lib.assertMsg (lib.versionAtLeast gtk4.version "4.18")
+  "metis-desktop needs GTK >= 4.18 (gtk4-rs feature v4_18)";
+assert lib.assertMsg (lib.versionAtLeast gtk4-layer-shell.version "1.0")
+  "metis-desktop needs gtk4-layer-shell >= 1.0";
+
 rustPlatform.buildRustPackage rec {
   pname = "metis-desktop";
   version = "0.1.0.12";

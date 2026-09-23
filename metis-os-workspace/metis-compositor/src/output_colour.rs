@@ -5,16 +5,16 @@
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
 use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
 use smithay::backend::renderer::gles::element::TextureShaderElement;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture, Uniform};
 use smithay::backend::renderer::{Bind, Offscreen};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::color_lut::ColorLutRuntime;
-use crate::hdr_encode::{HdrEncodeRuntime, HdrTransfer, HDR_CLEAR, REFERENCE_WHITE_NITS};
-use crate::render::{OutputStack, CLEAR_COLOR};
+use crate::hdr_encode::{HDR_CLEAR, HdrEncodeRuntime, HdrTransfer, REFERENCE_WHITE_NITS};
+use crate::render::{CLEAR_COLOR, OutputStack};
 
 /// Result of the colour post-pass ready for `render_frame`.
 pub struct ColourPassResult {
@@ -55,10 +55,10 @@ pub fn apply_colour_post_pass(
     let size_buf: Size<i32, Buffer> = Size::from((size.w, size.h));
     let mut scene = composite_offscreen(renderer, elements, size, scale, size_buf)?;
 
-    if wants_lut {
-        if let Some(mapped) = lut_runtime.apply(renderer, output_name, scene.clone(), size_buf) {
-            scene = mapped;
-        }
+    if wants_lut
+        && let Some(mapped) = lut_runtime.apply(renderer, output_name, scene.clone(), size_buf)
+    {
+        scene = mapped;
     }
 
     if wants_hdr_encode {

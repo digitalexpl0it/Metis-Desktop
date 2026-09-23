@@ -388,13 +388,13 @@ pub fn menu_config_path() -> PathBuf {
 
 pub fn load_menu_config() -> MenuConfig {
     let path = menu_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str::<MenuConfig>(&text) {
-                return cfg;
-            }
-            tracing::warn!("menu.json parse failed — using defaults");
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+    {
+        if let Ok(cfg) = serde_json::from_str::<MenuConfig>(&text) {
+            return cfg;
         }
+        tracing::warn!("menu.json parse failed — using defaults");
     }
     MenuConfig::default()
 }
@@ -412,10 +412,10 @@ pub fn resolve_executable(
     env_var: &str,
     known: &[(&str, &str)],
 ) -> Option<String> {
-    if let Some(c) = chosen.map(str::trim).filter(|s| !s.is_empty()) {
-        if binary_in_path(c) {
-            return Some(c.to_string());
-        }
+    if let Some(c) = chosen.map(str::trim).filter(|s| !s.is_empty())
+        && binary_in_path(c)
+    {
+        return Some(c.to_string());
     }
     if let Ok(v) = std::env::var(env_var) {
         let v = v.trim();

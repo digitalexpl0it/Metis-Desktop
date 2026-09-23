@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 
-use crate::config::{Alarm, ALARM_SOUNDS};
+use crate::config::{ALARM_SOUNDS, Alarm};
 
 use super::Store;
 
@@ -280,11 +280,7 @@ impl Inner {
     fn bump_hour(&self, up: bool) {
         let v = self.hour12.get();
         let next = if up {
-            if v >= 12 {
-                1
-            } else {
-                v + 1
-            }
+            if v >= 12 { 1 } else { v + 1 }
         } else if v <= 1 {
             12
         } else {

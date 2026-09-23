@@ -121,7 +121,7 @@ fn entry_from_info(info: gio::AppInfo) -> Option<AppEntry> {
         return None;
     }
 
-    let desktop = info.downcast_ref::<gio::DesktopAppInfo>();
+    let desktop = info.downcast_ref::<gio_unix::DesktopAppInfo>();
     let keywords = desktop
         .map(|desktop| {
             desktop
@@ -356,10 +356,10 @@ pub const FALLBACK_ICON_NAME: &str = "application-x-executable-symbolic";
 /// Paint the best available icon for `entry` onto `image` at `size` pixels.
 pub fn set_app_icon(image: &gtk::Image, entry: &AppEntry, size: i32) {
     image.set_pixel_size(size);
-    if let Some(icon) = &entry.icon {
-        if paint_gicon(image, icon, size) {
-            return;
-        }
+    if let Some(icon) = &entry.icon
+        && paint_gicon(image, icon, size)
+    {
+        return;
     }
     if entry
         .id
@@ -370,14 +370,14 @@ pub fn set_app_icon(image: &gtk::Image, entry: &AppEntry, size: i32) {
     {
         return;
     }
-    image.set_from_icon_name(Some(FALLBACK_ICON_NAME));
+    image.set_icon_name(Some(FALLBACK_ICON_NAME));
 }
 
 fn paint_gicon(image: &gtk::Image, icon: &gio::Icon, size: i32) -> bool {
-    if let Some(file_icon) = icon.downcast_ref::<gio::FileIcon>() {
-        if let Some(path) = file_icon.file().path() {
-            return paint_file_icon(image, Some(path));
-        }
+    if let Some(file_icon) = icon.downcast_ref::<gio::FileIcon>()
+        && let Some(path) = file_icon.file().path()
+    {
+        return paint_file_icon(image, Some(path));
     }
     if let Some(themed) = icon.downcast_ref::<gio::ThemedIcon>() {
         let names: Vec<String> = themed
@@ -417,7 +417,7 @@ fn paint_themed_names(image: &gtk::Image, names: &[String], size: i32) -> bool {
             gtk::TextDirection::Ltr,
             gtk::IconLookupFlags::empty(),
         );
-        image.set_from_paintable(Some(&paintable));
+        image.set_paintable(Some(&paintable));
         return true;
     }
     false
@@ -429,7 +429,7 @@ fn paint_file_icon(image: &gtk::Image, path: Option<std::path::PathBuf>) -> bool
     };
     match gtk::gdk::Texture::from_filename(&path) {
         Ok(texture) => {
-            image.set_from_paintable(Some(&texture));
+            image.set_paintable(Some(&texture));
             true
         }
         Err(err) => {
@@ -540,17 +540,17 @@ fn app_id_launch_aliases(id: &str) -> Vec<String> {
         }
         _ => {}
     }
-    if let Some(base) = lower.strip_suffix("-server") {
-        if !base.is_empty() {
-            out.push(format!("{base}.desktop"));
-            out.push(base.to_string());
-        }
+    if let Some(base) = lower.strip_suffix("-server")
+        && !base.is_empty()
+    {
+        out.push(format!("{base}.desktop"));
+        out.push(base.to_string());
     }
     out
 }
 
 fn entry_from_desktop_candidate(candidate: &str) -> Option<AppEntry> {
-    let info = gio::DesktopAppInfo::new(candidate)?;
+    let info = gio_unix::DesktopAppInfo::new(candidate)?;
     entry_from_info(info.upcast())
 }
 

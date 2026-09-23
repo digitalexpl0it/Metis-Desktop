@@ -8,21 +8,21 @@ use std::collections::HashMap;
 
 use smithay::{
     backend::renderer::{
+        Color32F,
         element::{
-            solid::SolidColorRenderElement,
-            surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
             Id, Kind,
+            solid::SolidColorRenderElement,
+            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
         },
         gles::GlesRenderer,
         utils::CommitCounter,
-        Color32F,
     },
-    desktop::{utils::under_from_surface_tree, WindowSurfaceType},
+    desktop::{WindowSurfaceType, utils::under_from_surface_tree},
     output::Output,
     reexports::{
         wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::ExtSessionLockV1,
         wayland_server::{
-            protocol::wl_output::WlOutput, protocol::wl_surface::WlSurface, Resource,
+            Resource, protocol::wl_output::WlOutput, protocol::wl_surface::WlSurface,
         },
     },
     utils::{Logical, Physical, Point, Rectangle, Scale, Size},
@@ -73,11 +73,11 @@ impl MetisState {
 
     /// Drop a dead protocol lock (client exited without `unlock_and_destroy`).
     pub(crate) fn protocol_lock_reap_dead(&mut self) {
-        if let ProtocolLock::Locked { lock, .. } = &self.protocol_lock {
-            if !lock.is_alive() {
-                tracing::warn!("protocol lock client died — unlocking session");
-                self.protocol_lock_finish_unlock();
-            }
+        if let ProtocolLock::Locked { lock, .. } = &self.protocol_lock
+            && !lock.is_alive()
+        {
+            tracing::warn!("protocol lock client died — unlocking session");
+            self.protocol_lock_finish_unlock();
         }
     }
 
@@ -182,19 +182,19 @@ impl MetisState {
             .unwrap_or_default();
         let loc = out_origin - render_origin;
 
-        if let Some(ref out) = output {
-            if let Some(surface) = self.protocol_lock_surface_for_output(out) {
-                let surface_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-                    render_elements_from_surface_tree(
-                        renderer,
-                        surface.wl_surface(),
-                        loc,
-                        output_scale,
-                        1.0,
-                        Kind::ScanoutCandidate,
-                    );
-                elems.extend(surface_elems.into_iter().map(OutputStack::Surface));
-            }
+        if let Some(ref out) = output
+            && let Some(surface) = self.protocol_lock_surface_for_output(out)
+        {
+            let surface_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                render_elements_from_surface_tree(
+                    renderer,
+                    surface.wl_surface(),
+                    loc,
+                    output_scale,
+                    1.0,
+                    Kind::ScanoutCandidate,
+                );
+            elems.extend(surface_elems.into_iter().map(OutputStack::Surface));
         }
 
         let (blank_id, blank_commit) = match &self.protocol_lock {
@@ -253,16 +253,15 @@ impl MetisState {
             return None;
         };
         let pointer_loc = self.seat.get_pointer().map(|p| p.current_location());
-        if let Some(pos) = pointer_loc {
-            if let Some(output) = self.space.outputs().find(|o| {
+        if let Some(pos) = pointer_loc
+            && let Some(output) = self.space.outputs().find(|o| {
                 self.space
                     .output_geometry(o)
                     .is_some_and(|g| g.to_f64().contains(pos))
-            }) {
-                if let Some(s) = surfaces.get(&output.name()) {
-                    return Some(KeyboardFocusTarget::LockSurface(s.wl_surface().clone()));
-                }
-            }
+            })
+            && let Some(s) = surfaces.get(&output.name())
+        {
+            return Some(KeyboardFocusTarget::LockSurface(s.wl_surface().clone()));
         }
         surfaces
             .values()

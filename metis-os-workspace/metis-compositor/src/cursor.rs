@@ -8,8 +8,8 @@
 use std::io::Read;
 
 use xcursor::{
-    parser::{parse_xcursor, Image},
     CursorTheme,
+    parser::{Image, parse_xcursor},
 };
 
 /// A loaded pointer cursor (one or more animation frames at various sizes).

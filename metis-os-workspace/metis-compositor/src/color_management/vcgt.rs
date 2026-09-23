@@ -150,7 +150,17 @@ fn parse_formula(tag: &[u8]) -> Result<GammaRamps, VcgtError> {
     for (i, slot) in v.iter_mut().enumerate() {
         *slot = s15f16_at(tag, 12 + i * 4)?;
     }
-    let [r_gamma, r_min, r_max, g_gamma, g_min, g_max, b_gamma, b_min, b_max] = v;
+    let [
+        r_gamma,
+        r_min,
+        r_max,
+        g_gamma,
+        g_min,
+        g_max,
+        b_gamma,
+        b_min,
+        b_max,
+    ] = v;
     Ok(GammaRamps {
         r: formula_ramp(r_gamma, r_min, r_max),
         g: formula_ramp(g_gamma, g_min, g_max),

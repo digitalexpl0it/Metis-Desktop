@@ -62,10 +62,10 @@ impl AppEntry {
         // Only reverse-DNS icon names make useful app_id candidates. Generic
         // theme icons (`package-x-generic`, `preferences-desktop-locale`, `0`)
         // polluted decorations.json when every icon token was stored.
-        if let Some(icon) = &self.icon_name {
-            if looks_like_app_id_token(icon) {
-                push(&mut ids, icon);
-            }
+        if let Some(icon) = &self.icon_name
+            && looks_like_app_id_token(icon)
+        {
+            push(&mut ids, icon);
         }
 
         ids.sort();
@@ -195,7 +195,7 @@ fn entry_from_info(info: gio::AppInfo) -> Option<AppEntry> {
         return None;
     }
 
-    let desktop = info.downcast_ref::<gio::DesktopAppInfo>();
+    let desktop = info.downcast_ref::<gio_unix::DesktopAppInfo>();
     let wm_class = desktop
         .and_then(|desktop| desktop.startup_wm_class())
         .map(|s| s.to_string());

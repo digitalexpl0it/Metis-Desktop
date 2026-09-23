@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use metis_config::{load_outputs_config, output_prefs, OutputsConfig};
+use metis_config::{OutputsConfig, load_outputs_config, output_prefs};
 use smithay::output::Output;
 use smithay::output::Scale;
 use smithay::utils::{Logical, Point, Rectangle, Size};
@@ -242,16 +242,14 @@ fn position_right_of_primary(state: &MetisState, cfg: &OutputsConfig) -> Point<i
             .find(|o| state.is_output_enabled(&o.name()))
             .map(|o| o.name())
     });
-    if let Some(name) = primary_name {
-        if let Some(output) = state
+    if let Some(name) = primary_name
+        && let Some(output) = state
             .connected_outputs()
             .into_iter()
             .find(|o| o.name() == name)
-        {
-            if let Some(geo) = state.space.output_geometry(&output) {
-                return Point::from((geo.loc.x + geo.size.w, geo.loc.y));
-            }
-        }
+        && let Some(geo) = state.space.output_geometry(&output)
+    {
+        return Point::from((geo.loc.x + geo.size.w, geo.loc.y));
     }
     let x: i32 = state
         .connected_outputs()
@@ -287,7 +285,7 @@ pub fn persist_hotplug_connect(
     name: &str,
     mode: &metis_protocol::OutputModeInfo,
 ) -> OutputsConfig {
-    use metis_config::{save_outputs_config, DisplayLayoutMode};
+    use metis_config::{DisplayLayoutMode, save_outputs_config};
 
     let mut cfg = state.output_runtime.cached().clone();
     let mut changed = false;
@@ -376,12 +374,12 @@ pub fn persist_output_snapshot(state: &mut MetisState, output: &Output) {
     let entry = cfg.outputs.entry(name.clone()).or_default();
     let mut changed = false;
 
-    if let Some(geo) = state.space.output_geometry(output) {
-        if entry.layout_x != Some(geo.loc.x) || entry.layout_y != Some(geo.loc.y) {
-            entry.layout_x = Some(geo.loc.x);
-            entry.layout_y = Some(geo.loc.y);
-            changed = true;
-        }
+    if let Some(geo) = state.space.output_geometry(output)
+        && (entry.layout_x != Some(geo.loc.x) || entry.layout_y != Some(geo.loc.y))
+    {
+        entry.layout_x = Some(geo.loc.x);
+        entry.layout_y = Some(geo.loc.y);
+        changed = true;
     }
     if let Some(mode) = output.current_mode() {
         let w = mode.size.w;

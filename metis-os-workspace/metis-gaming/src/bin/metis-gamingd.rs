@@ -3,7 +3,7 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use metis_gaming::session::{spawn_event_listener, GamingDaemon};
+use metis_gaming::session::{GamingDaemon, spawn_event_listener};
 use metis_protocol::CompositorEvent;
 
 fn main() {

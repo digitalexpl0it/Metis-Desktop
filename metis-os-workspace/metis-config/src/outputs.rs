@@ -268,12 +268,11 @@ pub fn load_outputs_config() -> OutputsConfig {
 /// cannot be parsed (e.g. a concurrent write left a partial JSON blob).
 pub fn load_outputs_config_with_fallback(fallback: &OutputsConfig) -> OutputsConfig {
     let path = outputs_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str(&text) {
-                return cfg;
-            }
-        }
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(cfg) = serde_json::from_str(&text)
+    {
+        return cfg;
     }
     fallback.clone()
 }

@@ -53,10 +53,10 @@ fn expand_home_prefix(raw: &str) -> Option<String> {
 
 fn is_under_allowed_steam_root(canon: &Path) -> bool {
     let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        if let Ok(h) = PathBuf::from(home).canonicalize() {
-            roots.push(h);
-        }
+    if let Ok(home) = std::env::var("HOME")
+        && let Ok(h) = PathBuf::from(home).canonicalize()
+    {
+        roots.push(h);
     }
     for r in ALLOWED_STEAM_LIBRARY_ROOTS {
         if let Ok(p) = PathBuf::from(r).canonicalize() {

@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use metis_config::{load_decorations_config, DecorationsConfig};
+use metis_config::{DecorationsConfig, load_decorations_config};
 
 #[derive(Debug)]
 pub struct DecorationsRuntime {

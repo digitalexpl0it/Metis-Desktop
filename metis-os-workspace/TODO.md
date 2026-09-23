@@ -1533,7 +1533,7 @@ big-bang `state.rs` rewrite; Sober/Flatpak app bugs unrelated to Metis portals.
 
 - [x] **`.github/workflows/ci.yml`** — on every PR + push to `main`/`master`:
       `cargo fmt --check`, `clippy --workspace --all-targets -- -D warnings`,
-      `cargo test --workspace`, `cargo deny check` (Ubuntu 24.04 + gtk4-layer-shell)
+      `cargo test --workspace`, `cargo deny check` (Debian 13 container — the support floor)
 - [x] **Fold advisory gate into CI** — `cargo deny` on every PR; remove path-filtered
       `audit.yml` so advisories are not skipped when Rust paths are untouched
 
@@ -1567,9 +1567,9 @@ big-bang `state.rs` rewrite; Sober/Flatpak app bugs unrelated to Metis portals.
 
 - [x] **`deny.toml`** — advisories, license allowlist, banned unknown git sources
       (Smithay allowlisted)
-- [x] **`cargo deny` in `release-deb.yml`** — all suite jobs (24.04, 26.04, debian13)
+- [x] **`cargo deny` in `release-deb.yml`** — all suite jobs (ubuntu26.04, debian13)
 - [x] **Locale smoke on all suites** — `.mo` / `.ftl` presence checks on every
-      packaged `.deb` (not only Ubuntu 24.04); workspace tests gated by `ci.yml`
+      packaged `.deb` (every suite); workspace tests gated by `ci.yml`
 
 ### E. Command file & docs
 

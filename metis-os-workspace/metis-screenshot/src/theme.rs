@@ -31,7 +31,7 @@ pub fn install() {
     let tokens = active_tokens();
     let accent = tokens.accent_primary().to_string();
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(&format!(
+    provider.load_from_string(&format!(
         r#"
         window.metis-screenshot-root,
         .metis-screenshot-root {{

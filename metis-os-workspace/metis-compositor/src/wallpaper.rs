@@ -10,12 +10,12 @@ use metis_config::{BackgroundKind, GradientDirection};
 use smithay::backend::{
     allocator::Fourcc,
     renderer::{
+        ImportMem, Texture,
         element::{
-            texture::{TextureBuffer, TextureRenderElement},
             Kind,
+            texture::{TextureBuffer, TextureRenderElement},
         },
         gles::{GlesRenderer, GlesTexture},
-        ImportMem, Texture,
     },
 };
 use smithay::utils::{Physical, Point, Size, Transform};
@@ -236,13 +236,13 @@ impl Wallpaper {
             self.fade_start = None;
             return false;
         }
-        if let Some(at) = self.redecode_at {
-            if Instant::now() >= at {
-                // start_async_decode clears redecode_at on success or re-arms it
-                // for a short retry while a previous worker is still composing —
-                // never drop the schedule here, or the wallpaper never lands.
-                self.start_async_decode();
-            }
+        if let Some(at) = self.redecode_at
+            && Instant::now() >= at
+        {
+            // start_async_decode clears redecode_at on success or re-arms it
+            // for a short retry while a previous worker is still composing —
+            // never drop the schedule here, or the wallpaper never lands.
+            self.start_async_decode();
         }
         self.poll_decode();
         self.tick_fade();
@@ -282,14 +282,14 @@ impl Wallpaper {
             self.redecode_at = None;
             return;
         }
-        if let Some(handle) = self.decode_thread.as_ref() {
-            if !handle.is_finished() {
-                // A worker is still composing the previous layout. Retry shortly
-                // rather than dropping the request, so the latest layout still
-                // gets decoded once the worker frees up.
-                self.redecode_at = Some(Instant::now() + Duration::from_millis(30));
-                return;
-            }
+        if let Some(handle) = self.decode_thread.as_ref()
+            && !handle.is_finished()
+        {
+            // A worker is still composing the previous layout. Retry shortly
+            // rather than dropping the request, so the latest layout still
+            // gets decoded once the worker frees up.
+            self.redecode_at = Some(Instant::now() + Duration::from_millis(30));
+            return;
         }
         if let Some(handle) = self.decode_thread.take() {
             let _ = handle.join();
@@ -369,13 +369,13 @@ impl Wallpaper {
                     );
                 }
 
-                if let Ok(mut guard) = slot_worker.lock() {
-                    if guard.0 == generation {
-                        guard.1 = Some(DecodeOutput {
-                            pixels: buf,
-                            sources: new_sources,
-                        });
-                    }
+                if let Ok(mut guard) = slot_worker.lock()
+                    && guard.0 == generation
+                {
+                    guard.1 = Some(DecodeOutput {
+                        pixels: buf,
+                        sources: new_sources,
+                    });
                 }
             })
             .ok();
@@ -394,36 +394,35 @@ impl Wallpaper {
         if self.cpu_pixels.is_some() {
             return;
         }
-        if let Ok(mut guard) = self.decode_slot.lock() {
-            if guard.0 == self.decode_generation {
-                if let Some(out) = guard.1.take() {
-                    tracing::info!(
-                        width = self.full_size.w,
-                        height = self.full_size.h,
-                        "wallpaper composed"
-                    );
-                    for (path, src) in out.sources {
-                        self.sources.insert(path, src);
-                    }
-                    self.cpu_pixels = Some(out.pixels);
-                    if self.fade_on_next_upload {
-                        // Keep painting the previous wallpaper until the new
-                        // texture uploads, then crossfade.
-                        if let Some(prev) = self.buffer.take() {
-                            self.outgoing = Some(prev);
-                        }
-                        self.texture = None;
-                        self.fade_on_next_upload = false;
-                        self.fade_start = None;
-                    } else {
-                        // Layout / hotplug: snap once the new buffer is ready
-                        // (previous soft-invalidate already kept it until now).
-                        self.buffer = None;
-                        self.texture = None;
-                        self.outgoing = None;
-                        self.fade_start = None;
-                    }
+        if let Ok(mut guard) = self.decode_slot.lock()
+            && guard.0 == self.decode_generation
+            && let Some(out) = guard.1.take()
+        {
+            tracing::info!(
+                width = self.full_size.w,
+                height = self.full_size.h,
+                "wallpaper composed"
+            );
+            for (path, src) in out.sources {
+                self.sources.insert(path, src);
+            }
+            self.cpu_pixels = Some(out.pixels);
+            if self.fade_on_next_upload {
+                // Keep painting the previous wallpaper until the new
+                // texture uploads, then crossfade.
+                if let Some(prev) = self.buffer.take() {
+                    self.outgoing = Some(prev);
                 }
+                self.texture = None;
+                self.fade_on_next_upload = false;
+                self.fade_start = None;
+            } else {
+                // Layout / hotplug: snap once the new buffer is ready
+                // (previous soft-invalidate already kept it until now).
+                self.buffer = None;
+                self.texture = None;
+                self.outgoing = None;
+                self.fade_start = None;
             }
         }
         if let Some(handle) = self.decode_thread.take() {
@@ -552,10 +551,10 @@ impl Wallpaper {
 }
 
 fn load_image_cached(path: &std::path::Path) -> Option<Arc<RgbaImage>> {
-    if let Some((w, h, rgba)) = metis_config::load_wallpaper_rgba_cache(path) {
-        if let Some(img) = RgbaImage::from_raw(w, h, rgba) {
-            return Some(Arc::new(img));
-        }
+    if let Some((w, h, rgba)) = metis_config::load_wallpaper_rgba_cache(path)
+        && let Some(img) = RgbaImage::from_raw(w, h, rgba)
+    {
+        return Some(Arc::new(img));
     }
     match image::open(path) {
         Ok(img) => {

@@ -6,7 +6,7 @@ use gtk::prelude::*;
 use metis_i18n::tr;
 
 use crate::gtk_cb::FnStr;
-use crate::nav::{self, Category, CATEGORIES};
+use crate::nav::{self, CATEGORIES, Category};
 
 /// Build the Home overview. `on_category` opens a category sheet; `on_page` deep-links.
 pub fn build(on_category: FnStr, on_page: FnStr) -> (gtk::Box, gtk::Entry, FnStr) {

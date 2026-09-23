@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Build a Metis .deb (Ubuntu 24.04 / 26.04 or Debian 13).
+# Build a Metis .deb (Ubuntu 26.04 or Debian 13).
 #
 # Usage:
 #   VERSION=0.1.0 ./scripts/package-deb.sh
-#   VERSION=0.1.0 DISTRO_SUITE=ubuntu24.04 SKIP_BUILD=1 ./scripts/package-deb.sh
-#   VERSION=0.1.0 DISTRO_SUITE=ubuntu26.04 ./scripts/package-deb.sh
+#   VERSION=0.1.0 DISTRO_SUITE=ubuntu26.04 SKIP_BUILD=1 ./scripts/package-deb.sh
 #   VERSION=0.1.0 DISTRO_SUITE=debian13 ./scripts/package-deb.sh
 #
-# Legacy: UBUNTU_SUITE=24.04 still works (maps to ubuntu24.04).
+# Legacy: UBUNTU_SUITE=26.04 still works (maps to ubuntu26.04).
+# Ubuntu 24.04 is no longer supported: Metis needs GTK >= 4.18 (noble ships 4.14).
 
 set -euo pipefail
 
@@ -35,13 +35,14 @@ if [[ -n "${DISTRO_SUITE:-}" ]]; then
 elif [[ -n "${UBUNTU_SUITE:-}" ]]; then
   DISTRO_SUITE="ubuntu${UBUNTU_SUITE}"
 else
-  DISTRO_SUITE="ubuntu24.04"
+  DISTRO_SUITE="debian13"
 fi
 
 case "$DISTRO_SUITE" in
   ubuntu24.04)
-    BUNDLE_GTK4_LAYER_SHELL=1
-    CONTROL_PROFILE=ubuntu24.04
+    echo "ERROR: Ubuntu 24.04 is no longer supported (Metis needs GTK >= 4.18; noble ships 4.14)." >&2
+    echo "       Use DISTRO_SUITE=ubuntu26.04 or DISTRO_SUITE=debian13." >&2
+    exit 1
     ;;
   ubuntu26.04)
     BUNDLE_GTK4_LAYER_SHELL="${BUNDLE_GTK4_LAYER_SHELL:-0}"
@@ -52,7 +53,7 @@ case "$DISTRO_SUITE" in
     CONTROL_PROFILE=debian13
     ;;
   *)
-    echo "ERROR: unknown DISTRO_SUITE=$DISTRO_SUITE (ubuntu24.04|ubuntu26.04|debian13)" >&2
+    echo "ERROR: unknown DISTRO_SUITE=$DISTRO_SUITE (ubuntu26.04|debian13)" >&2
     exit 1
     ;;
 esac
@@ -105,17 +106,11 @@ write_control() {
   installed_size="$(du -sk "$STAGE" | awk '{print $1}')"
 
   case "$CONTROL_PROFILE" in
-    ubuntu24.04)
-      depends="libgtk-4-1, libadwaita-1-0, libglib2.0-0t64 | libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3t64 | libssl3, libpam0g, libdisplay-info1, libeis1, liblcms2-2, xdg-desktop-portal, kitty, pkexec, polkitd"
-      recommends="gnome-keyring, xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables"
-      suggests="gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, bluez, bluetooth, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f"
-      layer_note="Ships bundled libgtk4-layer-shell (not packaged on Ubuntu 24.04)."
-      ;;
     ubuntu26.04)
       # Ubuntu 26.04 (resolute) ships libdisplay-info3 (0.3); libdisplay-info1 is gone.
-      depends="libgtk-4-1, libadwaita-1-0, libglib2.0-0t64 | libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3t64 | libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, xdg-desktop-portal, kitty, pkexec, polkitd"
+      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0t64 | libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3t64 | libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, xdg-desktop-portal, kitty, pkexec, polkitd"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
-        depends="${depends}, libgtk4-layer-shell0"
+        depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
       recommends="gnome-keyring, xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables"
       suggests="gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, bluez, bluetooth, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f"
@@ -126,9 +121,9 @@ write_control() {
       fi
       ;;
     debian13)
-      depends="libgtk-4-1, libadwaita-1-0, libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, xdg-desktop-portal, kitty, pkexec, polkitd"
+      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, xdg-desktop-portal, kitty, pkexec, polkitd"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
-        depends="${depends}, libgtk4-layer-shell0"
+        depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
       recommends="gnome-keyring, xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables"
       suggests="gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, bluez, bluetooth, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f"

@@ -3,9 +3,9 @@
 use std::time::{Duration, Instant};
 
 use wayland_client::{
-    globals::{registry_queue_init, GlobalListContents},
-    protocol::{wl_output::WlOutput, wl_registry::WlRegistry, wl_shm::Format, wl_shm::WlShm},
     Connection, Dispatch, QueueHandle, WEnum,
+    globals::{GlobalListContents, registry_queue_init},
+    protocol::{wl_output::WlOutput, wl_registry::WlRegistry, wl_shm::Format, wl_shm::WlShm},
 };
 use wayland_protocols::ext::{
     image_capture_source::v1::client::{

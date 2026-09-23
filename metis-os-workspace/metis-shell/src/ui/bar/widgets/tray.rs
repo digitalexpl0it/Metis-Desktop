@@ -8,7 +8,7 @@ use gtk::prelude::*;
 
 use crate::config::TrayIconMode;
 use crate::services::{
-    self, send_command, MenuType, TrayCommand, TrayItem, TrayMenu, TrayMenuItem, TraySnapshot,
+    self, MenuType, TrayCommand, TrayItem, TrayMenu, TrayMenuItem, TraySnapshot, send_command,
 };
 
 const TRAY_ICON_SIZE: i32 = 18;
@@ -344,12 +344,12 @@ fn handle_tray_secondary_click(btn: &gtk::Button, item: &TrayItem, coords: (i32,
         .find(|i| i.bus_name == item.bus_name && i.object_path == item.object_path)
         .unwrap_or_else(|| item.clone());
 
-    if let Some(menu) = &live.menu {
-        if !menu.submenus.is_empty() {
-            tracing::debug!(bus = %live.bus_name, entries = menu.submenus.len(), "tray: open context menu");
-            show_context_menu(btn, &live, menu);
-            return;
-        }
+    if let Some(menu) = &live.menu
+        && !menu.submenus.is_empty()
+    {
+        tracing::debug!(bus = %live.bus_name, entries = menu.submenus.len(), "tray: open context menu");
+        show_context_menu(btn, &live, menu);
+        return;
     }
 
     if live.menu_path.is_some() {
@@ -440,8 +440,9 @@ fn send_tray_menu_click(item: &TrayItem, submenu_id: i32, label: String) {
 fn tray_screen_coords(widget: &impl IsA<gtk::Widget>, wx: f64, wy: f64) -> (i32, i32) {
     let widget = widget.as_ref();
     if let Some(native) = widget.native() {
-        if let Some((x, y)) = widget.translate_coordinates(&native, wx, wy) {
-            return (x.round() as i32, y.round() as i32);
+        let point = gtk::graphene::Point::new(wx as f32, wy as f32);
+        if let Some(p) = widget.compute_point(&native, &point) {
+            return (p.x().round() as i32, p.y().round() as i32);
         }
     }
     (wx.round() as i32, wy.round() as i32)
@@ -480,10 +481,10 @@ fn show_context_menu(anchor: &gtk::Button, item: &TrayItem, menu: &TrayMenu) {
     popover.connect_closed(move |_| {
         let weak = weak.clone();
         glib::idle_add_local_once(move || {
-            if let Some(p) = weak.upgrade() {
-                if p.parent().is_some() {
-                    p.unparent();
-                }
+            if let Some(p) = weak.upgrade()
+                && p.parent().is_some()
+            {
+                p.unparent();
             }
         });
     });
@@ -538,10 +539,10 @@ fn attach_tray_tooltip(
                         return;
                     };
                     tip.set_label(&text);
-                    if let Some((x, y)) = w.translate_coordinates(&ov, w.width() as f64 / 2.0, 0.0)
-                    {
-                        tip.set_margin_start((x as i32 - 28).max(0));
-                        tip.set_margin_top((y as i32 - 30).max(0));
+                    let anchor = gtk::graphene::Point::new(w.width() as f32 / 2.0, 0.0);
+                    if let Some(p) = w.compute_point(&ov, &anchor) {
+                        tip.set_margin_start((p.x() as i32 - 28).max(0));
+                        tip.set_margin_top((p.y() as i32 - 30).max(0));
                     }
                     tip.set_visible(true);
                     if let Some(overlay) =
@@ -617,19 +618,19 @@ fn set_tray_icon_image(image: &gtk::Image, item: &TrayItem) {
 
     if let Some(texture) = pixmap_texture(item) {
         image.add_css_class("metis-bar-tray-pixmap");
-        image.set_from_paintable(Some(&texture));
+        image.set_paintable(Some(&texture));
         return;
     }
     if let Some(texture) = theme_path_texture(item) {
         image.add_css_class("metis-bar-tray-pixmap");
-        image.set_from_paintable(Some(&texture));
+        image.set_paintable(Some(&texture));
         return;
     }
     if let Some(name) = item.icon_name.as_deref().filter(|n| !n.is_empty()) {
         set_themed_tray_icon(image, name);
         return;
     }
-    image.set_from_icon_name(Some("application-x-executable-symbolic"));
+    image.set_icon_name(Some("application-x-executable-symbolic"));
 }
 
 /// Prefer a symbolic icon name so GTK tints it with the bar foreground colour.
@@ -643,12 +644,12 @@ fn set_themed_tray_icon(image: &gtk::Image, name: &str) {
         let theme = gtk::IconTheme::for_display(&display);
         for candidate in &candidates {
             if theme.has_icon(candidate) {
-                image.set_from_icon_name(Some(candidate));
+                image.set_icon_name(Some(candidate));
                 return;
             }
         }
     }
-    image.set_from_icon_name(Some(name));
+    image.set_icon_name(Some(name));
 }
 
 fn bar_is_light_mode() -> bool {
@@ -772,7 +773,7 @@ fn wire_tray_toggle(
         let icon = icon.clone();
         popover.connect_map(move |_| {
             btn.add_css_class("metis-bar-dropdown-active");
-            icon.set_from_icon_name(Some("pan-down-symbolic"));
+            icon.set_icon_name(Some("pan-down-symbolic"));
         });
     }
     {
@@ -781,7 +782,7 @@ fn wire_tray_toggle(
         popover.connect_unmap(move |_| {
             dismiss_tray_item_menu();
             btn.remove_css_class("metis-bar-dropdown-active");
-            icon.set_from_icon_name(Some("pan-up-symbolic"));
+            icon.set_icon_name(Some("pan-up-symbolic"));
         });
     }
 

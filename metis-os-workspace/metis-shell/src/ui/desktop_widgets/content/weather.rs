@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 
-use crate::services::{last_weather_snapshot, weather_refresh, LocationWeather, WeatherSnapshot};
+use crate::services::{LocationWeather, WeatherSnapshot, last_weather_snapshot, weather_refresh};
 use crate::ui::icons;
 use metis_config::DesktopWidgetInstance;
 
@@ -107,17 +107,13 @@ fn paint(panel: &WeatherPanel, snap: Option<&WeatherSnapshot>) {
             apply_snapshot(&panel.icon, &panel.temp, &panel.place, &panel.detail, snap);
         }
         Some(snap) if snap.error.is_some() => {
-            panel
-                .icon
-                .set_from_icon_name(Some("weather-overcast-symbolic"));
+            panel.icon.set_icon_name(Some("weather-overcast-symbolic"));
             panel.temp.set_text("—");
             panel.place.set_text(&metis_i18n::tr("Weather unavailable"));
             panel.detail.set_text(snap.error.as_deref().unwrap_or(""));
         }
         _ => {
-            panel
-                .icon
-                .set_from_icon_name(Some("weather-overcast-symbolic"));
+            panel.icon.set_icon_name(Some("weather-overcast-symbolic"));
             panel.temp.set_text("—");
             panel
                 .place

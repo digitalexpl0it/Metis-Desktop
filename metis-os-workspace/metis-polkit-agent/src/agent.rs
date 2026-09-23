@@ -175,11 +175,11 @@ fn identities_to_usernames(identities: &[Identity]) -> Vec<String> {
             names.push(name);
         }
     }
-    if let Ok(me) = std::env::var("USER") {
-        if let Some(pos) = names.iter().position(|n| n == &me) {
-            let mine = names.remove(pos);
-            names.insert(0, mine);
-        }
+    if let Ok(me) = std::env::var("USER")
+        && let Some(pos) = names.iter().position(|n| n == &me)
+    {
+        let mine = names.remove(pos);
+        names.insert(0, mine);
     }
     names
 }

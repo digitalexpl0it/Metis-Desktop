@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use drm_fourcc::{DrmFourcc, DrmModifier};
 use gbm::{BufferObject, BufferObjectFlags, Device as GbmDevice, Format as GbmFormat};
-use wayland_client::{protocol::wl_buffer::WlBuffer, Dispatch, QueueHandle};
+use wayland_client::{Dispatch, QueueHandle, protocol::wl_buffer::WlBuffer};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
     zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,

@@ -180,15 +180,15 @@ pub fn decorations_config_path() -> PathBuf {
 
 pub fn load_decorations_config() -> DecorationsConfig {
     let path = decorations_config_path();
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(mut cfg) = serde_json::from_str::<DecorationsConfig>(&text) {
-            // Normalize keys so hand-edited mixed-case files still match.
-            let raw = std::mem::take(&mut cfg.overrides);
-            for (k, v) in raw {
-                cfg.overrides.insert(norm_key(&k), v);
-            }
-            return cfg;
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(mut cfg) = serde_json::from_str::<DecorationsConfig>(&text)
+    {
+        // Normalize keys so hand-edited mixed-case files still match.
+        let raw = std::mem::take(&mut cfg.overrides);
+        for (k, v) in raw {
+            cfg.overrides.insert(norm_key(&k), v);
         }
+        return cfg;
     }
     DecorationsConfig::default()
 }

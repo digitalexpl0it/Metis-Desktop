@@ -655,12 +655,11 @@ pub fn desktop_widgets_config_path() -> std::path::PathBuf {
 
 pub fn load_desktop_widgets_config() -> DesktopWidgetsConfig {
     let path = desktop_widgets_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str(&text) {
-                return sanitize(cfg);
-            }
-        }
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(cfg) = serde_json::from_str(&text)
+    {
+        return sanitize(cfg);
     }
     DesktopWidgetsConfig::default()
 }

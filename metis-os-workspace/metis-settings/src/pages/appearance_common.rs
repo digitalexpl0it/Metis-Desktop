@@ -8,12 +8,12 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use gtk::CssProvider;
+use gtk::STYLE_PROVIDER_PRIORITY_APPLICATION;
 use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
-use gtk::CssProvider;
-use gtk::STYLE_PROVIDER_PRIORITY_APPLICATION;
 
 use crate::dialog;
 use crate::gtk_cb::OptBarConfigMutate;
@@ -120,7 +120,7 @@ impl ColorSwatchButton {
 
     fn apply_swatch_css(&self) {
         let hex = rgba_to_hex(&self.rgba.borrow());
-        self.provider.load_from_data(&format!(
+        self.provider.load_from_string(&format!(
             "box.{} {{
                 background-color: {hex};
                 min-width: 48px;

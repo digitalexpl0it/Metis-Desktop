@@ -19,7 +19,9 @@ members = [
 ]
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
+# Highest MSRV among dependencies (sysinfo 0.39). Verified by clippy `incompatible_msrv`.
+rust-version = "1.95"
 license = "MIT"
 # Product / crate SemVer. GitHub tags like v0.1.0.N map to Cargo 0.1.N
 # via scripts/sync-version.sh (also run by package-deb.sh).

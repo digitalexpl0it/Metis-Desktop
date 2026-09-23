@@ -1,25 +1,37 @@
-//! Software Updates window — summary, Install / Later, progress, live log.
+//! Software Updates window — Metis SSD xdg_toplevel with a forced-opaque surface.
+//!
+//! Must NOT be a layer-shell Overlay: those sit above polkit and block the
+//! auth dialog. Must paint with fully-opaque `rgb()` (global shell CSS makes
+//! every `window` transparent for the bar / OSD).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use gtk::gdk;
+use gtk::glib;
 use gtk::prelude::*;
 use metis_remote::UpdateProgressEvent;
 
 use crate::services;
+use crate::ui::theme;
+
+const DEFAULT_WIDTH: i32 = 460;
 
 thread_local! {
-    static WINDOW: RefCell<Option<UpdaterState>> = const { RefCell::new(None) };
+    static WINDOW: RefCell<Option<Rc<UpdaterState>>> = const { RefCell::new(None) };
+    static OPAQUE_CSS: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
 }
 
 struct UpdaterState {
     window: gtk::Window,
     summary: gtk::Label,
     list: gtk::ListBox,
+    scroller: gtk::ScrolledWindow,
     progress: gtk::ProgressBar,
     status: gtk::Label,
     log_view: gtk::TextView,
-    _log_revealer: gtk::Revealer,
+    log_revealer: gtk::Revealer,
+    log_toggle: gtk::ToggleButton,
     reboot_banner: gtk::Box,
     install_btn: gtk::Button,
     later_btn: gtk::Button,
@@ -28,49 +40,100 @@ struct UpdaterState {
 
 /// Present the updater (create once, reuse).
 pub fn show() {
-    WINDOW.with(|cell| {
-        if let Some(state) = cell.borrow().as_ref() {
-            refresh_content(state);
-            state.window.present();
-            return;
-        }
-        let state = build();
+    // Clone out of the RefCell *before* the if/else so the temporary `borrow()`
+    // does not live across `borrow_mut()` (that panic killed the whole edge bar).
+    // Re-applied each time so the reused window follows theme changes.
+    ensure_opaque_css();
+    let existing = WINDOW.with(|cell| cell.borrow().clone());
+    if let Some(state) = existing {
+        refresh_content(&state);
+        state.window.set_visible(true);
+        state.window.present();
+    } else {
+        let state = Rc::new(build());
         refresh_content(&state);
         state.window.present();
-        *cell.borrow_mut() = Some(state);
+        WINDOW.with(|cell| {
+            *cell.borrow_mut() = Some(state);
+        });
+    }
+    // Defer the soft check so opening the window never races PackageKit I/O
+    // against the first pointer frame.
+    glib::timeout_add_local_once(std::time::Duration::from_secs(2), || {
+        services::updates_request_check(false);
+    });
+}
+
+fn ensure_opaque_css() {
+    let tokens = theme::active_tokens();
+    let surface_rgb = tokens.surface_rgb();
+    let raised_rgb = tokens.surface_raised_rgb();
+    let text = tokens.text.clone();
+    let css = format!(
+        r#"
+        window.metis-updater {{
+            background-color: rgb({surface_rgb});
+            color: {text};
+        }}
+        window.metis-updater > box.metis-updater-shell {{
+            background-color: rgb({surface_rgb});
+            color: {text};
+        }}
+        .metis-updater-root {{
+            background-color: rgb({surface_rgb});
+            color: {text};
+        }}
+        .metis-updater-list {{
+            background-color: rgb({raised_rgb});
+        }}
+        "#
+    );
+    let Some(display) = gdk::Display::default() else {
+        tracing::warn!("no GDK display — updater keeps the shell theme");
+        return;
+    };
+    OPAQUE_CSS.with(|slot| {
+        let mut binding = slot.borrow_mut();
+        let fresh = binding.is_none();
+        let provider = binding.get_or_insert_with(gtk::CssProvider::new);
+        provider.load_from_string(&css);
+        if fresh {
+            // USER beats the shell's APPLICATION-level `window { transparent }`.
+            gtk::style_context_add_provider_for_display(
+                &display,
+                provider,
+                gtk::STYLE_PROVIDER_PRIORITY_USER,
+            );
+        }
     });
 }
 
 fn build() -> UpdaterState {
-    // Under Metis the compositor draws SSD; hide GTK CSD to avoid double chrome.
     let under_metis = std::env::var_os("METIS_SESSION").is_some();
     let window = gtk::Window::builder()
         .title(metis_i18n::tr("Software Updates"))
-        .default_width(520)
-        .default_height(480)
+        .default_width(DEFAULT_WIDTH)
+        .default_height(-1)
         .resizable(true)
+        // Under Metis the compositor draws SSD (move / close). Elsewhere CSD.
         .decorated(!under_metis)
         .build();
     window.add_css_class("metis-updater");
     window.add_css_class("background");
 
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    root.add_css_class("metis-updater-root");
-    root.set_margin_top(16);
-    root.set_margin_bottom(16);
-    root.set_margin_start(20);
-    root.set_margin_end(20);
+    let shell = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    shell.add_css_class("metis-updater-shell");
+    shell.set_hexpand(true);
 
-    let header = gtk::Label::new(Some(&metis_i18n::tr("Software Updates")));
-    header.add_css_class("title-2");
-    header.add_css_class("metis-updater-title");
-    header.set_halign(gtk::Align::Start);
-    root.append(&header);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    root.add_css_class("metis-updater-root");
+    root.set_hexpand(true);
 
     let summary = gtk::Label::new(None);
     summary.set_halign(gtk::Align::Start);
     summary.set_wrap(true);
     summary.add_css_class("dim-label");
+    summary.add_css_class("metis-updater-summary");
     root.append(&summary);
 
     let reboot_banner = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -89,10 +152,13 @@ fn build() -> UpdaterState {
     root.append(&reboot_banner);
 
     let scroller = gtk::ScrolledWindow::builder()
-        .vexpand(true)
         .hexpand(true)
-        .min_content_height(120)
+        .vexpand(false)
+        .propagate_natural_height(true)
+        .max_content_height(240)
+        .min_content_height(0)
         .build();
+    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.add_css_class("metis-updater-scroll");
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);
@@ -105,6 +171,7 @@ fn build() -> UpdaterState {
     status.set_halign(gtk::Align::Start);
     status.set_ellipsize(gtk::pango::EllipsizeMode::End);
     status.add_css_class("dim-label");
+    status.set_visible(false);
     root.append(&status);
 
     let progress = gtk::ProgressBar::new();
@@ -119,12 +186,17 @@ fn build() -> UpdaterState {
 
     let log_revealer = gtk::Revealer::builder()
         .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .transition_duration(180)
         .reveal_child(false)
+        .vexpand(false)
         .build();
     let log_scroll = gtk::ScrolledWindow::builder()
-        .min_content_height(140)
-        .vexpand(true)
+        .min_content_height(120)
+        .max_content_height(160)
+        .vexpand(false)
+        .hexpand(true)
         .build();
+    log_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
     let log_view = gtk::TextView::builder()
         .editable(false)
         .cursor_visible(false)
@@ -138,20 +210,24 @@ fn build() -> UpdaterState {
 
     {
         let revealer = log_revealer.clone();
+        let window = window.clone();
         log_toggle.connect_toggled(move |btn| {
-            revealer.set_reveal_child(btn.is_active());
-            let label = if btn.is_active() {
+            let open = btn.is_active();
+            revealer.set_reveal_child(open);
+            btn.set_label(&if open {
                 metis_i18n::tr("Hide log")
             } else {
                 metis_i18n::tr("Show log")
-            };
-            btn.set_label(&label);
+            });
+            if !open {
+                window.set_default_size(DEFAULT_WIDTH, -1);
+            }
         });
     }
 
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    actions.add_css_class("metis-updater-actions");
     actions.set_halign(gtk::Align::End);
-    actions.set_margin_top(8);
     let later_btn = gtk::Button::with_label(&metis_i18n::tr("Later"));
     later_btn.add_css_class("metis-updater-btn");
     let install_btn = gtk::Button::with_label(&metis_i18n::tr("Install"));
@@ -161,15 +237,19 @@ fn build() -> UpdaterState {
     actions.append(&install_btn);
     root.append(&actions);
 
-    window.set_child(Some(&root));
+    shell.append(&root);
+    window.set_child(Some(&shell));
 
     let applying = Rc::new(Cell::new(false));
 
     {
-        let window = window.clone();
+        // Weak ref, no WINDOW access: `close()` synchronously emits
+        // `close_request`, and touching the RefCell here panicked the shell.
+        let window_weak = window.downgrade();
         later_btn.connect_clicked(move |_| {
-            services::updates_snooze_hours(24);
-            window.close();
+            if let Some(window) = window_weak.upgrade() {
+                window.close();
+            }
         });
     }
 
@@ -177,6 +257,7 @@ fn build() -> UpdaterState {
     {
         let applying = applying.clone();
         let handles_slot = state_for_install.clone();
+        let window_for_auth = window.clone();
         install_btn.connect_clicked(move |btn| {
             if applying.get() {
                 return;
@@ -190,75 +271,123 @@ fn build() -> UpdaterState {
             };
             handles.progress.set_visible(true);
             handles.progress.set_fraction(0.0);
-            handles.status.set_text(&metis_i18n::tr("Preparing…"));
+            handles.status.set_visible(true);
+            handles
+                .status
+                .set_text(&metis_i18n::tr("Waiting for authentication…"));
             handles.log_buffer.set_text("");
+            // Keep log collapsed — TextView inserts during install thrash the
+            // main loop and make the pointer unusable.
+            handles.log_revealer.set_reveal_child(false);
+            handles.log_toggle.set_active(false);
+
+            // Drop under polkit: Overlay previously covered the password dialog.
+            // Hiding the xdg window lets Authentication Required take focus.
+            window_for_auth.set_visible(false);
 
             let applying_cb = applying.clone();
             let install_btn = btn.clone();
-            let on_event: Rc<dyn Fn(UpdateProgressEvent)> = Rc::new(move |ev| match ev {
-                UpdateProgressEvent::Log { line } => {
-                    let mut end = handles.log_buffer.end_iter();
-                    handles.log_buffer.insert(&mut end, &format!("{line}\n"));
+            let window_show = window_for_auth.clone();
+            let pending_log: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+            let revealed = Rc::new(Cell::new(false));
+            let on_event: Rc<dyn Fn(UpdateProgressEvent)> = Rc::new(move |ev| {
+                // First real progress → auth done; bring the window back.
+                if !revealed.get() {
+                    match &ev {
+                        UpdateProgressEvent::Progress { .. }
+                        | UpdateProgressEvent::Phase { .. }
+                        | UpdateProgressEvent::Finished { .. } => {
+                            revealed.set(true);
+                            window_show.set_visible(true);
+                            window_show.present();
+                        }
+                        UpdateProgressEvent::Log { .. } => {}
+                    }
                 }
-                UpdateProgressEvent::Progress { percent, item } => {
-                    handles
-                        .progress
-                        .set_fraction(f64::from(percent.clamp(0, 100)) / 100.0);
-                    if let Some(name) = item {
+                match ev {
+                    UpdateProgressEvent::Log { line } => {
+                        // Only buffer; flush when the user has the log open.
+                        if handles.log_revealer.reveals_child() {
+                            pending_log.borrow_mut().push_str(&line);
+                            pending_log.borrow_mut().push('\n');
+                            if pending_log.borrow().len() >= 1024 {
+                                flush_log(&handles.log_buffer, &pending_log);
+                            }
+                        }
+                    }
+                    UpdateProgressEvent::Progress { percent, item } => {
+                        if handles.log_revealer.reveals_child() {
+                            flush_log(&handles.log_buffer, &pending_log);
+                        }
+                        handles
+                            .progress
+                            .set_fraction(f64::from(percent.clamp(0, 100)) / 100.0);
+                        if let Some(name) = item {
+                            handles.status.set_text(&name);
+                        }
+                    }
+                    UpdateProgressEvent::Phase { name } => {
+                        if handles.log_revealer.reveals_child() {
+                            flush_log(&handles.log_buffer, &pending_log);
+                        }
                         handles.status.set_text(&name);
                     }
-                }
-                UpdateProgressEvent::Phase { name } => {
-                    handles.status.set_text(&name);
-                }
-                UpdateProgressEvent::Finished {
-                    ok,
-                    error,
-                    reboot_required,
-                } => {
-                    applying_cb.set(false);
-                    install_btn.set_sensitive(true);
-                    handles.progress.set_fraction(if ok {
-                        1.0
-                    } else {
-                        handles.progress.fraction()
-                    });
-                    if ok {
-                        handles
-                            .status
-                            .set_text(&metis_i18n::tr("Updates installed"));
-                    } else {
-                        handles
-                            .status
-                            .set_text(&error.unwrap_or_else(|| metis_i18n::tr("Update failed")));
-                    }
-                    handles.reboot_banner.set_visible(reboot_required);
-                    WINDOW.with(|cell| {
-                        if let Some(state) = cell.borrow().as_ref() {
-                            refresh_content(state);
+                    UpdateProgressEvent::Finished {
+                        ok,
+                        error,
+                        reboot_required,
+                    } => {
+                        if handles.log_revealer.reveals_child() {
+                            flush_log(&handles.log_buffer, &pending_log);
                         }
-                    });
+                        applying_cb.set(false);
+                        install_btn.set_sensitive(true);
+                        window_show.set_visible(true);
+                        window_show.present();
+                        handles.progress.set_fraction(if ok {
+                            1.0
+                        } else {
+                            handles.progress.fraction()
+                        });
+                        if ok {
+                            handles
+                                .status
+                                .set_text(&metis_i18n::tr("Updates installed"));
+                        } else {
+                            handles.status.set_text(
+                                &error.unwrap_or_else(|| metis_i18n::tr("Update failed")),
+                            );
+                        }
+                        handles.reboot_banner.set_visible(reboot_required);
+                        WINDOW.with(|cell| {
+                            if let Some(state) = cell.borrow().as_ref() {
+                                refresh_content(state);
+                            }
+                        });
+                    }
                 }
             });
             services::updates_start_apply(on_event);
         });
     }
 
-    window.connect_close_request(move |_| {
-        WINDOW.with(|cell| {
-            *cell.borrow_mut() = None;
-        });
-        glib::Propagation::Proceed
+    // Hide instead of destroy: an in-flight install still holds the widgets,
+    // and `show()` reuses the same window. No RefCell access on this path.
+    window.connect_close_request(|window| {
+        window.set_visible(false);
+        glib::Propagation::Stop
     });
 
     let state = UpdaterState {
         window,
         summary,
         list,
+        scroller,
         progress,
         status,
         log_view,
-        _log_revealer: log_revealer,
+        log_revealer: log_revealer.clone(),
+        log_toggle: log_toggle.clone(),
         reboot_banner,
         install_btn: install_btn.clone(),
         later_btn,
@@ -269,10 +398,37 @@ fn build() -> UpdaterState {
         progress: state.progress.clone(),
         status: state.status.clone(),
         log_buffer: state.log_view.buffer(),
+        log_revealer: state.log_revealer.clone(),
+        log_toggle: state.log_toggle.clone(),
         reboot_banner: state.reboot_banner.clone(),
     });
 
+    {
+        let refresh: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(|| {
+            WINDOW.with(|cell| {
+                if let Some(state) = cell.borrow().as_ref()
+                    && state.window.is_visible()
+                {
+                    refresh_content(state);
+                }
+            });
+        });
+        services::register_updates_updater_refresh(refresh);
+    }
+
     state
+}
+
+fn flush_log(buffer: &gtk::TextBuffer, pending: &Rc<RefCell<String>>) {
+    let chunk = {
+        let mut p = pending.borrow_mut();
+        if p.is_empty() {
+            return;
+        }
+        std::mem::take(&mut *p)
+    };
+    let mut end = buffer.end_iter();
+    buffer.insert(&mut end, &chunk);
 }
 
 #[derive(Clone)]
@@ -280,6 +436,8 @@ struct UpdaterHandles {
     progress: gtk::ProgressBar,
     status: gtk::Label,
     log_buffer: gtk::TextBuffer,
+    log_revealer: gtk::Revealer,
+    log_toggle: gtk::ToggleButton,
     reboot_banner: gtk::Box,
 }
 
@@ -296,11 +454,15 @@ fn refresh_content(state: &UpdaterState) {
             .summary
             .set_text(&metis_i18n::tr("Your system is up to date."));
         state.install_btn.set_sensitive(false);
-        state.later_btn.set_sensitive(false);
+        state.later_btn.set_sensitive(true);
+        state.later_btn.set_label(&metis_i18n::tr("Close"));
+        state.scroller.set_visible(false);
     } else {
         state
             .summary
             .set_text(&metis_i18n::tr("%1 update(s) available.").replace("%1", &count.to_string()));
+        state.later_btn.set_label(&metis_i18n::tr("Later"));
+        state.scroller.set_visible(true);
         if !state.applying.get() {
             state.install_btn.set_sensitive(true);
             state.later_btn.set_sensitive(true);
@@ -318,8 +480,11 @@ fn refresh_content(state: &UpdaterState) {
     state.reboot_banner.set_visible(snap.reboot_required);
     if let Some(err) = &snap.error {
         if count == 0 {
+            state.status.set_visible(true);
             state.status.set_text(err);
         }
+    } else if !state.applying.get() {
+        state.status.set_visible(false);
     }
 }
 
@@ -330,20 +495,17 @@ fn append_section(list: &gtk::ListBox, title: &str, items: &[metis_remote::Updat
     let header = gtk::Label::new(Some(title));
     header.set_halign(gtk::Align::Start);
     header.add_css_class("heading");
-    header.set_margin_top(8);
-    header.set_margin_bottom(4);
+    header.add_css_class("metis-updater-section");
     let header_row = gtk::ListBoxRow::new();
     header_row.set_selectable(false);
     header_row.set_activatable(false);
+    header_row.add_css_class("metis-updater-section-row");
     header_row.set_child(Some(&header));
     list.append(&header_row);
 
     for item in items {
         let row_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        row_box.set_margin_top(4);
-        row_box.set_margin_bottom(4);
-        row_box.set_margin_start(8);
-        row_box.set_margin_end(8);
+        row_box.add_css_class("metis-updater-item");
         let name = gtk::Label::new(Some(&item.name));
         name.set_halign(gtk::Align::Start);
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);

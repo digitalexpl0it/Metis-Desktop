@@ -251,9 +251,9 @@ fn show(forward: bool) {
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
     window.set_keyboard_mode(KeyboardMode::Exclusive);
-    window.set_namespace("metis-task-view");
+    window.set_namespace(Some("metis-task-view"));
     if let Some(monitor) = gdk_monitor_for_output(output.as_deref()) {
-        window.set_monitor(&monitor);
+        window.set_monitor(Some(&monitor));
     }
     for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
         window.set_anchor(edge, true);
@@ -376,11 +376,7 @@ fn show(forward: bool) {
     shelf_wrap.append(&shelf);
 
     let selected = if list.len() > 1 {
-        if forward {
-            1
-        } else {
-            list.len() - 1
-        }
+        if forward { 1 } else { list.len() - 1 }
     } else {
         0
     };

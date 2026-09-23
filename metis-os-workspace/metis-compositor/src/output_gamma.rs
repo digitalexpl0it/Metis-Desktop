@@ -7,7 +7,7 @@
 //! bake succeeds — then this path uploads an identity ramp so TRC is not
 //! double-applied.
 
-use smithay::reexports::drm::control::{crtc, Device as DrmControlDevice};
+use smithay::reexports::drm::control::{Device as DrmControlDevice, crtc};
 
 use crate::color_management::vcgt::{self, GammaRamps};
 use crate::state::MetisState;

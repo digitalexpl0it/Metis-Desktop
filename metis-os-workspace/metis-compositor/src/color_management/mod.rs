@@ -12,9 +12,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use metis_config::OutputsConfig;
+use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::backend::ObjectId;
-use smithay::reexports::wayland_server::DisplayHandle;
 
 use crate::state::MetisState;
 

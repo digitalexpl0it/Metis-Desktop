@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ashpd::PortalError;
-use metis_capture::{capture_output_frame, capture_png, frame_to_rgba, write_png, CaptureOptions};
+use metis_capture::{CaptureOptions, capture_output_frame, capture_png, frame_to_rgba, write_png};
 
 use crate::pipewire::PipeWireHub;
 

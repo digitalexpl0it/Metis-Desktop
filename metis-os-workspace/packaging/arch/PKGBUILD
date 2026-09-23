@@ -12,9 +12,9 @@ arch=('x86_64')
 url="https://github.com/digitalexpl0it/Metis"
 license=('MIT')
 depends=(
-  gtk4
+  'gtk4>=4.18'
   libadwaita
-  gtk4-layer-shell
+  'gtk4-layer-shell>=1.0'
   libpulse
   libinput
   seatd
@@ -44,7 +44,7 @@ optdepends=(
   'flatpak: Flatpak app support'
 )
 makedepends=(
-  rust
+  'rust>=1.95'
   cargo
   pkgconf
   git

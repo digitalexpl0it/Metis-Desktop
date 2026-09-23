@@ -65,10 +65,10 @@ impl XdgShellHandler for MetisState {
             // A maximized (or fullscreen) window is pinned — ignore drag requests
             // so its headerbar can't be used to move it around the screen. The
             // user must unmaximize first.
-            if let Some(record) = self.windows.get(id) {
-                if record.maximized || record.fullscreen {
-                    return;
-                }
+            if let Some(record) = self.windows.get(id)
+                && (record.maximized || record.fullscreen)
+            {
+                return;
             }
             self.floating.insert(id);
         }
@@ -129,10 +129,10 @@ impl XdgShellHandler for MetisState {
         serial: Serial,
         edges: xdg_toplevel::ResizeEdge,
     ) {
-        if let Some(id) = self.window_id_for_toplevel(&surface) {
-            if self.is_window_grid_managed(id) {
-                return;
-            }
+        if let Some(id) = self.window_id_for_toplevel(&surface)
+            && self.is_window_grid_managed(id)
+        {
+            return;
         }
 
         let Some(seat) = Seat::from_resource(&seat) else {
@@ -379,10 +379,10 @@ pub fn handle_commit(popups: &mut PopupManager, _space: &Space<Window>, surface:
     // and placement size. An early bare `send_configure` here made Chromium
     // latch server-side mode (close button only) before app_id was known.
     popups.commit(surface);
-    if let Some(PopupKind::Xdg(ref xdg)) = popups.find_popup(surface) {
-        if !xdg.is_initial_configure_sent() {
-            let _ = xdg.send_configure();
-        }
+    if let Some(PopupKind::Xdg(ref xdg)) = popups.find_popup(surface)
+        && !xdg.is_initial_configure_sent()
+    {
+        let _ = xdg.send_configure();
     }
 }
 

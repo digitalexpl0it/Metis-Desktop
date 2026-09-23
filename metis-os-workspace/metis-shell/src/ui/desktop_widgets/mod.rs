@@ -16,8 +16,8 @@ use gtk::gio;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use metis_config::{
-    desktop_widgets_config_path, load_desktop_widgets_config, save_desktop_widgets_config,
-    DesktopWidgetInstance, DesktopWidgetsConfig,
+    DesktopWidgetInstance, DesktopWidgetsConfig, desktop_widgets_config_path,
+    load_desktop_widgets_config, save_desktop_widgets_config,
 };
 
 const MIN_W: i32 = 160;
@@ -438,14 +438,14 @@ fn build_host(monitor: &gdk::Monitor, output: String, is_primary: bool) -> HostS
     window.init_layer_shell();
     // Bottom sits above the wallpaper (Background) and below normal windows / Top bar.
     window.set_layer(Layer::Bottom);
-    window.set_namespace("metis-desktop-widgets");
+    window.set_namespace(Some("metis-desktop-widgets"));
     window.set_keyboard_mode(KeyboardMode::None);
     window.set_exclusive_zone(0);
     for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
         window.set_anchor(edge, true);
         window.set_margin(edge, 0);
     }
-    window.set_monitor(monitor);
+    window.set_monitor(Some(monitor));
 
     let canvas = gtk::Fixed::new();
     canvas.add_css_class("metis-desktop-widgets-canvas");
@@ -824,17 +824,18 @@ fn watch_theme_and_config() {
         tracing::warn!(%err, "failed to ensure themes dir");
     }
     let themes_file = gio::File::for_path(&themes);
-    if let Ok(monitor) =
-        themes_file.monitor_directory(gio::FileMonitorFlags::NONE, None::<&gio::Cancellable>)
-    {
-        monitor.connect_changed(move |_, _, _, _| {
-            glib::timeout_add_local_once(Duration::from_millis(250), || {
-                let _ = crate::ui::theme::init_theme();
+    match themes_file.monitor_directory(gio::FileMonitorFlags::NONE, None::<&gio::Cancellable>) {
+        Ok(monitor) => {
+            monitor.connect_changed(move |_, _, _, _| {
+                glib::timeout_add_local_once(Duration::from_millis(250), || {
+                    let _ = crate::ui::theme::init_theme();
+                });
             });
-        });
-        retain_monitor(monitor);
-    } else {
-        tracing::warn!(path = %themes.display(), "themes dir monitor unavailable");
+            retain_monitor(monitor);
+        }
+        _ => {
+            tracing::warn!(path = %themes.display(), "themes dir monitor unavailable");
+        }
     }
 
     let cfg_path = metis_config::app_config_path();
@@ -1041,15 +1042,13 @@ fn apply_card_chrome(
         let provider = map
             .entry(style_class.to_string())
             .or_insert_with(gtk::CssProvider::new);
-        provider.load_from_data(&css);
-        if is_new {
-            if let Some(display) = gdk::Display::default() {
-                gtk::style_context_add_provider_for_display(
-                    &display,
-                    provider,
-                    gtk::STYLE_PROVIDER_PRIORITY_USER,
-                );
-            }
+        provider.load_from_string(&css);
+        if is_new && let Some(display) = gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                provider,
+                gtk::STYLE_PROVIDER_PRIORITY_USER,
+            );
         }
     });
 }

@@ -9,8 +9,8 @@ use smithay::{
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::{
-        timer::{TimeoutAction, Timer},
         EventLoop,
+        timer::{TimeoutAction, Timer},
     },
     utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform},
 };

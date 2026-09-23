@@ -118,12 +118,11 @@ fn filter_by_output_workspace(
 /// else any known window output, else empty (all outputs).
 pub fn focused_output_name() -> Option<String> {
     let snap = snapshot();
-    if let Some(fid) = snap.focused {
-        if let Some(w) = snap.windows.iter().find(|w| w.id == fid) {
-            if !w.output.is_empty() {
-                return Some(w.output.clone());
-            }
-        }
+    if let Some(fid) = snap.focused
+        && let Some(w) = snap.windows.iter().find(|w| w.id == fid)
+        && !w.output.is_empty()
+    {
+        return Some(w.output.clone());
     }
     snap.windows
         .iter()

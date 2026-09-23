@@ -155,14 +155,14 @@ fn volume_is_interesting(volume: &gio::Volume) -> bool {
     if volume_is_network(volume) {
         return false;
     }
-    if let Some(mount) = volume.get_mount() {
-        if let Some(path) = mount_path(&mount) {
-            if is_system_mount_path(&path) {
-                return false;
-            }
-            if path_looks_user_media(&path) {
-                return true;
-            }
+    if let Some(mount) = volume.get_mount()
+        && let Some(path) = mount_path(&mount)
+    {
+        if is_system_mount_path(&path) {
+            return false;
+        }
+        if path_looks_user_media(&path) {
+            return true;
         }
     }
     if let Some(drive) = volume.drive() {
@@ -195,12 +195,12 @@ fn volume_is_network(volume: &gio::Volume) -> bool {
             }
         }
     }
-    if let Some(mount) = volume.get_mount() {
-        if let Some(path) = mount_path(&mount) {
-            let s = path.to_string_lossy();
-            if s.starts_with("/run/user/") && s.contains("/gvfs/") {
-                return true;
-            }
+    if let Some(mount) = volume.get_mount()
+        && let Some(path) = mount_path(&mount)
+    {
+        let s = path.to_string_lossy();
+        if s.starts_with("/run/user/") && s.contains("/gvfs/") {
+            return true;
         }
     }
     false
@@ -219,10 +219,10 @@ fn entry_from_volume(volume: &gio::Volume) -> Option<VolumeEntry> {
     let id = volume_id(volume);
     let mount = volume.get_mount();
     let mount_path = mount.as_ref().and_then(mount_path);
-    if let Some(path) = mount_path.as_ref() {
-        if is_system_mount_path(path) {
-            return None;
-        }
+    if let Some(path) = mount_path.as_ref()
+        && is_system_mount_path(path)
+    {
+        return None;
     }
     let label = friendly_volume_label(volume, mount.as_ref(), mount_path.as_deref());
     let encrypted = looks_encrypted(volume);
@@ -293,10 +293,10 @@ fn friendly_volume_label(
             return label.to_string();
         }
     }
-    if let Some(path) = mount_path {
-        if let Some(name) = media_basename(path) {
-            return name;
-        }
+    if let Some(path) = mount_path
+        && let Some(name) = media_basename(path)
+    {
+        return name;
     }
     if let Some(mount) = mount {
         let name = mount.name();
@@ -317,12 +317,12 @@ fn friendly_volume_label(
             return name.to_string();
         }
     }
-    if let Some(dev) = volume.identifier("unix-device") {
-        if let Some(base) = Path::new(dev.trim()).file_name() {
-            let s = base.to_string_lossy();
-            if !s.is_empty() {
-                return format!("Drive ({s})");
-            }
+    if let Some(dev) = volume.identifier("unix-device")
+        && let Some(base) = Path::new(dev.trim()).file_name()
+    {
+        let s = base.to_string_lossy();
+        if !s.is_empty() {
+            return format!("Drive ({s})");
         }
     }
     "Removable drive".into()
@@ -583,26 +583,26 @@ pub fn unmount(id: &str) {
 pub fn eject(id: &str) {
     ensure_started();
     let op = mount_operation();
-    if let Some(mount) = find_mount(id) {
-        if mount.can_eject() {
-            mount.eject_with_operation(
-                gio::MountUnmountFlags::empty(),
-                Some(&op),
-                gio::Cancellable::NONE,
-                move |result| {
-                    if let Err(err) = result {
-                        tracing::warn!(%err, "eject failed");
-                        toast_error(&format!(
-                            "Could not eject — close apps using this drive.\n{err}"
-                        ));
-                        return;
-                    }
-                    rebuild_entries();
-                    notify_refresh();
-                },
-            );
-            return;
-        }
+    if let Some(mount) = find_mount(id)
+        && mount.can_eject()
+    {
+        mount.eject_with_operation(
+            gio::MountUnmountFlags::empty(),
+            Some(&op),
+            gio::Cancellable::NONE,
+            move |result| {
+                if let Err(err) = result {
+                    tracing::warn!(%err, "eject failed");
+                    toast_error(&format!(
+                        "Could not eject — close apps using this drive.\n{err}"
+                    ));
+                    return;
+                }
+                rebuild_entries();
+                notify_refresh();
+            },
+        );
+        return;
     }
     if let Some(volume) = find_volume(id) {
         if volume.can_eject() {
@@ -622,24 +622,24 @@ pub fn eject(id: &str) {
             );
             return;
         }
-        if let Some(drive) = volume.drive() {
-            if drive.can_eject() {
-                drive.eject_with_operation(
-                    gio::MountUnmountFlags::empty(),
-                    Some(&op),
-                    gio::Cancellable::NONE,
-                    move |result| {
-                        if let Err(err) = result {
-                            tracing::warn!(%err, "drive eject failed");
-                            toast_error(&format!("Could not eject drive.\n{err}"));
-                            return;
-                        }
-                        rebuild_entries();
-                        notify_refresh();
-                    },
-                );
-                return;
-            }
+        if let Some(drive) = volume.drive()
+            && drive.can_eject()
+        {
+            drive.eject_with_operation(
+                gio::MountUnmountFlags::empty(),
+                Some(&op),
+                gio::Cancellable::NONE,
+                move |result| {
+                    if let Err(err) = result {
+                        tracing::warn!(%err, "drive eject failed");
+                        toast_error(&format!("Could not eject drive.\n{err}"));
+                        return;
+                    }
+                    rebuild_entries();
+                    notify_refresh();
+                },
+            );
+            return;
         }
     }
     // Fall back to unmount when eject is unavailable.

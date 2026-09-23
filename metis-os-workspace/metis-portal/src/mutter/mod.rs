@@ -19,7 +19,7 @@ use zbus::zvariant::{OwnedObjectPath, Value};
 
 use metis_capture::CaptureOptions;
 
-use crate::capture::{spawn_screencast_pump, CaptureHub};
+use crate::capture::{CaptureHub, spawn_screencast_pump};
 use crate::compositor_ipc;
 use crate::pipewire::PipeWireHub;
 

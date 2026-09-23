@@ -65,14 +65,26 @@ pub fn build(inst: &DesktopWidgetInstance) -> gtk::Widget {
     let area_weak = area.downgrade();
     let tick = glib::timeout_add_local(Duration::from_millis(16), {
         let latest = latest.clone();
+        let mut silent_frames = 0u32;
         move || {
-            *latest.borrow_mut() = audio_viz_frame(bar_count);
-            if let Some(area) = area_weak.upgrade() {
-                area.queue_draw();
-                glib::ControlFlow::Continue
+            let Some(area) = area_weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let frame = audio_viz_frame(bar_count);
+            let energy: f32 = frame.bands.iter().chain(frame.peaks.iter()).copied().sum();
+            if energy < 0.02 {
+                silent_frames = silent_frames.saturating_add(1);
+                // Silence (incl. decayed peaks) already drawn: stop damaging
+                // the surface until audio returns.
+                if silent_frames > 30 {
+                    return glib::ControlFlow::Continue;
+                }
             } else {
-                glib::ControlFlow::Break
+                silent_frames = 0;
             }
+            *latest.borrow_mut() = frame;
+            area.queue_draw();
+            glib::ControlFlow::Continue
         }
     });
     let tick_id = Rc::new(Cell::new(Some(tick)));

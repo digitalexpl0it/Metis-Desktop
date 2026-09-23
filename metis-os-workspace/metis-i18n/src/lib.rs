@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use fluent::concurrent::FluentBundle;
 use fluent::{FluentArgs, FluentResource, FluentValue};
 use gettextrs::{
-    bind_textdomain_codeset, bindtextdomain, gettext, ngettext, setlocale, textdomain,
-    LocaleCategory,
+    LocaleCategory, bind_textdomain_codeset, bindtextdomain, gettext, ngettext, setlocale,
+    textdomain,
 };
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
@@ -24,7 +24,7 @@ use unic_langid::LanguageIdentifier;
 pub use format::{
     format_decimal, format_pattern, format_short_date, format_short_datetime, format_short_time,
 };
-pub use paths::{catalog_roots, discover_installed_languages, GETTEXT_DOMAIN};
+pub use paths::{GETTEXT_DOMAIN, catalog_roots, discover_installed_languages};
 
 static STATE: OnceCell<RwLock<I18nState>> = OnceCell::new();
 
@@ -71,15 +71,15 @@ impl FluentRuntime {
 
     pub fn tr_args(&self, id: &str, args: Option<&FluentArgs>) -> String {
         for bundle in [&self.primary, &self.fallback] {
-            if let Some(msg) = bundle.get_message(id) {
-                if let Some(pattern) = msg.value() {
-                    let mut errors = Vec::new();
-                    let value = bundle.format_pattern(pattern, args, &mut errors);
-                    if !errors.is_empty() {
-                        tracing::debug!(id, ?errors, "fluent format errors");
-                    }
-                    return value.into_owned();
+            if let Some(msg) = bundle.get_message(id)
+                && let Some(pattern) = msg.value()
+            {
+                let mut errors = Vec::new();
+                let value = bundle.format_pattern(pattern, args, &mut errors);
+                if !errors.is_empty() {
+                    tracing::debug!(id, ?errors, "fluent format errors");
                 }
+                return value.into_owned();
             }
         }
         tracing::debug!(id, "fluent missing key; returning id");
@@ -218,7 +218,9 @@ fn apply_gettext(info: &LocaleInfo) {
 
     let mut applied = None;
     for cand in &locale_candidates {
-        if setlocale(LocaleCategory::LcAll, cand.as_str()).is_some() {
+        // SAFETY: same invariant as the `set_var` above — only the UI thread
+        // touches process locale, and it does so before widgets re-read it.
+        if unsafe { setlocale(LocaleCategory::LcAll, cand.as_str()) }.is_some() {
             applied = Some(cand.clone());
             break;
         }
@@ -293,11 +295,7 @@ fn env_locale() -> Option<String> {
 fn normalize_tag(raw: &str) -> String {
     let base = raw.split(['.', '@']).next().unwrap_or(raw);
     let base = base.replace('-', "_");
-    if base.is_empty() {
-        "en".into()
-    } else {
-        base
-    }
+    if base.is_empty() { "en".into() } else { base }
 }
 
 fn to_posix(tag: &str) -> String {

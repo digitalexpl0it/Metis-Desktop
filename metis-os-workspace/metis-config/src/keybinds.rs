@@ -635,12 +635,12 @@ pub fn keybinds_config_path() -> PathBuf {
 
 pub fn load_keybinds_config() -> KeybindsConfig {
     let path = keybinds_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            match serde_json::from_str::<KeybindsConfig>(&text) {
-                Ok(cfg) => return cfg.sanitize(),
-                Err(err) => tracing::warn!(%err, "keybinds.json parse failed — using defaults"),
-            }
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+    {
+        match serde_json::from_str::<KeybindsConfig>(&text) {
+            Ok(cfg) => return cfg.sanitize(),
+            Err(err) => tracing::warn!(%err, "keybinds.json parse failed — using defaults"),
         }
     }
     KeybindsConfig::default().sanitize()

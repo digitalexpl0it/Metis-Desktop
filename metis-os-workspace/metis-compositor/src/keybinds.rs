@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
-use metis_config::{load_keybinds_config, Chord, KeybindAction, KeybindsConfig, ModKey};
-use smithay::input::keyboard::keysyms;
+use metis_config::{Chord, KeybindAction, KeybindsConfig, ModKey, load_keybinds_config};
 use smithay::input::keyboard::ModifiersState;
+use smithay::input::keyboard::keysyms;
 
 static CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 

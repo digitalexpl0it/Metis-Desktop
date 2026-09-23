@@ -123,10 +123,10 @@ fn apply_output_mode(state: &mut MetisState, output: &Output, prefs: &OutputPref
         preferred: false,
     };
 
-    if let Some(current) = output.current_mode() {
-        if modes_match(&wl_mode_info(current, false), &target) {
-            return false;
-        }
+    if let Some(current) = output.current_mode()
+        && modes_match(&wl_mode_info(current, false), &target)
+    {
+        return false;
     }
 
     // Refuse to force a mode that this connector doesn't advertise (stale prefs

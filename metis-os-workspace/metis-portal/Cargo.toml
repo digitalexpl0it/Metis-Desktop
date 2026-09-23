@@ -2,6 +2,7 @@
 name = "metis-portal"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "xdg-desktop-portal backend for the Metis session"
 
@@ -18,17 +19,17 @@ libc = "0.2"
 metis-capture = { workspace = true }
 metis-config = { workspace = true }
 metis-protocol = { workspace = true }
-png = "0.17"
+png = "0.18"
 # 0.8 breaks against PipeWire 1.x headers (Ubuntu 26.04 / Debian 13): bindgen
 # emits opaque spa_pod_builder. 0.9+ fixes clang macro fallback; 0.10 adds v1_*.
-pipewire = { version = "0.9", features = ["v0_3_34"] }
+pipewire = { version = "0.10", features = ["v0_3_34"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs"] }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 tracing-subscriber = { workspace = true }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
-xkbcommon = "0.8"
+xkbcommon = "0.9"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [build-dependencies]

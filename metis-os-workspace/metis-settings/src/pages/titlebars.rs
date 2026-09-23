@@ -187,7 +187,7 @@ pub fn build() -> gtk::Widget {
     let filter = Rc::new(filter);
     let store = Rc::new(store);
     let debounce: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
-    let gen: Rc<RefCell<u64>> = Rc::new(RefCell::new(0));
+    let r#gen: Rc<RefCell<u64>> = Rc::new(RefCell::new(0));
 
     prune_redundant_overrides();
     refill_store(&store);
@@ -228,11 +228,11 @@ pub fn build() -> gtk::Widget {
         let empty_label = empty_label.clone();
         let query = query.clone();
         let debounce = debounce.clone();
-        let gen = gen.clone();
+        let r#gen = r#gen.clone();
         move |entry| {
             let new_q = entry.text().trim().to_ascii_lowercase();
-            *gen.borrow_mut() += 1;
-            let my_gen = *gen.borrow();
+            *r#gen.borrow_mut() += 1;
+            let my_gen = *r#gen.borrow();
 
             let mut slot = debounce.borrow_mut();
             if let Some(id) = slot.take() {
@@ -243,11 +243,11 @@ pub fn build() -> gtk::Widget {
             let empty_label = empty_label.clone();
             let query = query.clone();
             let debounce = debounce.clone();
-            let gen = gen.clone();
+            let r#gen = r#gen.clone();
             // Tiny debounce coalesces paste/bursts; filter itself is cheap.
             let id = glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
                 *debounce.borrow_mut() = None;
-                if *gen.borrow() != my_gen {
+                if *r#gen.borrow() != my_gen {
                     return glib::ControlFlow::Break;
                 }
                 *query.borrow_mut() = new_q.clone();

@@ -8,11 +8,11 @@ use std::time::Duration;
 use gio::prelude::*;
 use gtk::prelude::*;
 use metis_config::{
-    load_app_config, load_gaming_config, save_app_config, save_gaming_config,
-    validate_steam_library_path, GamingConfig, GraphicsMode, XwaylandMode,
+    GamingConfig, GraphicsMode, XwaylandMode, load_app_config, load_gaming_config, save_app_config,
+    save_gaming_config, validate_steam_library_path,
 };
 use metis_gaming::health::{
-    auto_fix_item, install_nvidia_drivers, run_health_check, HealthCheck, HealthSeverity,
+    HealthCheck, HealthSeverity, auto_fix_item, install_nvidia_drivers, run_health_check,
 };
 use metis_gaming::{nvidia_gpu_present, nvidia_reboot_required};
 
@@ -912,11 +912,7 @@ enum WizardAction {
 
 /// Index of the final Flatpak / finish step.
 fn wizard_finish_step(need_nvidia: bool) -> u32 {
-    if need_nvidia {
-        6
-    } else {
-        5
-    }
+    if need_nvidia { 6 } else { 5 }
 }
 
 fn wizard_step_copy(step: u32, need_nvidia: bool) -> (String, String, String) {
@@ -1343,7 +1339,7 @@ fn update_health_summary(sections: &Rc<Sections>, check: &HealthCheck) {
     if issues == 0 && infos == 0 {
         sections
             .status_icon
-            .set_from_icon_name(Some("emblem-ok-symbolic"));
+            .set_icon_name(Some("emblem-ok-symbolic"));
         sections
             .status_text
             .set_text(&tr("Ready for gaming — all checks passed."));
@@ -1353,7 +1349,7 @@ fn update_health_summary(sections: &Rc<Sections>, check: &HealthCheck) {
     } else if issues == 0 {
         sections
             .status_icon
-            .set_from_icon_name(Some("dialog-information-symbolic"));
+            .set_icon_name(Some("dialog-information-symbolic"));
         sections.status_text.set_text(&tr(&format!(
             "Mostly ready — {infos} optional improvement(s) below."
         )));
@@ -1366,7 +1362,7 @@ fn update_health_summary(sections: &Rc<Sections>, check: &HealthCheck) {
         });
         sections
             .status_icon
-            .set_from_icon_name(Some("dialog-warning-symbolic"));
+            .set_icon_name(Some("dialog-warning-symbolic"));
         if auto {
             sections.status_text.set_text(&tr(&format!(
                 "{issues} issue(s) found — use Fix to install, or Copy command to run it yourself."

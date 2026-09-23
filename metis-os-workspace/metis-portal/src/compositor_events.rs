@@ -57,15 +57,14 @@ fn read_events(stream: UnixStream, sessions: &Arc<Mutex<Vec<ClipboardSession>>>)
             preview_text,
             image_path,
         } = evt
+            && let Ok(list) = sessions.lock()
         {
-            if let Ok(list) = sessions.lock() {
-                for session in list.iter() {
-                    session.on_local_clipboard_changed(
-                        &mime,
-                        preview_text.as_deref(),
-                        image_path.as_deref(),
-                    );
-                }
+            for session in list.iter() {
+                session.on_local_clipboard_changed(
+                    &mime,
+                    preview_text.as_deref(),
+                    image_path.as_deref(),
+                );
             }
         }
     }

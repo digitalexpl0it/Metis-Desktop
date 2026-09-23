@@ -13,7 +13,7 @@ use gtk::cairo;
 use gtk::prelude::*;
 
 use crate::icons::{self, Glyph};
-use crate::{ocr, pin, theme, Cli};
+use crate::{Cli, ocr, pin, theme};
 
 const PALETTE: [(&str, (f64, f64, f64)); 6] = [
     ("Red", (0.95, 0.25, 0.21)),
@@ -259,10 +259,10 @@ pub fn show(app: &gtk::Application, cli: Cli) {
             if let Some(annotation) = state.active.as_ref().filter(|item| item.tool == Tool::Text) {
                 draw_text_selection(context, annotation, false);
             }
-            if let Some(index) = state.selected_text {
-                if let Some(annotation) = state.annotations.get(index) {
-                    draw_text_selection(context, annotation, caret_visible.get());
-                }
+            if let Some(index) = state.selected_text
+                && let Some(annotation) = state.annotations.get(index)
+            {
+                draw_text_selection(context, annotation, caret_visible.get());
             }
             context.restore().ok();
         }
@@ -1841,11 +1841,13 @@ mod tests {
     #[test]
     fn tiny_drags_are_not_treated_as_a_region() {
         let image = image::RgbaImage::new(40, 40);
-        assert!(region(
-            &image,
-            &annotation(Tool::Crop, vec![(5.0, 5.0), (7.0, 6.0)])
-        )
-        .is_none());
+        assert!(
+            region(
+                &image,
+                &annotation(Tool::Crop, vec![(5.0, 5.0), (7.0, 6.0)])
+            )
+            .is_none()
+        );
         assert_eq!(
             region(
                 &image,

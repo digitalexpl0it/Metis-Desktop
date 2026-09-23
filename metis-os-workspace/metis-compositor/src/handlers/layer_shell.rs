@@ -1,4 +1,4 @@
-use smithay::desktop::{layer_map_for_output, LayerSurface, WindowSurfaceType};
+use smithay::desktop::{LayerSurface, WindowSurfaceType, layer_map_for_output};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -102,14 +102,14 @@ pub fn handle_layer_commit(state: &mut MetisState, surface: &WlSurface) {
         // focus as soon as the layer commits the new interactivity.
         if exclusive {
             let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-            if let Some(layer) = state.exclusive_keyboard_layer() {
-                if let Some(keyboard) = state.seat.get_keyboard() {
-                    keyboard.set_focus(
-                        state,
-                        Some(crate::focus::KeyboardFocusTarget::from(layer)),
-                        serial,
-                    );
-                }
+            if let Some(layer) = state.exclusive_keyboard_layer()
+                && let Some(keyboard) = state.seat.get_keyboard()
+            {
+                keyboard.set_focus(
+                    state,
+                    Some(crate::focus::KeyboardFocusTarget::from(layer)),
+                    serial,
+                );
             }
         }
         state.schedule_redraw();

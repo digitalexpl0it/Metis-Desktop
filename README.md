@@ -85,9 +85,9 @@ quits the app.
 
 ## Technology stack
 
-- **Language:** Rust (stable), `tokio` async, `serde`/`serde_json` for JSON contracts.
+- **Language:** Rust (stable, edition 2024, MSRV 1.95), `tokio` async, `serde`/`serde_json` for JSON contracts.
 - **Compositor:** [Smithay](https://github.com/Smithay/smithay) with a `winit` nested backend for development; DRM/KMS session backend; `calloop` event loop; `image` for wallpaper decode; XWayland for X11 apps.
-- **Shell / UI:** GTK4 with [`gtk4-layer-shell`](https://github.com/wmww/gtk4-layer-shell); `zbus` for the freedesktop notification daemon.
+- **Shell / UI:** GTK 4.18+ (`gtk4-rs` 0.11) with [`gtk4-layer-shell`](https://github.com/wmww/gtk4-layer-shell); `zbus` for the freedesktop notification daemon.
 - **IPC:** JSON over Unix sockets (`metis-protocol`) plus a runtime command file under `$XDG_RUNTIME_DIR/metis/`.
 - **Configuration:** JSON under `~/.config/metis/`.
 
@@ -100,12 +100,11 @@ Download the matching `metis-desktop_*_amd64.<suite>.deb` from
 
 | Suite in filename | OS                 |
 | ----------------- | ------------------ |
-| `ubuntu24.04`     | Ubuntu 24.04       |
-| `ubuntu26.04`     | Ubuntu 26.04       |
-| `debian13`        | Debian 13 (trixie) |
+| `ubuntu26.04`     | Ubuntu 26.04+      |
+| `debian13`        | Debian 13 (trixie)+ |
 
 ```bash
-sudo apt install ./metis-desktop_VERSION-1_amd64.ubuntu24.04.deb
+sudo apt install ./metis-desktop_VERSION-1_amd64.ubuntu26.04.deb
 ```
 
 See [`docs/PACKAGING.md`](docs/PACKAGING.md). Log out and pick **Metis** at the greeter.
@@ -113,9 +112,13 @@ See [`docs/PACKAGING.md`](docs/PACKAGING.md). Log out and pick **Metis** at the 
 **Note:** The package is named `metis-desktop`, not `metis` (avoids colliding with
 Ubuntu’s unrelated math package).
 
+**Supported platforms:** Ubuntu 26.04+, Debian 13+, Arch Linux, NixOS 26.05+.
+Metis needs GTK ≥ 4.18 and gtk4-layer-shell ≥ 1.0, so Ubuntu 24.04 (GTK 4.14) is
+no longer supported.
+
 ### From source (`./install.sh`)
 
-Ubuntu 24.04 / 26.04, Debian 13, or Arch:
+Ubuntu 26.04+, Debian 13+, or Arch:
 
 ```bash
 git clone https://github.com/digitalexpl0it/Metis.git

@@ -18,7 +18,7 @@ use gtk::prelude::*;
 
 use crate::config::{load_bar_config, save_bar_config};
 use crate::services::windows::{self, WindowsSnapshot};
-use crate::services::{applications, AppEntry};
+use crate::services::{AppEntry, applications};
 
 use metis_protocol::WindowInfo;
 
@@ -220,11 +220,7 @@ fn prettify_app_id(id: &str) -> String {
             out.push_str(chars.as_str());
         }
     }
-    if out.is_empty() {
-        id.to_string()
-    } else {
-        out
-    }
+    if out.is_empty() { id.to_string() } else { out }
 }
 
 fn fallback_icon() -> gio::Icon {
@@ -692,10 +688,10 @@ fn show_window_menu(row: &gtk::Button, id: u32, title: &str) {
     popover.connect_closed(move |_| {
         let weak = weak.clone();
         glib::idle_add_local_once(move || {
-            if let Some(p) = weak.upgrade() {
-                if p.parent().is_some() {
-                    p.unparent();
-                }
+            if let Some(p) = weak.upgrade()
+                && p.parent().is_some()
+            {
+                p.unparent();
             }
         });
     });
@@ -747,10 +743,10 @@ fn attach_context_menu(btn: &gtk::Button, group: &Group) {
                 popover_c.popdown();
                 if let Some(id) = &pin_id {
                     applications::launch_id_new_window(id);
-                } else if let Some(exec) = &exec {
-                    if let Err(err) = crate::compositor::launch_program(exec) {
-                        tracing::warn!(%err, "failed to launch new app window");
-                    }
+                } else if let Some(exec) = &exec
+                    && let Err(err) = crate::compositor::launch_program(exec)
+                {
+                    tracing::warn!(%err, "failed to launch new app window");
                 }
             });
             panel.append(&item);
@@ -805,11 +801,11 @@ fn attach_context_menu(btn: &gtk::Button, group: &Group) {
 fn menu_item(label: &str) -> gtk::Button {
     let item = gtk::Button::builder().label(label).has_frame(false).build();
     item.add_css_class("metis-bar-task-menu-item");
-    if let Some(child) = item.child() {
-        if let Ok(lbl) = child.downcast::<gtk::Label>() {
-            lbl.set_halign(gtk::Align::Start);
-            lbl.set_xalign(0.0);
-        }
+    if let Some(child) = item.child()
+        && let Ok(lbl) = child.downcast::<gtk::Label>()
+    {
+        lbl.set_halign(gtk::Align::Start);
+        lbl.set_xalign(0.0);
     }
     item
 }
@@ -838,10 +834,10 @@ fn transient_popover(parent: &impl IsA<gtk::Widget>, panel: &gtk::Box) -> gtk::P
     popover.connect_closed(move |_| {
         let weak = weak.clone();
         glib::idle_add_local_once(move || {
-            if let Some(p) = weak.upgrade() {
-                if p.parent().is_some() {
-                    p.unparent();
-                }
+            if let Some(p) = weak.upgrade()
+                && p.parent().is_some()
+            {
+                p.unparent();
             }
         });
     });

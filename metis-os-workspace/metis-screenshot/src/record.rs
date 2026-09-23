@@ -1,16 +1,16 @@
 use std::io::Write;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use metis_capture::{capture_output_frame, crop_rgba, frame_to_rgba, CaptureOptions};
+use metis_capture::{CaptureOptions, capture_output_frame, crop_rgba, frame_to_rgba};
 use metis_grid::PixelRect;
 
-use crate::{theme, Cli};
+use crate::{Cli, theme};
 
 pub fn show(app: &gtk::Application, cli: Cli) {
     theme::install();
@@ -22,7 +22,7 @@ pub fn show(app: &gtk::Application, cli: Cli) {
     window.set_layer(Layer::Overlay);
     window.set_exclusive_zone(-1);
     window.set_keyboard_mode(KeyboardMode::OnDemand);
-    window.set_namespace("metis-screenshot-record");
+    window.set_namespace(Some("metis-screenshot-record"));
     window.set_anchor(Edge::Bottom, true);
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
@@ -198,9 +198,5 @@ fn mp4_encoder() -> &'static str {
         .output()
         .ok()
         .is_some_and(|output| String::from_utf8_lossy(&output.stdout).contains("libx264"));
-    if supports_x264 {
-        "libx264"
-    } else {
-        "mpeg4"
-    }
+    if supports_x264 { "libx264" } else { "mpeg4" }
 }

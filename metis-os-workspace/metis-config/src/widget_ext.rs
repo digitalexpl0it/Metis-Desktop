@@ -321,13 +321,13 @@ pub fn load_widget_extension(root: &Path) -> Result<DiscoveredWidgetExt, String>
     if !is_valid_extension_id(&manifest.id) {
         return Err(format!("invalid extension id {:?}", manifest.id));
     }
-    if let Some(dir_name) = root.file_name().and_then(|s| s.to_str()) {
-        if dir_name != manifest.id {
-            return Err(format!(
-                "folder name {dir_name:?} must match manifest id {:?}",
-                manifest.id
-            ));
-        }
+    if let Some(dir_name) = root.file_name().and_then(|s| s.to_str())
+        && dir_name != manifest.id
+    {
+        return Err(format!(
+            "folder name {dir_name:?} must match manifest id {:?}",
+            manifest.id
+        ));
     }
     if manifest.api != WIDGET_EXT_API {
         return Err(format!(
@@ -347,13 +347,13 @@ pub fn load_widget_extension(root: &Path) -> Result<DiscoveredWidgetExt, String>
     }
     // Fail closed: layout must parse and pass action/size validators at discovery.
     load_widget_layout(root).map_err(|e| format!("widget.json: {e}"))?;
-    if let Some(helper) = &manifest.helper {
-        if resolve_helper_exec(root, helper).is_none() {
-            return Err(format!(
-                "helper.exec {:?} missing or escapes pack root",
-                helper.exec
-            ));
-        }
+    if let Some(helper) = &manifest.helper
+        && resolve_helper_exec(root, helper).is_none()
+    {
+        return Err(format!(
+            "helper.exec {:?} missing or escapes pack root",
+            helper.exec
+        ));
     }
     Ok(DiscoveredWidgetExt {
         manifest,

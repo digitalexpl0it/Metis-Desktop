@@ -8,10 +8,10 @@ use std::time::{Duration, SystemTime};
 use gtk::gdk;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use metis_capture::{capture_png, CaptureOptions};
+use metis_capture::{CaptureOptions, capture_png};
 use metis_config::{
-    expand_save_dir, load_screenshot_config, parse_hex_rgb, save_default_screenshot_config,
-    save_screenshot_config, AfterCaptureAction, ScreenshotConfig, ScreenshotMode,
+    AfterCaptureAction, ScreenshotConfig, ScreenshotMode, expand_save_dir, load_screenshot_config,
+    parse_hex_rgb, save_default_screenshot_config, save_screenshot_config,
 };
 use metis_protocol::{CompositorCommand, OutputInfo, PixelRect, WindowInfo};
 
@@ -153,9 +153,9 @@ fn show_interactive(
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
     window.set_keyboard_mode(KeyboardMode::Exclusive);
-    window.set_namespace("metis-screenshot");
+    window.set_namespace(Some("metis-screenshot"));
     if let Some(monitor) = gdk_monitor_for_output(&connector, monitor_origin) {
-        window.set_monitor(&monitor);
+        window.set_monitor(Some(&monitor));
     }
     for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
         window.set_anchor(edge, true);
@@ -243,10 +243,10 @@ fn show_interactive_record(config: ScreenshotConfig, connector: Option<String>) 
         if let Some(overlay) = o.borrow().as_ref() {
             overlay.record_handoff.set(true);
             // Prefer a capture button label that matches the handoff.
-            if let Some(child) = overlay.toolbar.last_child() {
-                if let Ok(btn) = child.downcast::<gtk::Button>() {
-                    btn.set_label(&metis_i18n::tr("Record"));
-                }
+            if let Some(child) = overlay.toolbar.last_child()
+                && let Ok(btn) = child.downcast::<gtk::Button>()
+            {
+                btn.set_label(&metis_i18n::tr("Record"));
             }
         }
     });
@@ -938,12 +938,11 @@ fn point_in_rect(x: i32, y: i32, rect: PixelRect) -> bool {
 }
 
 fn primary_monitor_geometry() -> gdk::Rectangle {
-    if let Some(display) = gdk::Display::default() {
-        if let Some(obj) = display.monitors().item(0) {
-            if let Ok(monitor) = obj.downcast::<gdk::Monitor>() {
-                return monitor.geometry();
-            }
-        }
+    if let Some(display) = gdk::Display::default()
+        && let Some(obj) = display.monitors().item(0)
+        && let Ok(monitor) = obj.downcast::<gdk::Monitor>()
+    {
+        return monitor.geometry();
     }
     gdk::Rectangle::new(0, 0, 1920, 1080)
 }
@@ -1065,10 +1064,10 @@ fn after_capture_action(config: &ScreenshotConfig, path: &PathBuf, action: After
             tracing::warn!(%err, "failed to create screenshot save dir");
         } else {
             let dest = save_dir.join(path.file_name().unwrap_or_default());
-            if dest != *path {
-                if let Err(err) = std::fs::copy(path, &dest) {
-                    tracing::warn!(%err, "failed to save screenshot copy");
-                }
+            if dest != *path
+                && let Err(err) = std::fs::copy(path, &dest)
+            {
+                tracing::warn!(%err, "failed to save screenshot copy");
             }
         }
     }
@@ -1076,18 +1075,18 @@ fn after_capture_action(config: &ScreenshotConfig, path: &PathBuf, action: After
         let _ =
             crate::compositor::launch_argv(["xdg-open".to_string(), path.display().to_string()]);
     }
-    if matches!(action, AfterCaptureAction::Edit) {
-        if let Err(err) = crate::compositor::launch_argv([
+    if matches!(action, AfterCaptureAction::Edit)
+        && let Err(err) = crate::compositor::launch_argv([
             "metis-screenshot".to_string(),
             "--mode".to_string(),
             "edit".to_string(),
             "--path".to_string(),
             path.display().to_string(),
-        ]) {
-            tracing::warn!(%err, "failed to launch metis-screenshot editor");
-            toast_message(&metis_i18n::tr("Could not open screenshot editor"));
-            return;
-        }
+        ])
+    {
+        tracing::warn!(%err, "failed to launch metis-screenshot editor");
+        toast_message(&metis_i18n::tr("Could not open screenshot editor"));
+        return;
     }
     toast_message(&metis_i18n::tr("Screenshot captured"));
 }
@@ -1132,14 +1131,13 @@ fn resolve_connector(hint: Option<String>, config: &ScreenshotConfig) -> Option<
 
 fn monitor_context(connector: Option<&str>) -> ((i32, i32), usize, Option<String>) {
     let outputs = list_outputs_best_effort();
-    if let Some(name) = connector {
-        if let Some((idx, out)) = outputs
+    if let Some(name) = connector
+        && let Some((idx, out)) = outputs
             .iter()
             .enumerate()
             .find(|(_, o)| o.name.eq_ignore_ascii_case(name))
-        {
-            return ((out.rect.x, out.rect.y), idx, Some(out.name.clone()));
-        }
+    {
+        return ((out.rect.x, out.rect.y), idx, Some(out.name.clone()));
     }
     if let Some((idx, out)) = outputs.iter().enumerate().find(|(_, o)| o.primary) {
         return ((out.rect.x, out.rect.y), idx, Some(out.name.clone()));
@@ -1153,10 +1151,10 @@ fn monitor_context(connector: Option<&str>) -> ((i32, i32), usize, Option<String
 
 fn output_origin(output_index: usize, connector: Option<&str>) -> (i32, i32) {
     let outputs = list_outputs_best_effort();
-    if let Some(name) = connector {
-        if let Some(out) = outputs.iter().find(|o| o.name.eq_ignore_ascii_case(name)) {
-            return (out.rect.x, out.rect.y);
-        }
+    if let Some(name) = connector
+        && let Some(out) = outputs.iter().find(|o| o.name.eq_ignore_ascii_case(name))
+    {
+        return (out.rect.x, out.rect.y);
     }
     outputs
         .get(output_index)

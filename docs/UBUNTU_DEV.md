@@ -1,7 +1,12 @@
 # Development setup — Metis
 
-Primary target: **Ubuntu 24.04+**. For a one-shot bootstrap on Ubuntu 24.04 / 26.04,
-Debian 13, or Arch, prefer the repo-root installer:
+Supported: **Ubuntu 26.04+**, **Debian 13 (trixie)+**, **Arch Linux**, and **NixOS
+26.05+** (flake). The floor is Debian 13: GTK ≥ 4.18, GLib ≥ 2.84,
+gtk4-layer-shell ≥ 1.0, PipeWire ≥ 1.4, and Rust ≥ 1.95 (install via
+[rustup](https://rustup.rs); distro `rustc` is too old). Ubuntu 24.04 (GTK 4.14)
+is no longer supported.
+
+For a one-shot bootstrap, prefer the repo-root installer:
 
 ```bash
 ./install.sh --yes
@@ -17,14 +22,10 @@ sudo apt install -y \
   build-essential pkg-config libssl-dev libclang-dev \
   libgtk-4-dev libadwaita-1-dev \
   libpulse-dev \
+  libgtk4-layer-shell-dev \
   curl git
-# Ubuntu 26.04 / Debian 13:
-sudo apt install -y libgtk4-layer-shell-dev
 ```
 
-On **Ubuntu 24.04**, there is no `libgtk4-layer-shell-dev` — build
-[gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) from source (or let
-`./install.sh` do it) and set `PKG_CONFIG_PATH`.
 To build/run the **standalone DRM session** (Metis on its own TTY/GPU, not nested),
 also install the session, input, and GPU libraries:
 
@@ -38,7 +39,7 @@ sudo apt install -y \
 ```
 
 `liblcms2-dev` is required to build Stage 2 colour (ICC → GLES 3D-LUT).
-If `libgtk4-layer-shell-dev` is unavailable on your release (e.g. Ubuntu 24.04), build [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) from source and set `PKG_CONFIG_PATH` accordingly.
+If your image lacks `libgtk4-layer-shell-dev`, run `METIS_LAYER_SHELL_FROM_SOURCE=1 ./install.sh --deps-only` to build [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) into `/usr/local`.
 
 ### Lock screen biometrics (optional)
 
@@ -438,7 +439,7 @@ Created later, on demand:
 |-------|-----|
 | Compositor shortcuts don't work (nested in GNOME) | GNOME grabs **Super** globally. Nested sessions default to **`METIS_MOD=alt`** — use **Alt+1**…**Alt+9**, **Alt+Shift+←/→**, etc. Click the Metis window first so it has keyboard focus. To force Super: `METIS_MOD=super ./run-metis.sh --session` after disabling conflicting GNOME shortcuts (Settings → Keyboard → Keyboard Shortcuts). |
 | Layer surfaces invisible | Confirm Wayland session + `echo $WAYLAND_DISPLAY` |
-| Missing layer-shell | Install `libgtk4-layer-shell-dev` (26.04 / Debian 13), or build from source on 24.04 |
+| Missing layer-shell | Install `libgtk4-layer-shell-dev` (Ubuntu 26.04+ / Debian 13+), or `METIS_LAYER_SHELL_FROM_SOURCE=1 ./install.sh --deps-only` |
 | Shell hangs on startup | Rebuild compositor + shell (`./run-metis.sh --build --session`) |
 | Theme not applied | Delete `~/.config/metis/themes/*.json` and restart to regenerate |
 | Settings scroll freezes on Windows/Display (26.04 / hybrid GPU) | Rebuild/reinstall `metis-settings` (2026-09-19 Cairo GSK default). Test GPU GSK with `METIS_SETTINGS_GSK_RENDERER=gl` |

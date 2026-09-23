@@ -601,11 +601,11 @@ impl Inner {
         let bar = gtk::Box::new(gtk::Orientation::Vertical, 0);
         bar.add_css_class("metis-cal-event-color");
         bar.set_width_request(3);
-        if let Some(color) = &ev.color {
-            if let Ok(provider) = inline_color_css(color) {
-                bar.style_context()
-                    .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-            }
+        if let Some(color) = &ev.color
+            && let Ok(provider) = inline_color_css(color)
+        {
+            bar.style_context()
+                .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         }
         row.append(&bar);
 
@@ -707,7 +707,7 @@ fn inline_color_css(color: &str) -> Result<gtk::CssProvider, ()> {
         return Err(());
     }
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(&format!(
+    provider.load_from_string(&format!(
         ".metis-cal-event-color {{ background-color: {safe}; }}"
     ));
     Ok(provider)

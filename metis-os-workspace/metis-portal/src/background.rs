@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ashpd::{
+    MaybeAppID, PortalError,
     backend::{
         background::{
             Activity, AppState, AutoStartFlags, Background, BackgroundImpl, BackgroundSignalEmitter,
@@ -15,7 +16,6 @@ use ashpd::{
         request::RequestImpl,
     },
     desktop::HandleToken,
-    MaybeAppID, PortalError,
 };
 use async_trait::async_trait;
 use enumflags2::BitFlags;

@@ -4,12 +4,12 @@
 //! wash sits above the desktop (same stacking slot as night light). HDR-active
 //! outputs skip the overlay so PQ/HLG metadata is not washed out.
 
+use smithay::backend::renderer::Color32F;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::{Id, Kind};
-use smithay::backend::renderer::Color32F;
 use smithay::utils::Rectangle;
 
-use crate::night_light::{premultiply, RenderTargetInfo};
+use crate::night_light::{RenderTargetInfo, premultiply};
 use crate::state::MetisState;
 
 /// Soft black wash (~12% after premultiply) — readable, not a blank.
@@ -70,10 +70,10 @@ pub fn should_render_battery_dim(state: &MetisState, target: &RenderTargetInfo<'
     if state.image_capture.screencast_active() || state.image_capture.has_pending() {
         return false;
     }
-    if let Some(name) = target.output_name {
-        if crate::output_hdr::hdr_active_for_output(state, name) {
-            return false;
-        }
+    if let Some(name) = target.output_name
+        && crate::output_hdr::hdr_active_for_output(state, name)
+    {
+        return false;
     }
     if state.output_has_fullscreen(target.output_name) {
         return false;

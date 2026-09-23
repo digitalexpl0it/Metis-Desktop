@@ -1,4 +1,4 @@
-use super::layout::{pixel_to_grid_cell, GridMetrics, PixelRect};
+use super::layout::{GridMetrics, PixelRect, pixel_to_grid_cell};
 use super::model::{GridLayout, TileRect};
 
 /// Distance from monitor edge to trigger a half/corner snap (macOS-style).

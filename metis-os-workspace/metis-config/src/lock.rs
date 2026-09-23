@@ -112,10 +112,10 @@ pub fn lock_config_path() -> PathBuf {
 
 pub fn load_lock_config() -> LockConfig {
     let path = lock_config_path();
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(cfg) = serde_json::from_str(&text) {
-            return cfg;
-        }
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(cfg) = serde_json::from_str(&text)
+    {
+        return cfg;
     }
     LockConfig::default()
 }

@@ -7,12 +7,12 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use metis_config::{load_gaming_config, PowerProfile};
+use metis_config::{PowerProfile, load_gaming_config};
 use metis_protocol::CompositorEvent;
 
 use crate::power::{
-    apply_session_power, read_current_power_profile, register_gamemode, unregister_gamemode,
-    SessionPowerAction,
+    SessionPowerAction, apply_session_power, read_current_power_profile, register_gamemode,
+    unregister_gamemode,
 };
 
 #[derive(Default)]
@@ -36,11 +36,11 @@ impl GamingDaemon {
                 self.saved_profile = read_current_power_profile();
                 apply_session_power(SessionPowerAction::EnterPerformance, self.saved_profile);
             }
-            if cfg.auto_gamemode {
-                if let Some(pid) = pid {
-                    register_gamemode(pid);
-                    self.game_pid = Some(pid);
-                }
+            if cfg.auto_gamemode
+                && let Some(pid) = pid
+            {
+                register_gamemode(pid);
+                self.game_pid = Some(pid);
             }
             self.game_active = true;
         } else if !active && self.game_active {
@@ -102,10 +102,10 @@ pub fn spawn_event_listener(tx: mpsc::Sender<CompositorEvent>) {
 
 fn event_listen_loop(tx: mpsc::Sender<CompositorEvent>) {
     loop {
-        if connect_and_subscribe().is_ok() {
-            if let Ok(stream) = connect_events_socket() {
-                read_events(stream, &tx);
-            }
+        if connect_and_subscribe().is_ok()
+            && let Ok(stream) = connect_events_socket()
+        {
+            read_events(stream, &tx);
         }
         thread::sleep(Duration::from_millis(800));
     }

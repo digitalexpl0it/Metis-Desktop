@@ -1,12 +1,12 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 
+use smithay::wayland::selection::SelectionTarget;
 use smithay::wayland::selection::data_device::{
     current_data_device_selection_userdata, request_data_device_client_selection,
     set_data_device_selection,
 };
 use smithay::wayland::selection::primary_selection::set_primary_selection;
-use smithay::wayland::selection::SelectionTarget;
 
 use crate::events::EventBus;
 use crate::state::MetisState;
@@ -109,24 +109,23 @@ pub fn selection_mime_satisfies(offer_mime: &str, request_mime: &str) -> bool {
 fn recall_mime_types(stored_mime: &str, path: Option<&str>) -> Vec<String> {
     let mut mimes = Vec::new();
     push_unique_mime(&mut mimes, stored_mime);
-    if let Some(path) = path {
-        if let Some(ext) = std::path::Path::new(path)
+    if let Some(path) = path
+        && let Some(ext) = std::path::Path::new(path)
             .extension()
             .and_then(|e| e.to_str())
-        {
-            match ext.to_ascii_lowercase().as_str() {
-                "png" => {
-                    push_unique_mime(&mut mimes, "image/png");
-                    push_unique_mime(&mut mimes, "image/x-png");
-                }
-                "jpg" | "jpeg" => {
-                    push_unique_mime(&mut mimes, "image/jpeg");
-                    push_unique_mime(&mut mimes, "image/jpg");
-                }
-                "webp" => push_unique_mime(&mut mimes, "image/webp"),
-                "bmp" => push_unique_mime(&mut mimes, "image/bmp"),
-                _ => {}
+    {
+        match ext.to_ascii_lowercase().as_str() {
+            "png" => {
+                push_unique_mime(&mut mimes, "image/png");
+                push_unique_mime(&mut mimes, "image/x-png");
             }
+            "jpg" | "jpeg" => {
+                push_unique_mime(&mut mimes, "image/jpeg");
+                push_unique_mime(&mut mimes, "image/jpg");
+            }
+            "webp" => push_unique_mime(&mut mimes, "image/webp"),
+            "bmp" => push_unique_mime(&mut mimes, "image/bmp"),
+            _ => {}
         }
     }
     mimes

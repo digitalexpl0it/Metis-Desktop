@@ -14,10 +14,11 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use metis_config::{
-    find_widget_extension, interpolate_settings, interpolate_template, is_safe_launch_exec,
-    is_safe_launch_id, is_safe_open_uri, load_widget_layout, resolve_helper_exec,
-    run_helper_snapshot, template_needs_host, validate_action, DesktopWidgetInstance,
-    HostBindValues, WidgetExtAction, WidgetExtLabelStyle, WidgetExtNode, WIDGET_EXT_MAX_COPY,
+    DesktopWidgetInstance, HostBindValues, WIDGET_EXT_MAX_COPY, WidgetExtAction,
+    WidgetExtLabelStyle, WidgetExtNode, find_widget_extension, interpolate_settings,
+    interpolate_template, is_safe_launch_exec, is_safe_launch_id, is_safe_open_uri,
+    load_widget_layout, resolve_helper_exec, run_helper_snapshot, template_needs_host,
+    validate_action,
 };
 use sysinfo::{Disks, System};
 

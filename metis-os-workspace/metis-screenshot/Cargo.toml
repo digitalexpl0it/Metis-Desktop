@@ -2,6 +2,7 @@
 name = "metis-screenshot"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Metis screenshot editor, pin window, and recording controller"
 
@@ -10,17 +11,17 @@ name = "metis-screenshot"
 path = "src/main.rs"
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.8", features = ["v4_10"] }
-glib = "0.19"
-gio = "0.19"
-gdk-pixbuf = "0.19"
-gtk4-layer-shell = "0.3"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
+glib = "0.22"
+gio = "0.22"
+gdk-pixbuf = "0.22"
+gtk4-layer-shell = "0.8"
 metis-config = { workspace = true }
 metis-i18n = { workspace = true }
 metis-capture = { workspace = true }
 metis-protocol = { workspace = true }
 metis-grid = { workspace = true }
-png = "0.17"
+png = "0.18"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

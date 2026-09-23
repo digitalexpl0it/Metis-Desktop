@@ -3,9 +3,9 @@
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use metis_config::{load_updates_config, save_updates_config, UpdatesConfig};
+use metis_config::{UpdatesConfig, load_updates_config, save_updates_config};
 use metis_i18n::tr;
-use metis_remote::{updates_check_from_config, UpdateSnapshot};
+use metis_remote::{UpdateSnapshot, updates_check_from_config};
 
 use crate::bg;
 use crate::runtime;

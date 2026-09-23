@@ -293,11 +293,11 @@ pub fn connect_wifi(ssid: String, password: Option<String>) {
         "connect".to_string(),
         ssid,
     ];
-    if let Some(pw) = password {
-        if !pw.is_empty() {
-            args.push("password".to_string());
-            args.push(pw);
-        }
+    if let Some(pw) = password
+        && !pw.is_empty()
+    {
+        args.push("password".to_string());
+        args.push(pw);
     }
     detached(args, Duration::from_secs(30));
 }
@@ -607,10 +607,8 @@ pub fn vpn_up_with_password(target: &str, password: &str, remember: bool) -> Res
         return Err("Password is required.".into());
     }
     vpn_toggle("up", target, Some(password), Duration::from_secs(45))?;
-    if remember {
-        if let Err(e) = vpn_remember_password(target, password) {
-            tracing::warn!(%e, "VPN connected but could not save password to profile");
-        }
+    if remember && let Err(e) = vpn_remember_password(target, password) {
+        tracing::warn!(%e, "VPN connected but could not save password to profile");
     }
     Ok(())
 }
@@ -896,10 +894,10 @@ pub fn vpn_get_wireguard(uuid: &str) -> Option<WireGuardProfile> {
     }
     fill_wg_peers_from_nm_dbus(uuid, &mut profile);
     // Fallback for older layouts / classic plugin exports.
-    if profile.peer_public_key.is_empty() || profile.endpoint.is_empty() {
-        if let Some(export) = capture(&["connection", "export", uuid], Duration::from_secs(6)) {
-            fill_wg_profile_from_export(&export, &mut profile);
-        }
+    if (profile.peer_public_key.is_empty() || profile.endpoint.is_empty())
+        && let Some(export) = capture(&["connection", "export", uuid], Duration::from_secs(6))
+    {
+        fill_wg_profile_from_export(&export, &mut profile);
     }
     Some(profile)
 }
@@ -940,20 +938,20 @@ fn fill_wg_peers_from_nm_dbus(uuid: &str, profile: &mut WireGuardProfile) {
     let Some(peer) = peers.first() else {
         return;
     };
-    if profile.peer_public_key.is_empty() {
-        if let Some(pk) = busctl_variant_str(peer.get("public-key")) {
-            profile.peer_public_key = pk;
-        }
+    if profile.peer_public_key.is_empty()
+        && let Some(pk) = busctl_variant_str(peer.get("public-key"))
+    {
+        profile.peer_public_key = pk;
     }
-    if profile.endpoint.is_empty() {
-        if let Some(ep) = busctl_variant_str(peer.get("endpoint")) {
-            profile.endpoint = ep;
-        }
+    if profile.endpoint.is_empty()
+        && let Some(ep) = busctl_variant_str(peer.get("endpoint"))
+    {
+        profile.endpoint = ep;
     }
-    if profile.allowed_ips.is_empty() {
-        if let Some(ips) = busctl_variant_str_array(peer.get("allowed-ips")) {
-            profile.allowed_ips = ips.join(", ");
-        }
+    if profile.allowed_ips.is_empty()
+        && let Some(ips) = busctl_variant_str_array(peer.get("allowed-ips"))
+    {
+        profile.allowed_ips = ips.join(", ");
     }
 }
 
@@ -1007,12 +1005,12 @@ fn fill_wg_profile_from_export(export: &str, profile: &mut WireGuardProfile) {
             let name = &line[1..line.len() - 1];
             let lower = name.to_ascii_lowercase();
             in_peer = lower == "peer" || lower.starts_with("wireguard-peer.");
-            if lower.starts_with("wireguard-peer.") {
-                if let Some(orig) = name.get("wireguard-peer.".len()..) {
-                    let pk = orig.trim_end_matches('=').trim();
-                    if !pk.is_empty() && profile.peer_public_key.is_empty() {
-                        profile.peer_public_key = pk.to_string();
-                    }
+            if lower.starts_with("wireguard-peer.")
+                && let Some(orig) = name.get("wireguard-peer.".len()..)
+            {
+                let pk = orig.trim_end_matches('=').trim();
+                if !pk.is_empty() && profile.peer_public_key.is_empty() {
+                    profile.peer_public_key = pk.to_string();
                 }
             }
             continue;
@@ -1272,11 +1270,7 @@ fn sanitize_wg_iface_name(stem: &str) -> String {
         out.truncate(15);
         out = out.trim_end_matches('-').to_string();
     }
-    if out.is_empty() {
-        "wg0".into()
-    } else {
-        out
-    }
+    if out.is_empty() { "wg0".into() } else { out }
 }
 
 fn vpn_import(kind: &str, path: &str, plugin_hint: &str) -> Result<String, String> {

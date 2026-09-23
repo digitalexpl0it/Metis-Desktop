@@ -10,12 +10,12 @@ use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use crate::config::{
-    load_bar_config, save_default_bar_config, BarConfig, BarDisplays, BarPosition,
+    BarConfig, BarDisplays, BarPosition, load_bar_config, save_default_bar_config,
 };
 use crate::services::{
-    apply_event, last_weather_snapshot, refresh_taskbars, spawn_bar_pollers,
-    spawn_notification_service, spawn_weather_service, weather_refresh, workspace_snapshot,
-    BarSnapshot, WeatherSnapshot,
+    BarSnapshot, WeatherSnapshot, apply_event, last_weather_snapshot, refresh_taskbars,
+    spawn_bar_pollers, spawn_notification_service, spawn_weather_service, weather_refresh,
+    workspace_snapshot,
 };
 
 thread_local! {
@@ -187,7 +187,7 @@ fn build_bar(config: Rc<RefCell<BarConfig>>, monitor: Option<&gtk::gdk::Monitor>
     // Bind to a specific output (multi-monitor); must be set before the surface is
     // mapped. Omitted (None) lets the compositor place it on the primary output.
     if let Some(monitor) = monitor {
-        window.set_monitor(monitor);
+        window.set_monitor(Some(monitor));
     }
     // The compositor output name this bar lives on (its workspace widget uses it to
     // drive that output's own workspaces).
@@ -340,15 +340,15 @@ fn mount_dash_host(
 /// Re-parent pill + dashboard host after an edge/position change so the control
 /// center always opens toward the desktop and the pill stays on the anchored edge.
 fn remount_bar_chrome(handle: &BarHandle, cfg: &BarConfig) {
-    if let Some(parent) = handle.pill.parent() {
-        if let Ok(box_) = parent.downcast::<gtk::Box>() {
-            box_.remove(&handle.pill);
-        }
+    if let Some(parent) = handle.pill.parent()
+        && let Ok(box_) = parent.downcast::<gtk::Box>()
+    {
+        box_.remove(&handle.pill);
     }
-    if let Some(parent) = handle.dash_host.parent() {
-        if let Ok(box_) = parent.downcast::<gtk::Box>() {
-            box_.remove(&handle.dash_host);
-        }
+    if let Some(parent) = handle.dash_host.parent()
+        && let Ok(box_) = parent.downcast::<gtk::Box>()
+    {
+        box_.remove(&handle.dash_host);
     }
     while let Some(child) = handle.column.first_child() {
         handle.column.remove(&child);
@@ -942,7 +942,7 @@ fn apply_layer_geometry(window: &gtk::Window, config: &BarConfig) {
         window.init_layer_shell();
     }
     window.set_layer(Layer::Top);
-    window.set_namespace("metis-bar");
+    window.set_namespace(Some("metis-bar"));
     window.add_css_class("metis-bar-window");
     // OnDemand (not None) so popovers spawned from the bar can receive keyboard
     // focus via their xdg_popup grab (text entries in the clock/calendar popover).
@@ -1328,7 +1328,7 @@ fn apply_auto_hide_visual(handle: &BarHandle, cfg: &BarConfig) {
     };
     let css = format!(".metis-bar-outer.metis-bar-autohide-hidden {{ transform: {transform}; }}");
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(&css);
+    provider.load_from_string(&css);
     gtk::style_context_add_provider_for_display(
         &handle.outer.display(),
         &provider,
@@ -1522,10 +1522,10 @@ fn rebuild_all_bars(config: Rc<RefCell<BarConfig>>) {
 
 fn watch_bar_config() {
     let path = crate::config::bar_config_path();
-    if !path.exists() {
-        if let Err(err) = crate::config::save_default_bar_config() {
-            tracing::warn!(%err, "failed to create default bar.json");
-        }
+    if !path.exists()
+        && let Err(err) = crate::config::save_default_bar_config()
+    {
+        tracing::warn!(%err, "failed to create default bar.json");
     }
     let file = gio::File::for_path(&path);
     let Ok(monitor) = file.monitor_file(gio::FileMonitorFlags::NONE, None::<&gio::Cancellable>)
@@ -1545,10 +1545,10 @@ fn watch_bar_config() {
 
 fn watch_dashboard_config() {
     let path = crate::config::dashboard_config_path();
-    if !path.exists() {
-        if let Err(err) = crate::config::save_default_dashboard_config() {
-            tracing::warn!(%err, "failed to create default dashboard.json");
-        }
+    if !path.exists()
+        && let Err(err) = crate::config::save_default_dashboard_config()
+    {
+        tracing::warn!(%err, "failed to create default dashboard.json");
     }
     let file = gio::File::for_path(&path);
     let Ok(monitor) = file.monitor_file(gio::FileMonitorFlags::NONE, None::<&gio::Cancellable>)

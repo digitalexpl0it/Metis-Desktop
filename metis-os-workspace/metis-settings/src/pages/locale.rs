@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 
-use metis_config::{load_locale_config, save_locale_config, LocaleConfig};
+use metis_config::{LocaleConfig, load_locale_config, save_locale_config};
 use metis_i18n::{self as i18n, tr};
 
 use crate::runtime;

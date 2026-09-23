@@ -14,8 +14,8 @@ use pw::{properties::properties, spa};
 use spa::param::video::VideoInfoRaw;
 use spa::pod::Pod;
 
-use metis_capture::dmabuf::format_is_bgr_order;
 use metis_capture::DmabufPlanes;
+use metis_capture::dmabuf::format_is_bgr_order;
 
 #[derive(Debug, Clone, Copy)]
 pub struct StreamHandle {
@@ -293,7 +293,9 @@ fn pipewire_thread_main(cmd_rx: Receiver<PwCommand>) {
         }
 
         // Drive PipeWire on this thread so process/param callbacks run here too.
-        mainloop.loop_().iterate(Duration::from_millis(16));
+        mainloop
+            .loop_()
+            .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(16)));
     }
 
     mainloop.quit();
@@ -462,10 +464,10 @@ fn create_video_stream(
             process_output_buffer(stream, &user_data.shared);
         })
         .state_changed(|stream, _user_data, _old, new| {
-            if matches!(new, pw::stream::StreamState::Streaming) {
-                if let Err(err) = stream.set_active(true) {
-                    tracing::warn!(%err, "pipewire set_active(true) on Streaming failed");
-                }
+            if matches!(new, pw::stream::StreamState::Streaming)
+                && let Err(err) = stream.set_active(true)
+            {
+                tracing::warn!(%err, "pipewire set_active(true) on Streaming failed");
             }
         })
         .register()
@@ -500,25 +502,27 @@ unsafe fn alloc_memfd_buffer(
     stride: i32,
     height: u32,
 ) -> Result<(), String> {
-    let spa_buf = (*pw_buf).buffer;
-    if spa_buf.is_null() {
-        return Err("null spa buffer".into());
-    }
-    let spa = &mut *spa_buf;
-    if spa.n_datas == 0 || spa.datas.is_null() {
-        return Err("spa buffer has no datas".into());
-    }
-    let d = &mut *spa.datas;
+    unsafe {
+        let spa_buf = (*pw_buf).buffer;
+        if spa_buf.is_null() {
+            return Err("null spa buffer".into());
+        }
+        let spa = &mut *spa_buf;
+        if spa.n_datas == 0 || spa.datas.is_null() {
+            return Err("spa buffer has no datas".into());
+        }
+        let d = &mut *spa.datas;
 
-    let memfd_bit = 1u32 << spa::sys::SPA_DATA_MemFd;
-    if d.type_ & memfd_bit == 0 {
-        return Err(format!(
-            "peer rejected MemFd buffers (type mask 0x{:x})",
-            d.type_
-        ));
-    }
+        let memfd_bit = 1u32 << spa::sys::SPA_DATA_MemFd;
+        if d.type_ & memfd_bit == 0 {
+            return Err(format!(
+                "peer rejected MemFd buffers (type mask 0x{:x})",
+                d.type_
+            ));
+        }
 
-    alloc_memfd_data(d, stride, height)
+        alloc_memfd_data(d, stride, height)
+    }
 }
 
 unsafe fn alloc_memfd_data(
@@ -526,180 +530,191 @@ unsafe fn alloc_memfd_data(
     stride: i32,
     height: u32,
 ) -> Result<(), String> {
-    let maxsize = (stride as u32).saturating_mul(height);
-    if maxsize == 0 {
-        return Err("zero screencast buffer size".into());
+    unsafe {
+        let maxsize = (stride as u32).saturating_mul(height);
+        if maxsize == 0 {
+            return Err("zero screencast buffer size".into());
+        }
+
+        let fd = libc::memfd_create(
+            c"metis-screencast".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        );
+        if fd < 0 {
+            return Err(format!(
+                "memfd_create failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        if libc::ftruncate(fd, maxsize as libc::off_t) < 0 {
+            libc::close(fd);
+            return Err(format!(
+                "ftruncate failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let ptr = libc::mmap(
+            std::ptr::null_mut(),
+            maxsize as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
+        if ptr == libc::MAP_FAILED {
+            libc::close(fd);
+            return Err(format!("mmap failed: {}", std::io::Error::last_os_error()));
+        }
+
+        release_spa_data(d);
+        d.type_ = spa::sys::SPA_DATA_MemFd;
+        d.flags = spa::sys::SPA_DATA_FLAG_READWRITE | spa::sys::SPA_DATA_FLAG_MAPPABLE;
+        d.fd = fd as i64;
+        d.mapoffset = 0;
+        d.maxsize = maxsize;
+        d.data = ptr as *mut _;
+
+        if !d.chunk.is_null() {
+            (*d.chunk).offset = 0;
+            (*d.chunk).size = 0;
+            (*d.chunk).stride = stride;
+            (*d.chunk).flags = 0;
+        }
+
+        Ok(())
     }
-
-    let fd = libc::memfd_create(
-        c"metis-screencast".as_ptr(),
-        libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
-    );
-    if fd < 0 {
-        return Err(format!(
-            "memfd_create failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-
-    if libc::ftruncate(fd, maxsize as libc::off_t) < 0 {
-        libc::close(fd);
-        return Err(format!(
-            "ftruncate failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-
-    let ptr = libc::mmap(
-        std::ptr::null_mut(),
-        maxsize as usize,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_SHARED,
-        fd,
-        0,
-    );
-    if ptr == libc::MAP_FAILED {
-        libc::close(fd);
-        return Err(format!("mmap failed: {}", std::io::Error::last_os_error()));
-    }
-
-    release_spa_data(d);
-    d.type_ = spa::sys::SPA_DATA_MemFd;
-    d.flags = spa::sys::SPA_DATA_FLAG_READWRITE | spa::sys::SPA_DATA_FLAG_MAPPABLE;
-    d.fd = fd as i64;
-    d.mapoffset = 0;
-    d.maxsize = maxsize;
-    d.data = ptr as *mut _;
-
-    if !d.chunk.is_null() {
-        (*d.chunk).offset = 0;
-        (*d.chunk).size = 0;
-        (*d.chunk).stride = stride;
-        (*d.chunk).flags = 0;
-    }
-
-    Ok(())
 }
 
 unsafe fn free_memfd_buffer(pw_buf: *mut pw::sys::pw_buffer) {
-    let spa_buf = (*pw_buf).buffer;
-    if spa_buf.is_null() {
-        return;
+    unsafe {
+        let spa_buf = (*pw_buf).buffer;
+        if spa_buf.is_null() {
+            return;
+        }
+        let spa = &*spa_buf;
+        if spa.n_datas == 0 || spa.datas.is_null() {
+            return;
+        }
+        let d = &mut *spa.datas;
+        release_spa_data(d);
     }
-    let spa = &*spa_buf;
-    if spa.n_datas == 0 || spa.datas.is_null() {
-        return;
-    }
-    let d = &mut *spa.datas;
-    release_spa_data(d);
 }
 
 unsafe fn release_spa_data(d: &mut spa::sys::spa_data) {
-    if !d.data.is_null() && d.maxsize > 0 {
-        libc::munmap(d.data as *mut _, d.maxsize as usize);
+    unsafe {
+        if !d.data.is_null() && d.maxsize > 0 {
+            libc::munmap(d.data as *mut _, d.maxsize as usize);
+        }
+        if d.fd >= 0 {
+            libc::close(d.fd as libc::c_int);
+        }
+        d.fd = -1;
+        d.data = std::ptr::null_mut();
+        d.maxsize = 0;
+        d.mapoffset = 0;
     }
-    if d.fd >= 0 {
-        libc::close(d.fd as libc::c_int);
-    }
-    d.fd = -1;
-    d.data = std::ptr::null_mut();
-    d.maxsize = 0;
-    d.mapoffset = 0;
 }
 
 unsafe fn fill_screencast_frame(
     spa_buf: *mut spa::sys::spa_buffer,
     state: &StreamSharedState,
 ) -> bool {
-    let spa = &mut *spa_buf;
-    if spa.n_datas == 0 || spa.datas.is_null() {
-        return false;
-    }
-    let d = &mut *spa.datas;
+    unsafe {
+        let spa = &mut *spa_buf;
+        if spa.n_datas == 0 || spa.datas.is_null() {
+            return false;
+        }
+        let d = &mut *spa.datas;
 
-    let height = *state.height.lock().unwrap_or_else(|e| e.into_inner());
-    let stride = *state.stride.lock().unwrap_or_else(|e| e.into_inner());
-    if d.type_ == spa::sys::SPA_DATA_DmaBuf
-        && d.data.is_null()
-        && alloc_memfd_data(d, stride, height).is_err()
-    {
-        return false;
-    }
-    if d.data.is_null() || d.maxsize == 0 {
-        return false;
-    }
-    let needed = (stride as u32).saturating_mul(height) as usize;
-    let slice = std::slice::from_raw_parts_mut(d.data as *mut u8, needed.min(d.maxsize as usize));
+        let height = *state.height.lock().unwrap_or_else(|e| e.into_inner());
+        let stride = *state.stride.lock().unwrap_or_else(|e| e.into_inner());
+        if d.type_ == spa::sys::SPA_DATA_DmaBuf
+            && d.data.is_null()
+            && alloc_memfd_data(d, stride, height).is_err()
+        {
+            return false;
+        }
+        if d.data.is_null() || d.maxsize == 0 {
+            return false;
+        }
+        let needed = (stride as u32).saturating_mul(height) as usize;
+        let slice =
+            std::slice::from_raw_parts_mut(d.data as *mut u8, needed.min(d.maxsize as usize));
 
-    let frame = state.frame.lock().unwrap_or_else(|e| e.into_inner());
-    if frame.is_empty() || frame.iter().all(|&b| b == 0) {
+        let frame = state.frame.lock().unwrap_or_else(|e| e.into_inner());
+        if frame.is_empty() || frame.iter().all(|&b| b == 0) {
+            if !d.chunk.is_null() {
+                (*d.chunk).offset = 0;
+                (*d.chunk).stride = stride;
+                (*d.chunk).size = 0;
+                (*d.chunk).flags = 0;
+            }
+            return false;
+        }
+
+        let copy_len = needed.min(frame.len()).min(slice.len());
+        slice[..copy_len].copy_from_slice(&frame[..copy_len]);
+
         if !d.chunk.is_null() {
             (*d.chunk).offset = 0;
             (*d.chunk).stride = stride;
-            (*d.chunk).size = 0;
+            // Match Mutter: report the full plane size once pixels are ready.
+            (*d.chunk).size = d.maxsize;
             (*d.chunk).flags = 0;
         }
-        return false;
+        true
     }
-
-    let copy_len = needed.min(frame.len()).min(slice.len());
-    slice[..copy_len].copy_from_slice(&frame[..copy_len]);
-
-    if !d.chunk.is_null() {
-        (*d.chunk).offset = 0;
-        (*d.chunk).stride = stride;
-        // Match Mutter: report the full plane size once pixels are ready.
-        (*d.chunk).size = d.maxsize;
-        (*d.chunk).flags = 0;
-    }
-    true
 }
 
 unsafe fn install_dmabuf_frame(
     spa_buf: *mut spa::sys::spa_buffer,
     state: &StreamSharedState,
 ) -> Result<bool, String> {
-    let Some(planes) = state
-        .dmabuf
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .take()
-    else {
-        return Ok(false);
-    };
-    let spa = &mut *spa_buf;
-    if spa.n_datas < planes.fds.len() as u32 || spa.datas.is_null() {
-        return Err("PipeWire buffer has too few planes for DmaBuf frame".into());
-    }
+    unsafe {
+        let Some(planes) = state
+            .dmabuf
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+        else {
+            return Ok(false);
+        };
+        let spa = &mut *spa_buf;
+        if spa.n_datas < planes.fds.len() as u32 || spa.datas.is_null() {
+            return Err("PipeWire buffer has too few planes for DmaBuf frame".into());
+        }
 
-    for (index, fd) in planes.fds.iter().enumerate() {
-        let dup_fd = libc::fcntl(
-            std::os::fd::AsRawFd::as_raw_fd(fd),
-            libc::F_DUPFD_CLOEXEC,
-            0,
-        );
-        if dup_fd < 0 {
-            return Err(format!(
-                "duplicate DmaBuf fd: {}",
-                std::io::Error::last_os_error()
-            ));
+        for (index, fd) in planes.fds.iter().enumerate() {
+            let dup_fd = libc::fcntl(
+                std::os::fd::AsRawFd::as_raw_fd(fd),
+                libc::F_DUPFD_CLOEXEC,
+                0,
+            );
+            if dup_fd < 0 {
+                return Err(format!(
+                    "duplicate DmaBuf fd: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let data = &mut *spa.datas.add(index);
+            release_spa_data(data);
+            data.type_ = spa::sys::SPA_DATA_DmaBuf;
+            data.flags = 0;
+            data.fd = dup_fd as i64;
+            data.mapoffset = planes.offsets[index];
+            data.maxsize = planes.strides[index].saturating_mul(planes.height);
+            data.data = std::ptr::null_mut();
+            if !data.chunk.is_null() {
+                (*data.chunk).offset = 0;
+                (*data.chunk).size = data.maxsize;
+                (*data.chunk).stride = planes.strides[index] as i32;
+                (*data.chunk).flags = 0;
+            }
         }
-        let data = &mut *spa.datas.add(index);
-        release_spa_data(data);
-        data.type_ = spa::sys::SPA_DATA_DmaBuf;
-        data.flags = 0;
-        data.fd = dup_fd as i64;
-        data.mapoffset = planes.offsets[index];
-        data.maxsize = planes.strides[index].saturating_mul(planes.height);
-        data.data = std::ptr::null_mut();
-        if !data.chunk.is_null() {
-            (*data.chunk).offset = 0;
-            (*data.chunk).size = data.maxsize;
-            (*data.chunk).stride = planes.strides[index] as i32;
-            (*data.chunk).flags = 0;
-        }
+        Ok(true)
     }
-    Ok(true)
 }
 
 #[repr(C)]
@@ -712,23 +727,25 @@ struct SpaMetaHeader {
 }
 
 unsafe fn set_header_meta(spa_buf: *mut spa::sys::spa_buffer, state: &StreamSharedState) {
-    let buf = &*spa_buf;
-    for i in 0..buf.n_metas {
-        let meta = &*buf.metas.add(i as usize);
-        if meta.type_ == spa::sys::SPA_META_Header && !meta.data.is_null() {
-            let header = &mut *(meta.data as *mut SpaMetaHeader);
-            header.flags = 0;
-            header.offset = 0;
-            let mut seq = state.seq.lock().unwrap_or_else(|e| e.into_inner());
-            // Mutter uses capture timestamps in microseconds × SPA_NSEC_PER_USEC.
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
-            header.pts = now.as_micros() as i64 * 1000;
-            header.dts_offset = 0;
-            header.seq = *seq;
-            *seq = seq.saturating_add(1);
-            return;
+    unsafe {
+        let buf = &*spa_buf;
+        for i in 0..buf.n_metas {
+            let meta = &*buf.metas.add(i as usize);
+            if meta.type_ == spa::sys::SPA_META_Header && !meta.data.is_null() {
+                let header = &mut *(meta.data as *mut SpaMetaHeader);
+                header.flags = 0;
+                header.offset = 0;
+                let mut seq = state.seq.lock().unwrap_or_else(|e| e.into_inner());
+                // Mutter uses capture timestamps in microseconds × SPA_NSEC_PER_USEC.
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                header.pts = now.as_micros() as i64 * 1000;
+                header.dts_offset = 0;
+                header.seq = *seq;
+                *seq = seq.saturating_add(1);
+                return;
+            }
         }
     }
 }

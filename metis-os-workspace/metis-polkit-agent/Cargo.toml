@@ -2,6 +2,7 @@
 name = "metis-polkit-agent"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Metis PolicyKit authentication agent (GTK4)"
 
@@ -12,8 +13,8 @@ path = "src/main.rs"
 [dependencies]
 async-channel = "2"
 futures-util = "0.3"
-glib = "0.19"
-gtk = { package = "gtk4", version = "0.8", features = ["v4_10"] }
+glib = "0.22"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
 libc = "0.2"
 metis-config = { workspace = true }
 serde = { workspace = true }

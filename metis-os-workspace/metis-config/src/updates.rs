@@ -110,10 +110,10 @@ impl UpdatesConfig {
 
 pub fn sanitize_updates_config(cfg: &mut UpdatesConfig) {
     cfg.check_interval_hours = cfg.check_interval_hours.clamp(1, 168);
-    if let Some(err) = cfg.last_error.as_mut() {
-        if err.len() > 512 {
-            err.truncate(512);
-        }
+    if let Some(err) = cfg.last_error.as_mut()
+        && err.len() > 512
+    {
+        err.truncate(512);
     }
     cfg.clear_expired_snooze();
 }

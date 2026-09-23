@@ -80,13 +80,13 @@ pub fn default_local_dir() -> std::path::PathBuf {
 
 pub fn load_calendars_config() -> CalendarsConfig {
     let path = calendars_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str::<CalendarsConfig>(&text) {
-                return cfg;
-            }
-            tracing::warn!("calendars.json parse failed — using defaults");
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+    {
+        if let Ok(cfg) = serde_json::from_str::<CalendarsConfig>(&text) {
+            return cfg;
         }
+        tracing::warn!("calendars.json parse failed — using defaults");
     }
     let cfg = CalendarsConfig::default();
     let _ = save_calendars_config(&cfg);

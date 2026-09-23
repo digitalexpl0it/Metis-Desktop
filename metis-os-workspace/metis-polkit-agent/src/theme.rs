@@ -15,7 +15,7 @@ pub fn install() {
     );
     let tokens = active_tokens();
     let dark = active_mode_is_dark();
-    provider.load_from_data(&stylesheet(&tokens));
+    provider.load_from_string(&stylesheet(&tokens));
 
     if let Some(settings) = gtk::Settings::default() {
         settings.set_gtk_application_prefer_dark_theme(dark);

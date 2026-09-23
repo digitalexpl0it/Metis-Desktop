@@ -3,7 +3,7 @@ use std::path::Path;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
-use crate::{theme, Cli};
+use crate::{Cli, theme};
 
 pub fn show(app: &gtk::Application, cli: Cli) {
     theme::install();
@@ -16,7 +16,7 @@ pub fn show(app: &gtk::Application, cli: Cli) {
     window.set_layer(Layer::Overlay);
     window.set_exclusive_zone(-1);
     window.set_keyboard_mode(KeyboardMode::OnDemand);
-    window.set_namespace("metis-screenshot-pin");
+    window.set_namespace(Some("metis-screenshot-pin"));
     window.set_anchor(Edge::Top, true);
     window.set_anchor(Edge::Left, true);
     window.set_margin(Edge::Top, 80);

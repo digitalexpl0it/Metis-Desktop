@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use metis_config::{config_dir, reset_metis_config, ResetOptions};
+use metis_config::{ResetOptions, config_dir, reset_metis_config};
 use metis_i18n::tr;
 
 use crate::dialog;

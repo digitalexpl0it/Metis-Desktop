@@ -172,7 +172,7 @@ fn show_at_step(initial_step: usize) {
     window.set_layer(Layer::Overlay);
     // OnDemand so search / Wi-Fi password fields can receive keys.
     window.set_keyboard_mode(KeyboardMode::OnDemand);
-    window.set_namespace("metis-onboarding");
+    window.set_namespace(Some("metis-onboarding"));
     // Content-sized surface anchored top-left, centered via margins (splash pattern).
     window.set_anchor(Edge::Top, true);
     window.set_anchor(Edge::Left, true);
@@ -1053,8 +1053,8 @@ fn build_network() -> gtk::Widget {
 
 fn build_desktop_widgets() -> gtk::Widget {
     use metis_config::{
-        load_desktop_widgets_config, save_desktop_widgets_config, DesktopWidgetInstance,
-        DesktopWidgetKind,
+        DesktopWidgetInstance, DesktopWidgetKind, load_desktop_widgets_config,
+        save_desktop_widgets_config,
     };
 
     let col = step_shell();
@@ -1477,12 +1477,12 @@ fn metis_remote_bin() -> String {
     if std::path::Path::new(INSTALLED).is_file() {
         return INSTALLED.into();
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("metis-remote");
-            if sibling.is_file() {
-                return sibling.to_string_lossy().into_owned();
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join("metis-remote");
+        if sibling.is_file() {
+            return sibling.to_string_lossy().into_owned();
         }
     }
     "metis-remote".into()
@@ -1904,14 +1904,13 @@ fn index_to_bar_position(idx: u32) -> BarPosition {
 }
 
 fn monitor_size() -> (i32, i32) {
-    if let Some(display) = gdk::Display::default() {
-        if let Some(obj) = display.monitors().item(0) {
-            if let Ok(monitor) = obj.downcast::<gdk::Monitor>() {
-                let g = monitor.geometry();
-                if g.width() > 0 && g.height() > 0 {
-                    return (g.width(), g.height());
-                }
-            }
+    if let Some(display) = gdk::Display::default()
+        && let Some(obj) = display.monitors().item(0)
+        && let Ok(monitor) = obj.downcast::<gdk::Monitor>()
+    {
+        let g = monitor.geometry();
+        if g.width() > 0 && g.height() > 0 {
+            return (g.width(), g.height());
         }
     }
     (1280, 720)

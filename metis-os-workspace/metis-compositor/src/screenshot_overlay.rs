@@ -1,6 +1,6 @@
 //! Native Metis screenshot overlay session tracking.
 
-use smithay::desktop::{layer_map_for_output, LayerSurface};
+use smithay::desktop::{LayerSurface, layer_map_for_output};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Serial};
 

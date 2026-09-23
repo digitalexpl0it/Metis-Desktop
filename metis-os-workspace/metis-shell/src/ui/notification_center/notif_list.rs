@@ -9,9 +9,8 @@ use std::rc::Rc;
 use gtk::prelude::*;
 
 use crate::services::{
-    clear_notifications, do_not_disturb, notify_store_changed, register_refresh,
-    runtime_notifications, set_do_not_disturb, BarNotification, NotificationEntry,
-    NotificationKind,
+    BarNotification, NotificationEntry, NotificationKind, clear_notifications, do_not_disturb,
+    notify_store_changed, register_refresh, runtime_notifications, set_do_not_disturb,
 };
 use crate::ui::bar::widgets::build_action_row;
 

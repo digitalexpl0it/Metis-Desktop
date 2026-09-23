@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 
-use metis_config::{load_keybinds_config, reserved_system_rows, KeybindAction, KeybindGroup};
+use metis_config::{KeybindAction, KeybindGroup, load_keybinds_config, reserved_system_rows};
 use metis_i18n::tr;
 
 use crate::ui;

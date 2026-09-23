@@ -4,13 +4,13 @@
 //! renders the mirror source once per frame, then scale-to-fits it onto each
 //! CRTC with letterboxing.
 
-use metis_config::{output_prefs, DisplayLayoutMode, OutputsConfig};
+use metis_config::{DisplayLayoutMode, OutputsConfig, output_prefs};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::FrameFlags;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::{
-    texture::{TextureBuffer, TextureRenderElement},
     Kind,
+    texture::{TextureBuffer, TextureRenderElement},
 };
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::{Bind, Offscreen};
@@ -18,7 +18,7 @@ use smithay::output::Output;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::night_light::RenderTargetInfo;
-use crate::render::{OutputStack, CLEAR_COLOR};
+use crate::render::{CLEAR_COLOR, OutputStack};
 use crate::state::MetisState;
 use crate::udev::UdevOutputId;
 
@@ -65,10 +65,10 @@ impl MetisState {
         }
         let cfg = self.output_runtime.cached();
         let sorted = self.enabled_outputs_sorted();
-        if let Some(name) = cfg.mirror_source.as_ref() {
-            if sorted.iter().any(|o| o.name() == *name) {
-                return Some(name.clone());
-            }
+        if let Some(name) = cfg.mirror_source.as_ref()
+            && sorted.iter().any(|o| o.name() == *name)
+        {
+            return Some(name.clone());
         }
         sorted.first().map(|o| o.name())
     }

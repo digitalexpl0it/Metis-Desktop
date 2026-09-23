@@ -287,12 +287,11 @@ fn reset_to_default_preserving_apps(layout: &mut GridLayout) {
 
     for mut app in apps {
         let mut placed = layout.default_app_tile_rect();
-        if !can_place(layout, &app.id, &placed) {
-            if let Some(found) =
+        if !can_place(layout, &app.id, &placed)
+            && let Some(found) =
                 find_relocate_rect(layout, &app.id, app.rect, &TileRect::new(0, 0, 1, 1))
-            {
-                placed = found;
-            }
+        {
+            placed = found;
         }
         app.rect = placed;
         if !layout.tiles.iter().any(|t| t.id == app.id) {

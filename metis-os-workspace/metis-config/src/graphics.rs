@@ -51,10 +51,9 @@ fn detect_virtual_machine() -> bool {
     if let Ok(out) = std::process::Command::new("systemd-detect-virt")
         .arg("--quiet")
         .status()
+        && out.success()
     {
-        if out.success() {
-            return true;
-        }
+        return true;
     }
     if let Ok(out) = std::process::Command::new("systemd-detect-virt").output() {
         let v = String::from_utf8_lossy(&out.stdout)
@@ -95,14 +94,13 @@ fn detect_virtual_machine() -> bool {
                 continue;
             }
             let driver = entry.path().join("device/driver");
-            if let Ok(target) = std::fs::read_link(&driver) {
-                if target
+            if let Ok(target) = std::fs::read_link(&driver)
+                && target
                     .file_name()
                     .and_then(|s| s.to_str())
                     .is_some_and(|s| s == "vmwgfx")
-                {
-                    return true;
-                }
+            {
+                return true;
             }
         }
     }

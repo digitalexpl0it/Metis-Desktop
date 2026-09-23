@@ -11,14 +11,14 @@ mod rustdesk;
 mod updates;
 
 pub use accounts::{
-    accounts_list_as_root, add_user, add_user_as_root, list_accounts, remove_user,
+    AccountInfo, accounts_list_as_root, add_user, add_user_as_root, list_accounts, remove_user,
     remove_user_as_root, set_admin, set_admin_as_root, set_display_name, set_display_name_as_root,
     set_password as set_account_password, set_password_as_root as set_account_password_as_root,
-    set_user_icon, set_user_icon_as_root, AccountInfo,
+    set_user_icon, set_user_icon_as_root,
 };
 pub use datetime::{
-    set_ntp, set_ntp_as_root, set_time, set_time_as_root, set_timezone, set_timezone_as_root,
-    status as datetime_status, status_as_root as datetime_status_as_root, DateTimeStatus,
+    DateTimeStatus, set_ntp, set_ntp_as_root, set_time, set_time_as_root, set_timezone,
+    set_timezone_as_root, status as datetime_status, status_as_root as datetime_status_as_root,
 };
 pub use firewall::FirewallStatus;
 pub use gnome_rdp::{
@@ -27,15 +27,17 @@ pub use gnome_rdp::{
 };
 pub use host::{hostname, lan_addresses};
 pub use pkhelpers::{
-    add_input_group, apt_install, ensure_polkit_agent, privileged_exe, ubuntu_drivers_install,
-    validate_username, APT_ALLOWLIST,
+    APT_ALLOWLIST, add_input_group, apt_install, ensure_polkit_agent, privileged_exe,
+    ubuntu_drivers_install, validate_username,
 };
 pub use rustdesk::RustDeskStatus;
 pub use updates::{
-    apply as updates_apply, apply_as_root as updates_apply_as_root, apply_privileged,
-    check as updates_check, check_from_config as updates_check_from_config, reboot_required,
-    refresh as updates_refresh, refresh_as_root as updates_refresh_as_root, refresh_privileged,
     UpdateItem, UpdateProgressEvent, UpdateSnapshot, UpdateSourceKind, UpdatesError,
+    apply as updates_apply, apply_as_root as updates_apply_as_root, apply_privileged,
+    check as updates_check, check_background as updates_check_background,
+    check_background_from_config as updates_check_background_from_config,
+    check_from_config as updates_check_from_config, reboot_required, refresh as updates_refresh,
+    refresh_as_root as updates_refresh_as_root, refresh_privileged,
 };
 
 use metis_config::{load_remote_config, save_remote_config};
@@ -155,10 +157,10 @@ pub fn disable() -> Result<(), String> {
     std::thread::Builder::new()
         .name("metis-remote-disable".into())
         .spawn(|| {
-            if gnome_rdp::grdctl_available() {
-                if let Err(err) = disable_sharing() {
-                    tracing::warn!(%err, "background disable_sharing failed");
-                }
+            if gnome_rdp::grdctl_available()
+                && let Err(err) = disable_sharing()
+            {
+                tracing::warn!(%err, "background disable_sharing failed");
             }
             match firewall::status() {
                 fw if fw.applied => {
@@ -323,10 +325,10 @@ pub fn autostart_from_config() -> Result<(), String> {
         tracing::warn!(%e, "remote autostart failed");
         e
     })?;
-    if cfg.lan_only {
-        if let Err(err) = firewall::apply() {
-            tracing::warn!(%err, "remote autostart: LAN-only firewall apply failed");
-        }
+    if cfg.lan_only
+        && let Err(err) = firewall::apply()
+    {
+        tracing::warn!(%err, "remote autostart: LAN-only firewall apply failed");
     }
     Ok(())
 }

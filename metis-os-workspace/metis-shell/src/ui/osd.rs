@@ -46,7 +46,7 @@ fn overlay() -> Rc<Osd> {
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
         window.set_keyboard_mode(KeyboardMode::None);
-        window.set_namespace("metis-osd");
+        window.set_namespace(Some("metis-osd"));
         // Bottom-center: anchor only to the bottom edge so the compositor centers
         // the surface horizontally.
         window.set_anchor(Edge::Bottom, true);
@@ -104,7 +104,7 @@ fn overlay() -> Rc<Osd> {
 pub fn show(icon: &str, title: &str, level: Option<f64>, muted: bool) {
     let osd = overlay();
 
-    osd.icon.set_from_icon_name(Some(icon));
+    osd.icon.set_icon_name(Some(icon));
     osd.title.set_label(title);
 
     match level {

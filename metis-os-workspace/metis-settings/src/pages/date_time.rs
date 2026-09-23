@@ -450,12 +450,11 @@ fn load_zone_list() -> Vec<String> {
             }
             // zone.tab: code coords TZ comments
             let cols: Vec<&str> = line.split_whitespace().collect();
-            if cols.len() >= 3 {
-                if let Some(tz) = cols.get(2).copied() {
-                    if tz.contains('/') {
-                        out.push(tz.to_string());
-                    }
-                }
+            if cols.len() >= 3
+                && let Some(tz) = cols.get(2).copied()
+                && tz.contains('/')
+            {
+                out.push(tz.to_string());
             }
         }
         if !out.is_empty() {

@@ -14,20 +14,21 @@ use std::collections::HashMap;
 
 use smithay::{
     backend::renderer::{
+        Color32F,
         element::{
-            solid::SolidColorRenderElement, surface::WaylandSurfaceRenderElement,
-            texture::TextureRenderElement, utils::CropRenderElement, AsRenderElements, Kind,
+            AsRenderElements, Kind, solid::SolidColorRenderElement,
+            surface::WaylandSurfaceRenderElement, texture::TextureRenderElement,
+            utils::CropRenderElement,
         },
         gles::{GlesRenderer, GlesTexture},
-        Color32F,
     },
-    desktop::{layer_map_for_output, Window},
+    desktop::{Window, layer_map_for_output},
     output::Output,
     utils::{Logical, Physical, Point, Rectangle, Scale, Size},
     wayland::shell::wlr_layer::Layer,
 };
 
-use crate::night_light::{night_light_element, RenderTargetInfo};
+use crate::night_light::{RenderTargetInfo, night_light_element};
 use crate::state::MetisState;
 
 smithay::backend::renderer::element::render_elements! {
@@ -61,10 +62,10 @@ const SNAP_OVERLAY_COLOR: [f32; 4] = [0.36, 0.56, 0.96, 0.30];
 fn bar_layer_rect(output: &Output) -> Option<Rectangle<i32, Physical>> {
     let map = layer_map_for_output(output);
     for layer in map.layers() {
-        if layer.namespace() == "metis-bar" {
-            if let Some(geo) = map.layer_geometry(layer) {
-                return Some(geo.to_physical(1));
-            }
+        if layer.namespace() == "metis-bar"
+            && let Some(geo) = map.layer_geometry(layer)
+        {
+            return Some(geo.to_physical(1));
         }
     }
     None
@@ -303,28 +304,27 @@ impl MetisState {
             // decoration inset) — fixed client-side by re-negotiating fullscreen,
             // not by the compositor's placement math (see the fullscreen relayout
             // nudge in the commit path).
-            if let Some(id) = id {
-                if self.windows.get(id).is_some_and(|r| r.fullscreen)
-                    && !self.fs_offset_warned.contains(&id)
-                {
-                    let out_origin = self
-                        .space
-                        .outputs()
-                        .filter_map(|o| self.space.output_geometry(o))
-                        .find(|g| g.contains(elem_loc))
-                        .map(|g| g.loc)
-                        .unwrap_or_default();
-                    if elem_loc != out_origin || geo_off.x != 0 || geo_off.y != 0 {
-                        self.fs_offset_warned.insert(id);
-                        tracing::info!(
-                            id,
-                            ?elem_loc,
-                            ?geo_off,
-                            ?out_origin,
-                            buffer_bbox = ?window.bbox(),
-                            "render: fullscreen window not flush at output origin"
-                        );
-                    }
+            if let Some(id) = id
+                && self.windows.get(id).is_some_and(|r| r.fullscreen)
+                && !self.fs_offset_warned.contains(&id)
+            {
+                let out_origin = self
+                    .space
+                    .outputs()
+                    .filter_map(|o| self.space.output_geometry(o))
+                    .find(|g| g.contains(elem_loc))
+                    .map(|g| g.loc)
+                    .unwrap_or_default();
+                if elem_loc != out_origin || geo_off.x != 0 || geo_off.y != 0 {
+                    self.fs_offset_warned.insert(id);
+                    tracing::info!(
+                        id,
+                        ?elem_loc,
+                        ?geo_off,
+                        ?out_origin,
+                        buffer_bbox = ?window.bbox(),
+                        "render: fullscreen window not flush at output origin"
+                    );
                 }
             }
             let mut loc = (elem_loc - geo_off).to_physical_precise_round(win_scale) - render_origin;
@@ -367,18 +367,18 @@ impl MetisState {
             } else {
                 render_elements.extend(elems.into_iter().map(OutputStack::Surface));
             }
-            if let Some(id) = id {
-                if let Some(spec) = deco_by_id.get(&id).filter(|s| !s.overlay) {
-                    let decos = self.decorations.window_elements(renderer, spec, win_scale);
-                    if let Some(clip) = clip {
-                        for d in decos {
-                            if let Some(c) = CropRenderElement::from_element(d, win_scale, clip) {
-                                render_elements.push(OutputStack::CropDeco(c));
-                            }
+            if let Some(id) = id
+                && let Some(spec) = deco_by_id.get(&id).filter(|s| !s.overlay)
+            {
+                let decos = self.decorations.window_elements(renderer, spec, win_scale);
+                if let Some(clip) = clip {
+                    for d in decos {
+                        if let Some(c) = CropRenderElement::from_element(d, win_scale, clip) {
+                            render_elements.push(OutputStack::CropDeco(c));
                         }
-                    } else {
-                        render_elements.extend(decos.into_iter().map(OutputStack::Deco));
                     }
+                } else {
+                    render_elements.extend(decos.into_iter().map(OutputStack::Deco));
                 }
             }
         }
@@ -408,10 +408,10 @@ impl MetisState {
         if let Some(dim) = crate::battery_dim::battery_dim_element(self, &target) {
             render_elements.insert(0, OutputStack::Overlay(dim));
         }
-        if crate::night_light::should_render_night_light(self, &target) {
-            if let Some(tint) = night_light_element(self, &target) {
-                render_elements.insert(0, OutputStack::Overlay(tint));
-            }
+        if crate::night_light::should_render_night_light(self, &target)
+            && let Some(tint) = night_light_element(self, &target)
+        {
+            render_elements.insert(0, OutputStack::Overlay(tint));
         }
 
         render_elements

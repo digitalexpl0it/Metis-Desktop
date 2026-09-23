@@ -5,10 +5,10 @@ mod rate_limit;
 
 pub use metis_grid::{GridLayout, GridMetrics, LayoutKind, MonitorRect, PixelRect};
 pub use rate_limit::{
-    try_admit_runtime_command_dispatch, try_admit_runtime_command_widgets_dispatch,
-    try_admit_runtime_command_widgets_write, try_admit_runtime_command_write, SlidingWindow,
-    EVENT_SUBSCRIBER_CAP, EVENT_SUBSCRIBE_ACCEPTS_PER_SEC, IPC_MAX_ACCEPTS_PER_DRAIN,
+    EVENT_SUBSCRIBE_ACCEPTS_PER_SEC, EVENT_SUBSCRIBER_CAP, IPC_MAX_ACCEPTS_PER_DRAIN,
     IPC_REQUESTS_PER_SEC, RATE_WINDOW, RUNTIME_CMD_DISPATCH_PER_SEC, RUNTIME_CMD_WRITES_PER_SEC,
+    SlidingWindow, try_admit_runtime_command_dispatch, try_admit_runtime_command_widgets_dispatch,
+    try_admit_runtime_command_widgets_write, try_admit_runtime_command_write,
 };
 
 /// Commands sent from the Metis shell to the compositor.
@@ -801,9 +801,11 @@ mod tests {
     fn runtime_dir_uses_xdg_runtime_dir() {
         let _guard = env_lock();
         let tmp = tempfile_dir("metis-protocol-runtime");
-        std::env::set_var("XDG_RUNTIME_DIR", &tmp);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &tmp) };
         assert_eq!(runtime_dir(), tmp.join("metis"));
-        std::env::remove_var("XDG_RUNTIME_DIR");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
         assert_eq!(
             runtime_dir(),
             std::path::PathBuf::from("/var/empty/metis-no-xdg-runtime-dir")
@@ -814,16 +816,19 @@ mod tests {
     #[test]
     fn ensure_runtime_dir_sets_0700_and_fails_closed() {
         let _guard = env_lock();
-        std::env::remove_var("XDG_RUNTIME_DIR");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
         assert!(ensure_runtime_dir().is_err());
 
         let tmp = tempfile_dir("metis-protocol-ensure");
-        std::env::set_var("XDG_RUNTIME_DIR", &tmp);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &tmp) };
         let dir = ensure_runtime_dir().expect("ensure");
         assert!(dir.ends_with("metis"));
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
-        std::env::remove_var("XDG_RUNTIME_DIR");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -831,7 +836,8 @@ mod tests {
     fn write_private_file_is_0600() {
         let _guard = env_lock();
         let tmp = tempfile_dir("metis-protocol-private");
-        std::env::set_var("XDG_RUNTIME_DIR", &tmp);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &tmp) };
         let path = runtime_dir().join("probe.txt");
         write_private_file(&path, b"secret\n").expect("write");
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
@@ -839,7 +845,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret\n");
         write_private_file(&path, b"overwrite\n").expect("overwrite");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "overwrite\n");
-        std::env::remove_var("XDG_RUNTIME_DIR");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

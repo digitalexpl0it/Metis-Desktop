@@ -85,13 +85,13 @@ pub fn clocks_config_path() -> std::path::PathBuf {
 /// Load clock.json, creating it on first run seeded with `seed_timezones`.
 pub fn load_clocks_config(seed_timezones: &[String]) -> ClocksConfig {
     let path = clocks_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str::<ClocksConfig>(&text) {
-                return cfg;
-            }
-            tracing::warn!("clock.json parse failed — using defaults");
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+    {
+        if let Ok(cfg) = serde_json::from_str::<ClocksConfig>(&text) {
+            return cfg;
         }
+        tracing::warn!("clock.json parse failed — using defaults");
     }
     let seeded = ClocksConfig {
         world_clocks: seed_timezones

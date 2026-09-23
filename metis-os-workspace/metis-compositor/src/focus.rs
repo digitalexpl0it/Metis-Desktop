@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 
 use smithay::{
-    backend::input::KeyState,
+    backend::input::{InputTime, KeyState},
     desktop::{LayerSurface, PopupKind, Window},
     input::{
-        keyboard::{KeyboardTarget, KeysymHandle, ModifiersState},
         Seat,
+        keyboard::{KeyboardTarget, KeysymHandle, ModifiersState},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{IsAlive, Serial},
@@ -100,7 +100,7 @@ impl KeyboardTarget<MetisState> for KeyboardFocusTarget {
         key: KeysymHandle<'_>,
         state: KeyState,
         serial: Serial,
-        time: u32,
+        time: InputTime,
     ) {
         self.with_keyboard_surface(|target| target.key(seat, data, key, state, serial, time));
     }

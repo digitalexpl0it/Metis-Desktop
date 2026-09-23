@@ -181,10 +181,8 @@ fn wire_click_to_defocus(content: &gtk::Box) {
             }
             node = widget.parent();
         }
-        if !hit_focusable {
-            if let Some(root) = root_ref.root() {
-                root.set_focus(None::<&gtk::Widget>);
-            }
+        if !hit_focusable && let Some(root) = root_ref.root() {
+            root.set_focus(None::<&gtk::Widget>);
         }
     });
     content.add_controller(click);
@@ -289,7 +287,7 @@ pub fn forward_wheel_to_page_scroller(widget: &impl IsA<gtk::Widget>) {
     let ctrl = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
     ctrl.connect_scroll(move |controller, _, dy| {
-        let mut parent = controller.widget().parent();
+        let mut parent = controller.widget().and_then(|w| w.parent());
         while let Some(p) = parent {
             if let Ok(scroller) = p.clone().downcast::<gtk::ScrolledWindow>() {
                 let vadj = scroller.vadjustment();
@@ -594,10 +592,10 @@ pub fn launcher_picker(
             let parent = btn.root().and_downcast::<gtk::Window>();
             let entry = entry.clone();
             dialog.open(parent.as_ref(), gio::Cancellable::NONE, move |res| {
-                if let Ok(file) = res {
-                    if let Some(path) = file.path() {
-                        entry.set_text(&path.to_string_lossy());
-                    }
+                if let Ok(file) = res
+                    && let Some(path) = file.path()
+                {
+                    entry.set_text(&path.to_string_lossy());
                 }
             });
         });

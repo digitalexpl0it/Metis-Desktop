@@ -2,7 +2,7 @@
 
 use gtk::gio;
 use gtk::prelude::*;
-use metis_config::{load_menu_config, DesktopWidgetInstance, DesktopWidgetView};
+use metis_config::{DesktopWidgetInstance, DesktopWidgetView, load_menu_config};
 
 use crate::services::applications;
 

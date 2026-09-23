@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use metis_grid::PixelRect;
 use metis_protocol::WindowInfo;
-use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::xwayland::X11Surface;
 use smithay::{desktop::Window, wayland::shell::xdg::ToplevelSurface};
 

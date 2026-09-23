@@ -6,8 +6,8 @@ use std::rc::Rc;
 use gio::prelude::*;
 use gtk::prelude::*;
 use metis_config::{
-    expand_save_dir, load_screenshot_config, save_screenshot_config, AfterCaptureAction,
-    ScreenshotConfig, ScreenshotMode,
+    AfterCaptureAction, ScreenshotConfig, ScreenshotMode, expand_save_dir, load_screenshot_config,
+    save_screenshot_config,
 };
 use metis_i18n::tr;
 
@@ -162,11 +162,11 @@ pub fn build() -> gtk::Widget {
                 None::<&gtk::Window>,
                 None::<&gio::Cancellable>,
                 move |result| {
-                    if let Ok(folder) = result {
-                        if let Some(path) = folder.path() {
-                            dir_entry.set_text(&path.display().to_string());
-                            persist();
-                        }
+                    if let Ok(folder) = result
+                        && let Some(path) = folder.path()
+                    {
+                        dir_entry.set_text(&path.display().to_string());
+                        persist();
                     }
                 },
             );

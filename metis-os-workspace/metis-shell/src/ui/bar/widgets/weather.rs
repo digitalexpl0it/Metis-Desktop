@@ -240,11 +240,7 @@ fn clear(container: &gtk::Box) {
 }
 
 fn unit_letter(fahrenheit: bool) -> char {
-    if fahrenheit {
-        'F'
-    } else {
-        'C'
-    }
+    if fahrenheit { 'F' } else { 'C' }
 }
 
 /// Map an Open-Meteo WMO weather code to a freedesktop symbolic icon.

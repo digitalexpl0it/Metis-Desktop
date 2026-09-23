@@ -10,25 +10,36 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  GTK4_LAYER_SHELL_TAG: "v1.3.0"
 
 jobs:
+  # Runs on the support floor (Debian 13: GTK 4.18, gtk4-layer-shell 1.0,
+  # PipeWire 1.4). Newer targets (Ubuntu 26.04, Arch, NixOS) only move up.
   quality:
-    name: fmt · clippy · test · deny
-    runs-on: ubuntu-24.04
+    name: fmt · clippy · test · deny (Debian 13 floor)
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+      options: --user root
     defaults:
       run:
         working-directory: metis-os-workspace
     steps:
+      # debian:trixie has no git/curl by default.
+      - name: Bootstrap apt tools
+        working-directory: /
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git
+
       - uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          apt-get install -y --no-install-recommends \
             build-essential pkg-config libssl-dev \
             libclang-dev \
             libgtk-4-dev libadwaita-1-dev \
+            libgtk4-layer-shell-dev \
             libudev-dev libinput-dev libseat-dev \
             libgbm-dev libdrm-dev libegl1-mesa-dev libgles2-mesa-dev \
             libdisplay-info-dev libpam0g-dev \
@@ -37,22 +48,13 @@ jobs:
             liblcms2-dev \
             libwayland-dev wayland-protocols \
             libeis-dev \
-            libgirepository1.0-dev gobject-introspection \
-            meson ninja-build valac \
-            curl git gettext
+            gettext
 
-      - name: Build and install gtk4-layer-shell
-        working-directory: ${{ github.workspace }}
+      - name: Check support-floor versions
         run: |
-          ./metis-os-workspace/scripts/fetch-gtk4-layer-shell.sh /tmp/gtk4-layer-shell
-          cd /tmp/gtk4-layer-shell
-          meson setup build --prefix=/usr/local -Dexamples=false -Ddocs=false -Dtests=false
-          ninja -C build
-          sudo ninja -C build install
-          echo "/usr/local/lib/x86_64-linux-gnu" | sudo tee /etc/ld.so.conf.d/gtk4-layer-shell.conf
-          sudo ldconfig
-          echo "PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
-          pkg-config --modversion gtk4-layer-shell-0
+          echo "GTK $(pkg-config --modversion gtk4), layer-shell $(pkg-config --modversion gtk4-layer-shell-0)"
+          pkg-config --atleast-version=4.18 gtk4
+          pkg-config --atleast-version=1.0 gtk4-layer-shell-0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -61,7 +63,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: metis-os-workspace -> target
-          shared-key: ci-ubuntu-24.04
+          shared-key: ci-debian-13
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked

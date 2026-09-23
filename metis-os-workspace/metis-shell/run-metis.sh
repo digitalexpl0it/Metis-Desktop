@@ -668,10 +668,20 @@ check_build_deps() {
     if [[ "$missing" -eq 1 ]]; then
         log ""
         log "Install build dependencies, then re-run:"
-        log "  sudo apt install -y libgtk-4-dev libgraphene-1.0-dev pkg-config"
-        log "  # gtk4-layer-shell: see docs/UBUNTU_DEV.md (build from source on 24.04)"
-        log "  export PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:\$PKG_CONFIG_PATH"
+        log "  sudo apt install -y libgtk-4-dev libgtk4-layer-shell-dev libgraphene-1.0-dev pkg-config"
+        log "  # or run ../../install.sh (Ubuntu 26.04+, Debian 13+, Arch)"
         log "  ./run-metis.sh --build"
+        return 1
+    fi
+
+    local gtk_ver
+    gtk_ver="$(pkg-config --modversion gtk4)"
+    if ! pkg-config --atleast-version=4.18 gtk4; then
+        log "ERROR: GTK $gtk_ver is too old; Metis needs GTK >= 4.18 (Ubuntu 26.04+, Debian 13+)."
+        return 1
+    fi
+    if ! pkg-config --atleast-version=1.0 gtk4-layer-shell-0; then
+        log "ERROR: gtk4-layer-shell $(pkg-config --modversion gtk4-layer-shell-0) is too old; Metis needs >= 1.0."
         return 1
     fi
     return 0
@@ -733,7 +743,7 @@ metis_start_secret_service() {
 
 ensure_cargo_in_path
 
-# gtk4-layer-shell from source (common on Ubuntu 24.04)
+# gtk4-layer-shell built from source (METIS_LAYER_SHELL_FROM_SOURCE=1) lands in /usr/local
 for pc_dir in \
     /usr/local/lib/x86_64-linux-gnu/pkgconfig \
     /usr/local/lib/pkgconfig \

@@ -4,7 +4,7 @@ use std::process::{Command, Output};
 use std::thread;
 use std::time::Duration;
 
-use crate::{host, RemoteStatus};
+use crate::{RemoteStatus, host};
 
 const GRDCTL: &str = "grdctl";
 const SYSTEMD_UNIT: &str = "gnome-remote-desktop.service";

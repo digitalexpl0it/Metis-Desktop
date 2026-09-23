@@ -52,14 +52,13 @@ thread_local! {
 }
 
 fn monitor_size() -> (i32, i32) {
-    if let Some(display) = gdk::Display::default() {
-        if let Some(obj) = display.monitors().item(0) {
-            if let Ok(monitor) = obj.downcast::<gdk::Monitor>() {
-                let g = monitor.geometry();
-                if g.width() > 0 && g.height() > 0 {
-                    return (g.width(), g.height());
-                }
-            }
+    if let Some(display) = gdk::Display::default()
+        && let Some(obj) = display.monitors().item(0)
+        && let Ok(monitor) = obj.downcast::<gdk::Monitor>()
+    {
+        let g = monitor.geometry();
+        if g.width() > 0 && g.height() > 0 {
+            return (g.width(), g.height());
         }
     }
     (1280, 720)
@@ -100,11 +99,9 @@ fn materialize_sound() -> Option<std::path::PathBuf> {
     let needs_write = std::fs::metadata(&path)
         .map(|m| m.len() != SOUND_BYTES.len() as u64)
         .unwrap_or(true);
-    if needs_write {
-        if let Err(err) = std::fs::write(&path, SOUND_BYTES) {
-            tracing::warn!(%err, "failed to write startup chime to temp file");
-            return None;
-        }
+    if needs_write && let Err(err) = std::fs::write(&path, SOUND_BYTES) {
+        tracing::warn!(%err, "failed to write startup chime to temp file");
+        return None;
     }
     Some(path)
 }
@@ -119,7 +116,7 @@ pub fn show() {
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
     window.set_keyboard_mode(KeyboardMode::None);
-    window.set_namespace("metis-splash");
+    window.set_namespace(Some("metis-splash"));
     // Anchor a corner so we can position (and later park) the card via margins.
     window.set_anchor(Edge::Top, true);
     window.set_anchor(Edge::Left, true);

@@ -93,17 +93,17 @@ pub fn screenshot_config_path() -> std::path::PathBuf {
 
 pub fn load_screenshot_config() -> ScreenshotConfig {
     let path = screenshot_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            // Retired scroll-capture mode: map leftover configs to Selection so
-            // the rest of the file still loads.
-            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) {
-                if value.get("default_mode").and_then(|v| v.as_str()) == Some("scroll") {
-                    value["default_mode"] = serde_json::json!("selection");
-                }
-                if let Ok(cfg) = serde_json::from_value(value) {
-                    return sanitize_screenshot_config(cfg);
-                }
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(&path)
+    {
+        // Retired scroll-capture mode: map leftover configs to Selection so
+        // the rest of the file still loads.
+        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) {
+            if value.get("default_mode").and_then(|v| v.as_str()) == Some("scroll") {
+                value["default_mode"] = serde_json::json!("selection");
+            }
+            if let Ok(cfg) = serde_json::from_value(value) {
+                return sanitize_screenshot_config(cfg);
             }
         }
     }
@@ -153,15 +153,15 @@ fn sanitize_screenshot_config(mut cfg: ScreenshotConfig) -> ScreenshotConfig {
 
 pub fn expand_save_dir(path: &str) -> std::path::PathBuf {
     let trimmed = path.trim();
-    if trimmed.starts_with("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home).join(trimmed.trim_start_matches("~/"));
-        }
+    if trimmed.starts_with("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return std::path::PathBuf::from(home).join(trimmed.trim_start_matches("~/"));
     }
-    if trimmed == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home);
-        }
+    if trimmed == "~"
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return std::path::PathBuf::from(home);
     }
     std::path::PathBuf::from(trimmed)
 }

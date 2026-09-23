@@ -15,7 +15,7 @@ no-default-features = false
 version = 2
 yanked = "deny"
 # Match cargo-audit’s warning-only posture for unmaintained/unsound transitive
-# crates (smithay → paste/cgmath, gtk-rs glib 0.19, fontdue → ttf-parser).
+# crates (e.g. smithay → paste/cgmath, fontdue → ttf-parser).
 # Fail only on vulnerabilities and yanked crates until those trees upgrade.
 unmaintained = "none"
 unsound = "none"

@@ -2,12 +2,13 @@
 name = "metis-capture"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Shared Wayland ext-image-copy-capture client for Metis screenshot tools"
 
 [dependencies]
 libc = "0.2"
-png = "0.17"
+png = "0.18"
 drm-fourcc = "2.2"
 gbm = "0.18"
 wayland-client = "0.31"

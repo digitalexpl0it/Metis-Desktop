@@ -104,11 +104,11 @@ fn parse_dt(value: &str, params: &Params) -> Option<(DateTime<Local>, bool)> {
     }
 
     let naive = NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S").ok()?;
-    if let Some(tzid) = tzid {
-        if let Ok(tz) = tzid.parse::<Tz>() {
-            let dt = tz.from_local_datetime(&naive).single()?;
-            return Some((dt.with_timezone(&Local), false));
-        }
+    if let Some(tzid) = tzid
+        && let Ok(tz) = tzid.parse::<Tz>()
+    {
+        let dt = tz.from_local_datetime(&naive).single()?;
+        return Some((dt.with_timezone(&Local), false));
     }
     let local = Local.from_local_datetime(&naive).single()?;
     Some((local, false))

@@ -17,8 +17,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::RegistrationToken;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::idle_inhibit::IdleInhibitHandler;
 use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
@@ -65,10 +65,10 @@ impl IdleManager {
     /// blocking a manual suspend. Failure to spawn is non-fatal.
     fn reconcile_suspend_inhibitor(&mut self, inhibited: bool) {
         // Reap a child that exited on its own (e.g. `systemd-inhibit` missing).
-        if let Some(child) = self.suspend_inhibit.as_mut() {
-            if matches!(child.try_wait(), Ok(Some(_))) {
-                self.suspend_inhibit = None;
-            }
+        if let Some(child) = self.suspend_inhibit.as_mut()
+            && matches!(child.try_wait(), Ok(Some(_)))
+        {
+            self.suspend_inhibit = None;
         }
         match (inhibited, self.suspend_inhibit.is_some()) {
             (true, false) => match std::process::Command::new("systemd-inhibit")

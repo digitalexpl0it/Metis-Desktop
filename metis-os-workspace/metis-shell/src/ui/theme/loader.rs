@@ -4,8 +4,8 @@ use gtk::{CssProvider, STYLE_PROVIDER_PRIORITY_APPLICATION, STYLE_PROVIDER_PRIOR
 
 use crate::config;
 use metis_config::{
-    build_stylesheet, parse_hex_rgb, BarBorder, BarFill, BarFillMode, BarGradientDirection,
-    BarPosition, BorderMode, ThemeMode, ThemeTokens,
+    BarBorder, BarFill, BarFillMode, BarGradientDirection, BarPosition, BorderMode, ThemeMode,
+    ThemeTokens, build_stylesheet, parse_hex_rgb,
 };
 
 thread_local! {
@@ -87,7 +87,7 @@ fn apply_tokens(tokens: &ThemeTokens) {
     THEME_STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.tokens = tokens.clone();
-        state.provider.load_from_data(&css);
+        state.provider.load_from_string(&css);
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
                 &display,
@@ -204,7 +204,7 @@ pub fn apply_bar_appearance(
     };
 
     BAR_BG_PROVIDER.with(|provider| {
-        provider.load_from_data(&css);
+        provider.load_from_string(&css);
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
                 &display,
@@ -313,7 +313,7 @@ pub fn apply_menu_opacity(opacity: f32) {
     let raised_rgb = active_tokens().surface_raised_rgb();
     let css = format!(".metis-menu-panel {{ background-color: rgba({raised_rgb}, {alpha:.3}); }}");
     MENU_BG_PROVIDER.with(|provider| {
-        provider.load_from_data(&css);
+        provider.load_from_string(&css);
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
                 &display,

@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use metis_config::{load_remote_config, save_remote_config, RemoteBackend};
+use metis_config::{RemoteBackend, load_remote_config, save_remote_config};
 
 const FLATPAK_ID: &str = "com.rustdesk.RustDesk";
 

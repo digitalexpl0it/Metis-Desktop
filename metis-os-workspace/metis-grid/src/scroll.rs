@@ -146,18 +146,18 @@ impl ScrollState {
     }
 
     pub fn focus_up(&mut self) {
-        if let Some(col) = self.columns.get_mut(self.focus_col) {
-            if col.focus_row > 0 {
-                col.focus_row -= 1;
-            }
+        if let Some(col) = self.columns.get_mut(self.focus_col)
+            && col.focus_row > 0
+        {
+            col.focus_row -= 1;
         }
     }
 
     pub fn focus_down(&mut self) {
-        if let Some(col) = self.columns.get_mut(self.focus_col) {
-            if col.focus_row + 1 < col.windows.len() {
-                col.focus_row += 1;
-            }
+        if let Some(col) = self.columns.get_mut(self.focus_col)
+            && col.focus_row + 1 < col.windows.len()
+        {
+            col.focus_row += 1;
         }
     }
 
@@ -176,20 +176,20 @@ impl ScrollState {
     }
 
     pub fn move_window_up(&mut self) {
-        if let Some(col) = self.columns.get_mut(self.focus_col) {
-            if col.focus_row > 0 {
-                col.windows.swap(col.focus_row, col.focus_row - 1);
-                col.focus_row -= 1;
-            }
+        if let Some(col) = self.columns.get_mut(self.focus_col)
+            && col.focus_row > 0
+        {
+            col.windows.swap(col.focus_row, col.focus_row - 1);
+            col.focus_row -= 1;
         }
     }
 
     pub fn move_window_down(&mut self) {
-        if let Some(col) = self.columns.get_mut(self.focus_col) {
-            if col.focus_row + 1 < col.windows.len() {
-                col.windows.swap(col.focus_row, col.focus_row + 1);
-                col.focus_row += 1;
-            }
+        if let Some(col) = self.columns.get_mut(self.focus_col)
+            && col.focus_row + 1 < col.windows.len()
+        {
+            col.windows.swap(col.focus_row, col.focus_row + 1);
+            col.focus_row += 1;
         }
     }
 

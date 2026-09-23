@@ -57,10 +57,10 @@ impl CalDavProvider {
             .await
             .ok()
             .flatten();
-        if let Some(pw) = &pw {
-            if let Ok(mut guard) = self.password.lock() {
-                *guard = Some(pw.clone());
-            }
+        if let Some(pw) = &pw
+            && let Ok(mut guard) = self.password.lock()
+        {
+            *guard = Some(pw.clone());
         }
         pw
     }
@@ -128,38 +128,30 @@ impl CalDavProvider {
                 None,
             )
             .await
+            && let Some(principal) = extract_nested_href(&xml, "current-user-principal")
+            && let Some(principal_url) = self.resolve(&principal)
+            && let Ok(home_xml) = self
+                .dav_request(
+                    "PROPFIND",
+                    &principal_url,
+                    Some("0"),
+                    Some(PROPFIND_HOME.into()),
+                    None,
+                )
+                .await
+            && let Some(home) = extract_nested_href(&home_xml, "calendar-home-set")
+            && let Some(home_url) = self.resolve(&home)
+            && let Ok(list_xml) = self
+                .dav_request(
+                    "PROPFIND",
+                    &home_url,
+                    Some("1"),
+                    Some(PROPFIND_CALS.into()),
+                    None,
+                )
+                .await
         {
-            if let Some(principal) = extract_nested_href(&xml, "current-user-principal") {
-                if let Some(principal_url) = self.resolve(&principal) {
-                    if let Ok(home_xml) = self
-                        .dav_request(
-                            "PROPFIND",
-                            &principal_url,
-                            Some("0"),
-                            Some(PROPFIND_HOME.into()),
-                            None,
-                        )
-                        .await
-                    {
-                        if let Some(home) = extract_nested_href(&home_xml, "calendar-home-set") {
-                            if let Some(home_url) = self.resolve(&home) {
-                                if let Ok(list_xml) = self
-                                    .dav_request(
-                                        "PROPFIND",
-                                        &home_url,
-                                        Some("1"),
-                                        Some(PROPFIND_CALS.into()),
-                                        None,
-                                    )
-                                    .await
-                                {
-                                    return self.calendars_from_multistatus(&list_xml);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            return self.calendars_from_multistatus(&list_xml);
         }
 
         // Last resort: treat the base URL itself as a single calendar.
@@ -305,14 +297,23 @@ struct DavResponse {
 }
 
 fn local_name(name: QName) -> String {
-    String::from_utf8_lossy(name.local_name().as_ref()).to_string()
+    name.local_name().as_ref().to_string()
 }
 
+/// Text events never contain entities — the reader emits those as
+/// [`XmlEvent::GeneralRef`], resolved by [`decode_ref`].
 fn decode_text(t: &quick_xml::events::BytesText) -> String {
-    t.decode()
-        .ok()
-        .and_then(|s| quick_xml::escape::unescape(&s).ok().map(|c| c.into_owned()))
-        .unwrap_or_default()
+    t.xml10_content().into_owned()
+}
+
+/// `&amp;` / `&#13;` / `&#x26;`: dropping these corrupts titles, hrefs and
+/// the embedded iCalendar payload.
+fn decode_ref(r: &quick_xml::events::BytesRef) -> Option<String> {
+    match r.resolve_char_ref() {
+        Ok(Some(ch)) => Some(ch.to_string()),
+        Ok(None) => quick_xml::escape::resolve_xml_entity(r.as_ref()).map(str::to_string),
+        Err(_) => None,
+    }
 }
 
 fn parse_multistatus(xml: &str) -> Vec<DavResponse> {
@@ -349,10 +350,14 @@ fn parse_multistatus(xml: &str) -> Vec<DavResponse> {
                     append_field(&mut cur, &mut color_buf, which, &text);
                 }
             }
+            Ok(XmlEvent::GeneralRef(r)) => {
+                if let (Some(which), Some(text)) = (field, decode_ref(&r)) {
+                    append_field(&mut cur, &mut color_buf, which, &text);
+                }
+            }
             Ok(XmlEvent::CData(t)) => {
                 if let Some(which) = field {
-                    let text = String::from_utf8_lossy(t.as_ref()).into_owned();
-                    append_field(&mut cur, &mut color_buf, which, &text);
+                    append_field(&mut cur, &mut color_buf, which, &t.xml10_content());
                 }
             }
             Ok(XmlEvent::End(e)) => {
@@ -420,6 +425,11 @@ fn extract_nested_href(xml: &str, element: &str) -> Option<String> {
             Ok(XmlEvent::Text(t)) if capture => {
                 value.push_str(&decode_text(&t));
             }
+            Ok(XmlEvent::GeneralRef(r)) if capture => {
+                if let Some(text) = decode_ref(&r) {
+                    value.push_str(&text);
+                }
+            }
             Ok(XmlEvent::End(e)) => {
                 let name = local_name(e.name());
                 if name == "href" && capture {
@@ -435,4 +445,39 @@ fn extract_nested_href(xml: &str, element: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multistatus_decodes_entity_and_char_refs() {
+        let xml = r#"<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/cal/a&amp;b.ics</d:href>
+    <d:propstat><d:prop>
+      <d:getetag>"e1"</d:getetag>
+      <c:calendar-data>SUMMARY:Tom &amp; Jerry &lt;3&#13;&#x0A;END</c:calendar-data>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"#;
+        let out = parse_multistatus(xml);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].href, "/cal/a&b.ics");
+        assert_eq!(out[0].etag, "\"e1\"");
+        assert_eq!(out[0].calendar_data, "SUMMARY:Tom & Jerry <3\r\nEND");
+    }
+
+    #[test]
+    fn nested_href_decodes_refs() {
+        let xml = r#"<d:multistatus xmlns:d="DAV:"><d:response><d:propstat><d:prop>
+<d:current-user-principal><d:href>/p/a&amp;b/</d:href></d:current-user-principal>
+</d:prop></d:propstat></d:response></d:multistatus>"#;
+        assert_eq!(
+            extract_nested_href(xml, "current-user-principal").as_deref(),
+            Some("/p/a&b/")
+        );
+    }
 }

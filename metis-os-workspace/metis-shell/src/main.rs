@@ -9,6 +9,14 @@ mod ui;
 /// Metis Shell — configurable edge bar (default) or isolated desktop widgets.
 fn main() {
     tracing_subscriber::fmt().init();
+    // reqwest is built with `rustls-no-provider`; without this every HTTPS
+    // request (weather, calendar, RSS) would panic.
+    if rustls::crypto::ring::default_provider()
+        .install_default()
+        .is_err()
+    {
+        tracing::debug!("rustls crypto provider already installed");
+    }
 
     metis_i18n::init();
 

@@ -142,11 +142,7 @@ fn read_request_line(stream: &mut std::os::unix::net::UnixStream) -> Option<Stri
     }
 
     let line = acc.lines().next()?.trim().to_string();
-    if line.is_empty() {
-        None
-    } else {
-        Some(line)
-    }
+    if line.is_empty() { None } else { Some(line) }
 }
 
 fn parse_ipc_request(request: &str) -> Result<(Option<String>, CompositorCommand), String> {

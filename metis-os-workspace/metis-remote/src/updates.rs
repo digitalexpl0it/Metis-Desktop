@@ -6,7 +6,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +100,41 @@ fn command_exists(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Soft list commands must not hang the machine; `fwupdmgr` / `flatpak` can
+/// block on D-Bus for minutes and stall pointer motion system-wide.
+const CHECK_TIMEOUT_SECS: u64 = 25;
+
+fn command_output(bin: &str, args: &[&str]) -> Result<std::process::Output, UpdatesError> {
+    let output = if command_exists("timeout") {
+        let mut argv = Vec::with_capacity(args.len() + 2);
+        argv.push(CHECK_TIMEOUT_SECS.to_string());
+        argv.push(bin.to_string());
+        argv.extend(args.iter().map(|s| (*s).to_string()));
+        Command::new("timeout")
+            .args(&argv)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| UpdatesError::Message(format!("timeout {bin}: {e}")))?
+    } else {
+        Command::new(bin)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| UpdatesError::Message(format!("{bin}: {e}")))?
+    };
+    // GNU timeout exits 124 when the child is killed for exceeding the limit.
+    if output.status.code() == Some(124) {
+        return Err(UpdatesError::Message(format!(
+            "{bin} timed out after {CHECK_TIMEOUT_SECS}s"
+        )));
+    }
+    Ok(output)
+}
+
 fn packagekit_available() -> bool {
     command_exists("pkcon")
 }
@@ -128,6 +163,20 @@ pub fn reboot_required() -> bool {
 
 /// Full check across enabled sources (no elevation for list; may soft-fail per source).
 pub fn check(sources: &UpdateSources) -> UpdateSnapshot {
+    check_inner(sources, false)
+}
+
+/// Background poll: PackageKit / distro list only.
+///
+/// Flatpak `remote-ls --updates` and `fwupdmgr get-updates` talk to system
+/// daemons and routinely peg D-Bus / disk for long enough to make the whole
+/// session (including pointer motion) feel stuck. Those sources run only on
+/// manual checks and after apply.
+pub fn check_background(sources: &UpdateSources) -> UpdateSnapshot {
+    check_inner(sources, true)
+}
+
+fn check_inner(sources: &UpdateSources, background: bool) -> UpdateSnapshot {
     let mut snap = UpdateSnapshot {
         reboot_required: reboot_required(),
         ..Default::default()
@@ -150,7 +199,7 @@ pub fn check(sources: &UpdateSources) -> UpdateSnapshot {
         }
     }
 
-    if sources.flatpak {
+    if !background && sources.flatpak {
         match check_flatpak() {
             Ok(items) => snap.flatpaks = items,
             Err(err) => {
@@ -161,7 +210,7 @@ pub fn check(sources: &UpdateSources) -> UpdateSnapshot {
         }
     }
 
-    if sources.fwupd {
+    if !background && sources.fwupd {
         match check_fwupd() {
             Ok(items) => snap.firmware = items,
             Err(err) => {
@@ -180,6 +229,10 @@ pub fn check_from_config(cfg: &UpdatesConfig) -> UpdateSnapshot {
     check(&cfg.sources)
 }
 
+pub fn check_background_from_config(cfg: &UpdatesConfig) -> UpdateSnapshot {
+    check_background(&cfg.sources)
+}
+
 fn check_packagekit() -> Result<(Vec<UpdateItem>, String), UpdatesError> {
     if package_manager_busy() {
         return Err(UpdatesError::Busy);
@@ -193,13 +246,7 @@ fn check_packagekit() -> Result<(Vec<UpdateItem>, String), UpdatesError> {
 }
 
 fn pkcon_get_updates() -> Result<Vec<UpdateItem>, UpdatesError> {
-    let output = Command::new("pkcon")
-        .args(["get-updates", "-p"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| UpdatesError::Message(format!("pkcon: {e}")))?;
+    let output = command_output("pkcon", &["get-updates", "-p"])?;
     // pkcon exits 5 when no updates; still OK.
     let code = output.status.code().unwrap_or(1);
     if !output.status.success() && code != 5 {
@@ -411,17 +458,14 @@ fn check_flatpak() -> Result<Vec<UpdateItem>, UpdatesError> {
     if !command_exists("flatpak") {
         return Ok(Vec::new());
     }
-    let output = Command::new("flatpak")
-        .args([
+    let output = command_output(
+        "flatpak",
+        &[
             "remote-ls",
             "--updates",
             "--columns=application,name,version",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| UpdatesError::Message(format!("flatpak: {e}")))?;
+        ],
+    )?;
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
         if err.trim().is_empty() {
@@ -463,13 +507,7 @@ fn check_fwupd() -> Result<Vec<UpdateItem>, UpdatesError> {
     if !command_exists("fwupdmgr") {
         return Ok(Vec::new());
     }
-    let output = Command::new("fwupdmgr")
-        .args(["get-updates", "--json"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| UpdatesError::Message(format!("fwupdmgr: {e}")))?;
+    let output = command_output("fwupdmgr", &["get-updates", "--json"])?;
     if !output.status.success() {
         // No devices / no updates often exits non-zero.
         return Ok(Vec::new());
@@ -525,9 +563,20 @@ fn parse_fwupd_json(text: &str) -> Result<Vec<UpdateItem>, UpdatesError> {
     Ok(items)
 }
 
-fn emit(tx: &Option<Sender<UpdateProgressEvent>>, ev: UpdateProgressEvent) {
-    if let Some(tx) = tx {
-        let _ = tx.send(ev);
+fn emit(tx: &Option<SyncSender<UpdateProgressEvent>>, ev: UpdateProgressEvent) {
+    let Some(tx) = tx else {
+        return;
+    };
+    // Never drop terminal / phase / percent events — only skip surplus logs.
+    match &ev {
+        UpdateProgressEvent::Finished { .. }
+        | UpdateProgressEvent::Phase { .. }
+        | UpdateProgressEvent::Progress { .. } => {
+            let _ = tx.send(ev);
+        }
+        UpdateProgressEvent::Log { .. } => {
+            let _ = tx.try_send(ev);
+        }
     }
 }
 
@@ -537,7 +586,7 @@ fn emit(tx: &Option<Sender<UpdateProgressEvent>>, ev: UpdateProgressEvent) {
 /// are fine; install still refreshes under elevation when needed.
 pub fn refresh(
     sources: &UpdateSources,
-    progress: Option<Sender<UpdateProgressEvent>>,
+    progress: Option<SyncSender<UpdateProgressEvent>>,
 ) -> Result<(), UpdatesError> {
     if package_manager_busy() {
         return Err(UpdatesError::Busy);
@@ -577,7 +626,7 @@ pub fn refresh(
 /// Apply all enabled update sources. Streams progress events.
 pub fn apply(
     sources: &UpdateSources,
-    progress: Option<Sender<UpdateProgressEvent>>,
+    progress: Option<SyncSender<UpdateProgressEvent>>,
 ) -> Result<(), UpdatesError> {
     if package_manager_busy() {
         return Err(UpdatesError::Busy);
@@ -594,8 +643,9 @@ pub fn apply(
             },
         );
         let r = if packagekit_available() {
-            // Soft refresh then update; PackageKit may auth once for the transaction.
-            let _ = run_streaming("pkcon", &["refresh", "--noninteractive"], &progress);
+            // Do not soft-refresh first — `pkcon refresh` can block for minutes
+            // on D-Bus/network and freezes pointer motion session-wide. PackageKit
+            // update already brings metadata as needed under one auth prompt.
             run_streaming("pkcon", &["update", "--noninteractive", "-y"], &progress)
         } else {
             // Single elevation: refresh indexes + upgrade inside pk-updates-apply.
@@ -665,7 +715,7 @@ pub fn apply(
     }
 }
 
-fn escalate_apply(progress: &Option<Sender<UpdateProgressEvent>>) -> Result<(), UpdatesError> {
+fn escalate_apply(progress: &Option<SyncSender<UpdateProgressEvent>>) -> Result<(), UpdatesError> {
     emit(
         progress,
         UpdateProgressEvent::Log {
@@ -706,7 +756,7 @@ fn escalate_apply(progress: &Option<Sender<UpdateProgressEvent>>) -> Result<(), 
 fn run_streaming(
     bin: &str,
     args: &[&str],
-    progress: &Option<Sender<UpdateProgressEvent>>,
+    progress: &Option<SyncSender<UpdateProgressEvent>>,
 ) -> Result<(), UpdatesError> {
     let mut child = Command::new(bin)
         .args(args)
@@ -716,6 +766,7 @@ fn run_streaming(
         .spawn()
         .map_err(|e| UpdatesError::Message(format!("{bin}: {e}")))?;
 
+    let mut log_budget = 0u32;
     if let Some(stdout) = child.stdout.take() {
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
@@ -728,18 +779,27 @@ fn run_streaming(
                     },
                 );
             }
-            emit(progress, UpdateProgressEvent::Log { line });
+            // Cap log spam — unbounded lines filled the GTK queue and made the
+            // pointer unusable while Install ran.
+            log_budget += 1;
+            if log_budget <= 40 || log_budget.is_multiple_of(25) {
+                emit(progress, UpdateProgressEvent::Log { line });
+            }
         }
     }
     if let Some(stderr) = child.stderr.take() {
         let reader = BufReader::new(stderr);
+        let mut err_budget = 0u32;
         for line in reader.lines().map_while(Result::ok) {
-            emit(
-                progress,
-                UpdateProgressEvent::Log {
-                    line: format!("! {line}"),
-                },
-            );
+            err_budget += 1;
+            if err_budget <= 20 || err_budget.is_multiple_of(10) {
+                emit(
+                    progress,
+                    UpdateProgressEvent::Log {
+                        line: format!("! {line}"),
+                    },
+                );
+            }
         }
     }
     let status = child

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use gtk::glib;
 use gtk::prelude::*;
-use metis_config::{load_outputs_config, output_prefs, save_outputs_config, DisplayLayoutMode};
+use metis_config::{DisplayLayoutMode, load_outputs_config, output_prefs, save_outputs_config};
 use metis_protocol::{OutputInfo, OutputModeInfo};
 
 use crate::gtk_cb::{OptFn0Cell, OutputModesCache};
@@ -287,12 +287,12 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
                 .mirror_source
                 .clone()
                 .or_else(|| enabled.first().map(|o| o.name.clone()));
-            if let Some(name) = selected_name {
-                if let Some(idx) = enabled.iter().position(|o| o.name == name) {
-                    let idx = idx as u32;
-                    if source_dd.selected() != idx {
-                        source_dd.set_selected(idx);
-                    }
+            if let Some(name) = selected_name
+                && let Some(idx) = enabled.iter().position(|o| o.name == name)
+            {
+                let idx = idx as u32;
+                if source_dd.selected() != idx {
+                    source_dd.set_selected(idx);
                 }
             }
             duplicate.set_sensitive(enabled.len() >= 2);
@@ -415,10 +415,11 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
             } else {
                 DisplayLayoutMode::Extend
             };
-            if c.display_mode == DisplayLayoutMode::Mirror && c.mirror_source.is_none() {
-                if let Some(first) = runtime::list_outputs().into_iter().find(|o| o.enabled) {
-                    c.mirror_source = Some(first.name);
-                }
+            if c.display_mode == DisplayLayoutMode::Mirror
+                && c.mirror_source.is_none()
+                && let Some(first) = runtime::list_outputs().into_iter().find(|o| o.enabled)
+            {
+                c.mirror_source = Some(first.name);
             }
             drop(c);
             refresh_source_dropdown();
@@ -1308,16 +1309,18 @@ fn update_arrangement_view(
         );
         arrange_body.append(canvas.widget());
         *canvas_slot.borrow_mut() = Some(canvas);
-    } else if let Some(canvas) = canvas_slot.borrow().as_ref().cloned() {
-        canvas.rebuild_blocks();
-        // Clone selection before set_selected — it borrow_mut's selected_name; holding
-        // selected_name.borrow() across that call panics (Detect displays path).
-        let sel_idx = selected_name
-            .borrow()
-            .clone()
-            .and_then(|name| list.iter().position(|o| o.name == name));
-        if let Some(idx) = sel_idx {
-            canvas.set_selected(idx);
+    } else {
+        if let Some(canvas) = canvas_slot.borrow().as_ref().cloned() {
+            canvas.rebuild_blocks();
+            // Clone selection before set_selected — it borrow_mut's selected_name; holding
+            // selected_name.borrow() across that call panics (Detect displays path).
+            let sel_idx = selected_name
+                .borrow()
+                .clone()
+                .and_then(|name| list.iter().position(|o| o.name == name));
+            if let Some(idx) = sel_idx {
+                canvas.set_selected(idx);
+            }
         }
     }
     rebuild_detail();
@@ -1330,10 +1333,10 @@ fn resolve_selected_output<'a>(
     list: &'a [OutputInfo],
     selected_name: &RefCell<Option<String>>,
 ) -> (&'a OutputInfo, usize) {
-    if let Some(ref name) = *selected_name.borrow() {
-        if let Some((idx, out)) = list.iter().enumerate().find(|(_, o)| &o.name == name) {
-            return (out, idx);
-        }
+    if let Some(ref name) = *selected_name.borrow()
+        && let Some((idx, out)) = list.iter().enumerate().find(|(_, o)| &o.name == name)
+    {
+        return (out, idx);
     }
     list.first().map(|o| (o, 0)).expect("non-empty output list")
 }

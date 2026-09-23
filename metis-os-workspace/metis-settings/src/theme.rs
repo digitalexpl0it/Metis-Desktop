@@ -128,8 +128,8 @@ fn reapply_tokens(tokens: &ThemeTokens, dark: bool) {
                 text = tokens.text,
                 surface = tokens.surface,
             ));
-            base.load_from_data(&css);
-            extra.load_from_data(&settings_css(tokens));
+            base.load_from_string(&css);
+            extra.load_from_string(&settings_css(tokens));
         }
     });
 }

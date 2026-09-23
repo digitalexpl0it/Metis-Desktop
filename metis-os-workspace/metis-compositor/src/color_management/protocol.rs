@@ -14,7 +14,7 @@ use smithay::reexports::wayland_protocols::wp::color_management::v1::server::{
 };
 use smithay::reexports::wayland_server::protocol::wl_surface;
 use smithay::reexports::wayland_server::{
-    backend::GlobalId, Client, DataInit, DisplayHandle, New, Resource, WEnum,
+    Client, DataInit, DisplayHandle, New, Resource, WEnum, backend::GlobalId,
 };
 use smithay::wayland::{Dispatch2, GlobalDispatch2};
 
@@ -84,7 +84,9 @@ pub fn color_protocol_enabled() -> bool {
 impl ColorManagementState {
     pub fn new(display: &DisplayHandle) -> Self {
         let global = if color_protocol_enabled() {
-            tracing::info!("registering wp_color_management_v1 (METIS_COLOR_MGMT=1; experimental — can destabilise Chromium/the DRM session)");
+            tracing::info!(
+                "registering wp_color_management_v1 (METIS_COLOR_MGMT=1; experimental — can destabilise Chromium/the DRM session)"
+            );
             Some(
                 display.create_global::<MetisState, wp_color_manager_v1::WpColorManagerV1, _>(
                     1,
@@ -446,14 +448,15 @@ fn send_image_description_info(
     record: &DescriptionRecord,
 ) {
     match &record.kind {
-        DescriptionKind::Icc(icc) => {
-            if let Some(fd) = sealed_memfd("metis-icc", icc) {
+        DescriptionKind::Icc(icc) => match sealed_memfd("metis-icc", icc) {
+            Some(fd) => {
                 info.icc_file(fd.as_fd(), icc.len() as u32);
-            } else {
+            }
+            _ => {
                 tracing::warn!("ICC memfd failed — falling back to sRGB parametric info");
                 send_srgb_parametric_info(info);
             }
-        }
+        },
         DescriptionKind::SrgbParametric => send_srgb_parametric_info(info),
         DescriptionKind::Parametric { tf, primaries } => {
             send_parametric_info(info, *tf, *primaries);
@@ -485,10 +488,10 @@ impl Dispatch2<wp_image_description_creator_icc_v1::WpImageDescriptionCreatorIcc
                 offset,
                 length,
             } => {
-                if let Some(bytes) = read_icc_fd(icc_profile, offset, length) {
-                    if let Ok(mut slot) = self.icc.lock() {
-                        *slot = Some(bytes);
-                    }
+                if let Some(bytes) = read_icc_fd(icc_profile, offset, length)
+                    && let Ok(mut slot) = self.icc.lock()
+                {
+                    *slot = Some(bytes);
                 }
             }
             wp_image_description_creator_icc_v1::Request::Create { image_description } => {

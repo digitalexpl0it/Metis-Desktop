@@ -2,12 +2,13 @@
 name = "metis-i18n"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Metis localization — gettext (GTK) + Fluent (compositor), locale resolve, formatting"
 
 [dependencies]
-gettext-rs = { version = "0.7", features = ["gettext-system"] }
-fluent = "0.16"
+gettext-rs = { version = "0.8", features = ["gettext-system"] }
+fluent = "0.17"
 unic-langid = { version = "0.9", features = ["macros"] }
 intl-memoizer = "0.5"
 once_cell = "1"

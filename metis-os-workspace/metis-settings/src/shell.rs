@@ -14,12 +14,12 @@ use crate::dialog;
 use crate::gtk_cb::OptFnStrRef;
 use crate::home;
 use crate::motion;
-use crate::nav::{self, NavHue, CATEGORIES};
+use crate::nav::{self, CATEGORIES, NavHue};
 use crate::pages;
 use crate::runtime;
 use crate::theme;
 use crate::ui;
-use crate::{i18n_gtk, PageLaunch, APP_ICON_BYTES};
+use crate::{APP_ICON_BYTES, PageLaunch, i18n_gtk};
 
 const MINI_SIDEBAR_WIDTH: i32 = 64;
 
@@ -45,10 +45,10 @@ pub fn open(app: &gtk::Application, launch: PageLaunch, force_rebuild: bool) {
 fn apply_launch(launch: &PageLaunch) {
     if let Some(page) = launch.page.as_deref() {
         nav::request_page(page);
-        if page == "network" {
-            if let Some(tab) = launch.tab.as_deref() {
-                pages::network::request_tab(tab);
-            }
+        if page == "network"
+            && let Some(tab) = launch.tab.as_deref()
+        {
+            pages::network::request_tab(tab);
         }
     } else {
         SHOW_HOME.with(|slot| {
@@ -281,11 +281,11 @@ fn build(app: &gtk::Application, launch: PageLaunch) {
             let mut child = page_nav.first_child();
             while let Some(widget) = child {
                 let next = widget.next_sibling();
-                if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
-                    if row.widget_name() == page_id {
-                        page_nav.select_row(Some(&row));
-                        break;
-                    }
+                if let Ok(row) = widget.downcast::<gtk::ListBoxRow>()
+                    && row.widget_name() == page_id
+                {
+                    page_nav.select_row(Some(&row));
+                    break;
                 }
                 child = next;
             }
@@ -424,10 +424,10 @@ fn build(app: &gtk::Application, launch: PageLaunch) {
 
     if let Some(page) = launch.page.as_deref() {
         open_page(page);
-        if page == "network" {
-            if let Some(tab) = launch.tab.as_deref() {
-                pages::network::request_tab(tab);
-            }
+        if page == "network"
+            && let Some(tab) = launch.tab.as_deref()
+        {
+            pages::network::request_tab(tab);
         }
     } else {
         show_home();
@@ -597,13 +597,12 @@ fn load_app_icon() -> Option<gtk::gdk::Texture> {
 }
 
 fn apply_window_icon(window: &gtk::ApplicationWindow) {
-    if let Some(texture) = load_app_icon() {
-        if let Some(surface) = window.surface() {
-            if let Some(toplevel) = surface.downcast_ref::<gtk::gdk::Toplevel>() {
-                toplevel.set_icon_list(&[texture]);
-                return;
-            }
-        }
+    if let Some(texture) = load_app_icon()
+        && let Some(surface) = window.surface()
+        && let Some(toplevel) = surface.downcast_ref::<gtk::gdk::Toplevel>()
+    {
+        toplevel.set_icon_list(&[texture]);
+        return;
     }
     window.set_icon_name(Some("metis-settings"));
 }

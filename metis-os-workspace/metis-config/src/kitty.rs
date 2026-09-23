@@ -17,10 +17,10 @@ dynamic_background_opacity yes
 
 /// `~/.config/kitty/kitty.conf` (respects `$XDG_CONFIG_HOME` when set).
 pub fn kitty_config_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("kitty").join("kitty.conf");
-        }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg).join("kitty").join("kitty.conf");
     }
     std::env::var("HOME")
         .map(|h| PathBuf::from(h).join(".config/kitty/kitty.conf"))

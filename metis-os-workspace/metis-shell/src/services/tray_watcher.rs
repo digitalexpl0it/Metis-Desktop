@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use zbus::fdo::RequestNameFlags;
 use zbus::interface;
 use zbus::proxy;
@@ -13,10 +13,10 @@ use zbus::zvariant::{OwnedValue, Value};
 
 use super::tray::{TrayCommand, TrayEvent, TrayItem};
 use super::tray_dbus_types::{
-    item_unique_name, parse_item_props, resolve_tray_display_title, service_parts, MenuLayout,
-    ServiceParts,
+    MenuLayout, ServiceParts, item_unique_name, parse_item_props, resolve_tray_display_title,
+    service_parts,
 };
-use super::tray_menu::{parse_menu_layout, MenuItem, TrayMenu};
+use super::tray_menu::{MenuItem, TrayMenu, parse_menu_layout};
 
 const WATCHER_PATH: &str = "/StatusNotifierWatcher";
 const WATCHER_NAME: &str = "org.kde.StatusNotifierWatcher";
@@ -585,17 +585,16 @@ async fn dispatch_command(conn: &zbus::Connection, cmd: TrayCommand) -> Result<(
             let mut result = deliver(target).await;
             // One retry: if the resolved id was *also* stale (the client renumbered
             // between our layout read and the click), re-resolve once and retry.
-            if result.is_err() {
-                if let Some(fresh) = resolve_menu_id_by_label(&proxy, &label).await {
-                    if fresh != target {
-                        tracing::debug!(
-                            bus = %bus_name,
-                            fresh,
-                            "tray: first click failed — retrying with re-resolved id"
-                        );
-                        result = deliver(fresh).await;
-                    }
-                }
+            if result.is_err()
+                && let Some(fresh) = resolve_menu_id_by_label(&proxy, &label).await
+                && fresh != target
+            {
+                tracing::debug!(
+                    bus = %bus_name,
+                    fresh,
+                    "tray: first click failed — retrying with re-resolved id"
+                );
+                result = deliver(fresh).await;
             }
 
             match &result {

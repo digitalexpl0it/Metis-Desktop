@@ -16,7 +16,7 @@ use gtk::prelude::*;
 use gtk4_layer_shell::{KeyboardMode, LayerShell};
 
 use crate::gtk_cb::OptFn0Cell;
-use crate::services::{applications, AppEntry};
+use crate::services::{AppEntry, applications};
 
 const APP_ICON_SIZE: i32 = 24;
 const PIN_ICON_SIZE: i32 = 34;
@@ -155,11 +155,11 @@ impl PinContext {
             .build();
         item.add_css_class("metis-bar-task-menu-item");
         item.set_halign(gtk::Align::Fill);
-        if let Some(child) = item.child() {
-            if let Ok(lbl) = child.downcast::<gtk::Label>() {
-                lbl.set_halign(gtk::Align::Start);
-                lbl.set_xalign(0.0);
-            }
+        if let Some(child) = item.child()
+            && let Ok(lbl) = child.downcast::<gtk::Label>()
+        {
+            lbl.set_halign(gtk::Align::Start);
+            lbl.set_xalign(0.0);
         }
         self.panel.append(&item);
 
@@ -666,7 +666,7 @@ fn refresh_user_header(avatar: &gtk::Image, name: &gtk::Label) {
     if let Some(path) = cfg.resolved_avatar_path() {
         avatar.set_from_file(Some(path));
     } else {
-        avatar.set_from_icon_name(Some("avatar-default-symbolic"));
+        avatar.set_icon_name(Some("avatar-default-symbolic"));
     }
 }
 
@@ -876,11 +876,11 @@ fn attach_tooltip(
                     tip.set_label(&text);
                     // Position the tooltip just to the right of the button, vertically
                     // centered, in the overlay's coordinate space.
-                    if let Some((x, y)) =
-                        w.translate_coordinates(&ov, w.width() as f64, w.height() as f64 / 2.0)
-                    {
-                        tip.set_margin_start((x as i32 + 8).max(0));
-                        tip.set_margin_top((y as i32 - 14).max(0));
+                    let anchor =
+                        gtk::graphene::Point::new(w.width() as f32, w.height() as f32 / 2.0);
+                    if let Some(p) = w.compute_point(&ov, &anchor) {
+                        tip.set_margin_start((p.x() as i32 + 8).max(0));
+                        tip.set_margin_top((p.y() as i32 - 14).max(0));
                     }
                     tip.set_visible(true);
                 });

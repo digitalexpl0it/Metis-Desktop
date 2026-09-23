@@ -6,16 +6,16 @@ use smithay::{
     reexports::{
         calloop::Interest,
         wayland_server::{
-            protocol::{wl_buffer, wl_surface::WlSurface},
             Client, Resource,
+            protocol::{wl_buffer, wl_surface::WlSurface},
         },
     },
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            add_blocker, add_pre_commit_hook, get_parent, is_sync_subsurface, with_states,
             BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
-            SurfaceAttributes,
+            SurfaceAttributes, add_blocker, add_pre_commit_hook, get_parent, is_sync_subsurface,
+            with_states,
         },
         dmabuf::get_dmabuf,
         drm_syncobj::DrmSyncobjCachedState,
@@ -102,46 +102,44 @@ impl CompositorHandler for MetisState {
                 return;
             };
             // Explicit sync: wait on the client-supplied acquire timeline point.
-            if let Some(acquire_point) = acquire_point {
-                if let Ok((blocker, source)) = acquire_point.generate_blocker() {
-                    if let Some(client) = surface.client() {
-                        let res = state.loop_handle.insert_source(source, move |_, _, data| {
-                            let dh = data.display_handle.clone();
-                            data.client_compositor_state(&client)
-                                .blocker_cleared(data, &dh);
-                            Ok(())
-                        });
-                        if res.is_ok() {
-                            add_blocker(surface, blocker);
-                            return;
-                        }
-                    }
+            if let Some(acquire_point) = acquire_point
+                && let Ok((blocker, source)) = acquire_point.generate_blocker()
+                && let Some(client) = surface.client()
+            {
+                let res = state.loop_handle.insert_source(source, move |_, _, data| {
+                    let dh = data.display_handle.clone();
+                    data.client_compositor_state(&client)
+                        .blocker_cleared(data, &dh);
+                    Ok(())
+                });
+                if res.is_ok() {
+                    add_blocker(surface, blocker);
+                    return;
                 }
             }
             // Implicit sync fallback: block on the dmabuf becoming readable.
-            if let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) {
-                if let Some(client) = surface.client() {
-                    let res = state.loop_handle.insert_source(source, move |_, _, data| {
-                        let dh = data.display_handle.clone();
-                        data.client_compositor_state(&client)
-                            .blocker_cleared(data, &dh);
-                        Ok(())
-                    });
-                    if res.is_ok() {
-                        add_blocker(surface, blocker);
-                    }
+            if let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ)
+                && let Some(client) = surface.client()
+            {
+                let res = state.loop_handle.insert_source(source, move |_, _, data| {
+                    let dh = data.display_handle.clone();
+                    data.client_compositor_state(&client)
+                        .blocker_cleared(data, &dh);
+                    Ok(())
+                });
+                if res.is_ok() {
+                    add_blocker(surface, blocker);
                 }
             }
         });
     }
 
     fn commit(&mut self, surface: &WlSurface) {
-        if let Some(udev) = self.udev.as_mut() {
-            if let Some(gpus) = udev.gpus.as_mut() {
-                if let Err(err) = gpus.early_import(udev.render_node, surface) {
-                    tracing::debug!(?err, "early client-buffer import failed");
-                }
-            }
+        if let Some(udev) = self.udev.as_mut()
+            && let Some(gpus) = udev.gpus.as_mut()
+            && let Err(err) = gpus.early_import(udev.render_node, surface)
+        {
+            tracing::debug!(?err, "early client-buffer import failed");
         }
         on_commit_buffer_handler::<MetisState>(surface);
         let mut committed_id = None;

@@ -8,9 +8,9 @@ use gtk::gdk;
 use gtk::prelude::*;
 
 use metis_config::{
-    load_keybinds_config, reserved_system_rows, save_keybinds_config, CapsLockBehavior, Chord,
-    ComposeKey, KeybindAction, KeybindGroup, KeybindsConfig, KeyboardConfig, ModKey,
-    NumLockStartup,
+    CapsLockBehavior, Chord, ComposeKey, KeybindAction, KeybindGroup, KeybindsConfig,
+    KeyboardConfig, ModKey, NumLockStartup, load_keybinds_config, reserved_system_rows,
+    save_keybinds_config,
 };
 
 use super::input_common::{self, persist};
@@ -478,15 +478,15 @@ fn editable_row(
                 status.set_visible(true);
                 return;
             }
-            if let Some(owner) = cfg.borrow().action_for_chord(&chord) {
-                if owner != action {
-                    status.set_text(&format!(
-                        "Already used by “{}”. Choose a different shortcut.",
-                        owner.label()
-                    ));
-                    status.set_visible(true);
-                    return;
-                }
+            if let Some(owner) = cfg.borrow().action_for_chord(&chord)
+                && owner != action
+            {
+                status.set_text(&format!(
+                    "Already used by “{}”. Choose a different shortcut.",
+                    owner.label()
+                ));
+                status.set_visible(true);
+                return;
             }
             {
                 let mut c = cfg.borrow_mut();

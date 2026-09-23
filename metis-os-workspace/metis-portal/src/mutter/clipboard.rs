@@ -304,15 +304,15 @@ impl ClipboardSession {
 }
 
 fn mime_types_from_options(options: &HashMap<&str, Value<'_>>) -> Vec<String> {
-    if let Some(raw) = options.get("mime-types") {
-        if let Some(list) = parse_string_array(raw) {
-            let filtered: Vec<String> = list
-                .into_iter()
-                .filter(|m| is_text_mime(m) || is_image_mime(m))
-                .collect();
-            if !filtered.is_empty() {
-                return filtered;
-            }
+    if let Some(raw) = options.get("mime-types")
+        && let Some(list) = parse_string_array(raw)
+    {
+        let filtered: Vec<String> = list
+            .into_iter()
+            .filter(|m| is_text_mime(m) || is_image_mime(m))
+            .collect();
+        if !filtered.is_empty() {
+            return filtered;
         }
     }
     // Fallback when GRD omits mime-types or sends an opaque variant.
@@ -327,10 +327,10 @@ fn mime_types_from_options(options: &HashMap<&str, Value<'_>>) -> Vec<String> {
 }
 
 fn parse_string_array(value: &Value<'_>) -> Option<Vec<String>> {
-    if let Ok(list) = <Vec<String>>::try_from(value.clone()) {
-        if !list.is_empty() {
-            return Some(list);
-        }
+    if let Ok(list) = <Vec<String>>::try_from(value.clone())
+        && !list.is_empty()
+    {
+        return Some(list);
     }
     match value {
         Value::Array(arr) => {
@@ -342,11 +342,7 @@ fn parse_string_array(value: &Value<'_>) -> Option<Vec<String>> {
                     out.push(s.to_string());
                 }
             }
-            if out.is_empty() {
-                None
-            } else {
-                Some(out)
-            }
+            if out.is_empty() { None } else { Some(out) }
         }
         Value::Str(s) => Some(vec![s.as_str().to_string()]),
         _ => None,
@@ -395,14 +391,14 @@ fn local_mimes(local: &LocalClip) -> Vec<String> {
 }
 
 fn local_clip_bytes(local: &LocalClip, mime_type: &str) -> Result<Vec<u8>, String> {
-    if is_text_mime(mime_type) {
-        if let Some(text) = &local.text {
-            let bytes = text.as_bytes();
-            if bytes.len() > MAX_CLIPBOARD_BYTES {
-                return Err("clipboard text too large".into());
-            }
-            return Ok(bytes.to_vec());
+    if is_text_mime(mime_type)
+        && let Some(text) = &local.text
+    {
+        let bytes = text.as_bytes();
+        if bytes.len() > MAX_CLIPBOARD_BYTES {
+            return Err("clipboard text too large".into());
         }
+        return Ok(bytes.to_vec());
     }
     if is_image_mime(mime_type) {
         let Some(path) = &local.image_path else {
@@ -660,7 +656,8 @@ mod tests {
     fn clipboard_image_path_allowlist_and_size_cap() {
         let _guard = env_lock();
         let xdg = temp_xdg_runtime();
-        std::env::set_var("XDG_RUNTIME_DIR", &xdg);
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &xdg) };
 
         let clip_dir = clipboard_image_dir().expect("clipboard dir");
         std::fs::create_dir_all(&clip_dir).expect("mkdir clipboard");
@@ -691,7 +688,8 @@ mod tests {
 
         assert!(write_remote_image("image/png", &vec![0u8; MAX_CLIPBOARD_BYTES + 1]).is_err());
 
-        std::env::remove_var("XDG_RUNTIME_DIR");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
         let _ = std::fs::remove_dir_all(&xdg);
     }
 }

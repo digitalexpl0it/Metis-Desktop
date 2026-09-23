@@ -165,10 +165,10 @@ impl PointerGrab<MetisState> for MoveSurfaceGrab {
                     // position so the client reports correct root coordinates
                     // (popup/menu placement). configure_notify for managed windows
                     // is ignored, so this can't loop.
-                    if let Some(x11) = self.window.x11_surface() {
-                        if let Some(loc) = data.space.element_location(&self.window) {
-                            let _ = x11.configure(Rectangle::new(loc, self.window.geometry().size));
-                        }
+                    if let Some(x11) = self.window.x11_surface()
+                        && let Some(loc) = data.space.element_location(&self.window)
+                    {
+                        let _ = x11.configure(Rectangle::new(loc, self.window.geometry().size));
                     }
                 }
             }

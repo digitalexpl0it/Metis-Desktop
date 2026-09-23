@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gtk::prelude::*;
-use metis_config::{remember_host, remove_recent, ViewerHost};
+use metis_config::{ViewerHost, remember_host, remove_recent};
 use metis_i18n::tr;
 
 #[derive(Debug, Clone, Default)]
@@ -227,10 +227,10 @@ fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
     user_entry.set_placeholder_text(Some(&tr("Username")));
     if let Some(u) = &prefill.user {
         user_entry.set_text(u);
-    } else if let Ok(u) = std::env::var("USER") {
-        if !u.is_empty() {
-            user_entry.set_text(&u);
-        }
+    } else if let Ok(u) = std::env::var("USER")
+        && !u.is_empty()
+    {
+        user_entry.set_text(&u);
     }
     card.append(&field_box(&tr("Username"), &user_entry));
 

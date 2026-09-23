@@ -171,12 +171,12 @@ fn sync_power_switch(sections: &Sections, adapter_powered: bool) {
         }
         return;
     }
-    if adapter_powered != switch_on {
-        if let Some(handler) = sections.power_handler.borrow().as_ref() {
-            sections.powered.block_signal(handler);
-            sections.powered.set_active(adapter_powered);
-            sections.powered.unblock_signal(handler);
-        }
+    if adapter_powered != switch_on
+        && let Some(handler) = sections.power_handler.borrow().as_ref()
+    {
+        sections.powered.block_signal(handler);
+        sections.powered.set_active(adapter_powered);
+        sections.powered.unblock_signal(handler);
     }
 }
 

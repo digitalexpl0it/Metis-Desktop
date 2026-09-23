@@ -3,9 +3,9 @@
 use std::time::{Duration, Instant};
 
 use wayland_client::{
-    globals::{registry_queue_init, GlobalListContents},
-    protocol::{wl_output::WlOutput, wl_registry::WlRegistry, wl_shm::Format, wl_shm::WlShm},
     Connection, Dispatch, QueueHandle, WEnum,
+    globals::{GlobalListContents, registry_queue_init},
+    protocol::{wl_output::WlOutput, wl_registry::WlRegistry, wl_shm::Format, wl_shm::WlShm},
 };
 use wayland_protocols::ext::{
     image_capture_source::v1::client::{
@@ -25,7 +25,7 @@ use wayland_protocols::wp::linux_dmabuf::zv1::client::{
 
 use metis_capture::dmabuf::{modifiers_from_array, parse_dev_t};
 use metis_capture::{
-    prefer_shm_format, BufferFormat, CaptureOptions, DmabufBuffer, DmabufOffer, Frame, ShmBuffer,
+    BufferFormat, CaptureOptions, DmabufBuffer, DmabufOffer, Frame, ShmBuffer, prefer_shm_format,
 };
 
 enum CaptureMode {
@@ -134,20 +134,22 @@ impl AppState {
         session.constraints.stride =
             effective_stride(session.constraints.width, session.constraints.stride);
 
-        if session.dmabuf.is_none() && !session.dmabuf_failed && session.dmabuf_offer.is_usable() {
-            if let Some(dmabuf_global) = self.dmabuf_global.as_ref() {
-                match DmabufBuffer::allocate(
-                    dmabuf_global,
-                    qh,
-                    &session.dmabuf_offer,
-                    session.constraints.width,
-                    session.constraints.height,
-                ) {
-                    Ok(buffer) => session.dmabuf = Some(buffer),
-                    Err(err) => {
-                        session.dmabuf_failed = true;
-                        tracing::warn!(%err, "dmabuf capture allocation failed; falling back to shm");
-                    }
+        if session.dmabuf.is_none()
+            && !session.dmabuf_failed
+            && session.dmabuf_offer.is_usable()
+            && let Some(dmabuf_global) = self.dmabuf_global.as_ref()
+        {
+            match DmabufBuffer::allocate(
+                dmabuf_global,
+                qh,
+                &session.dmabuf_offer,
+                session.constraints.width,
+                session.constraints.height,
+            ) {
+                Ok(buffer) => session.dmabuf = Some(buffer),
+                Err(err) => {
+                    session.dmabuf_failed = true;
+                    tracing::warn!(%err, "dmabuf capture allocation failed; falling back to shm");
                 }
             }
         }

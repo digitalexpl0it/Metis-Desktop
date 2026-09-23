@@ -7,7 +7,8 @@
 #   CARGO_TARGET_DIR — cargo target dir containing release/
 #
 # Optional:
-#   BUNDLE_GTK4_LAYER_SHELL=1  — copy libgtk4-layer-shell into STAGE (Ubuntu 24.04)
+#   BUNDLE_GTK4_LAYER_SHELL=1  — copy libgtk4-layer-shell into STAGE (only when the
+#                                build image lacks libgtk4-layer-shell-dev)
 #   PREFIX_LIBDIR=usr/lib/x86_64-linux-gnu  — library dir under STAGE (Debian/Ubuntu)
 #
 # Usage:
