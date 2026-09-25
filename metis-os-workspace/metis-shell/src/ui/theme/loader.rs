@@ -110,6 +110,7 @@ fn apply_tokens(tokens: &ThemeTokens) {
     crate::ui::dashboard::on_theme_changed();
     crate::ui::screenshot::on_theme_changed();
     crate::ui::notification_center::on_theme_changed();
+    crate::ui::updater::on_theme_changed();
 }
 
 /// Apply the edge bar's fill (theme / solid / gradient), opacity, and border.
@@ -329,20 +330,29 @@ pub fn reload_stylesheet() {
     apply_tokens(&tokens);
 }
 
+/// Seed `themes/dark.json` / `themes/light.json` only when missing.
+///
+/// Must not overwrite existing files — Settings Appearance edits (accent,
+/// semantic colours, font) live there and would be wiped on every login.
 pub fn export_embedded_themes_to_config() -> std::io::Result<()> {
     config::ensure_config_dirs()?;
-    write_theme_file(
-        &config::theme_file_path_for_name("dark"),
-        &ThemeTokens::dark_default(),
-    )?;
-    write_theme_file(
-        &config::theme_file_path_for_name("light"),
-        &ThemeTokens::light_default(),
-    )?;
+    let dark = config::theme_file_path_for_name("dark");
+    if !dark.exists() {
+        write_theme_file(&dark, &ThemeTokens::dark_default())?;
+    }
+    let light = config::theme_file_path_for_name("light");
+    if !light.exists() {
+        write_theme_file(&light, &ThemeTokens::light_default())?;
+    }
     Ok(())
 }
 
 fn write_theme_file(path: &std::path::Path, tokens: &ThemeTokens) -> std::io::Result<()> {
     let json = serde_json::to_string_pretty(tokens).map_err(std::io::Error::other)?;
-    std::fs::write(path, json)
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
+    Ok(())
 }

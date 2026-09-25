@@ -65,9 +65,18 @@ pub fn apt_install(packages: &[String]) -> Result<(), String> {
         }
     }
     let status = Command::new("apt-get")
-        .args(["install", "-y", "--"])
+        .args([
+            "-o",
+            "Dpkg::Options::=--force-confdef",
+            "-o",
+            "Dpkg::Options::=--force-confold",
+            "install",
+            "-y",
+            "--",
+        ])
         .args(packages)
         .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("UCF_FORCE_CONFFOLD", "1")
         .status()
         .map_err(|e| format!("apt-get failed: {e}"))?;
     if status.success() {

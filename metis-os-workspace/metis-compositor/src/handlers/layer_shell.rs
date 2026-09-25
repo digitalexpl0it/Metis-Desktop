@@ -131,6 +131,29 @@ pub fn handle_layer_commit(state: &mut MetisState, surface: &WlSurface) {
         return;
     }
 
+    // Polkit auth Overlay (Exclusive) — claim keyboard so the password entry
+    // receives keys without a click, even when an xdg updater sits underneath.
+    if namespace == "metis-polkit" {
+        map.arrange();
+        if !initial_configure_sent {
+            tracing::debug!(namespace, "layer surface initial configure");
+            layer_surface.send_configure();
+        }
+        drop(map);
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        if let Some(layer) = state.exclusive_keyboard_layer()
+            && let Some(keyboard) = state.seat.get_keyboard()
+        {
+            keyboard.set_focus(
+                state,
+                Some(crate::focus::KeyboardFocusTarget::from(layer)),
+                serial,
+            );
+        }
+        state.schedule_redraw();
+        return;
+    }
+
     map.arrange();
 
     if !initial_configure_sent {

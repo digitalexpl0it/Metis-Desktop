@@ -15,6 +15,7 @@ async-channel = "2"
 futures-util = "0.3"
 glib = "0.22"
 gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
+gtk4-layer-shell = "0.8"
 libc = "0.2"
 metis-config = { workspace = true }
 serde = { workspace = true }

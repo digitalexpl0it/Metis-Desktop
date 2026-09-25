@@ -32,12 +32,15 @@ pub use pkhelpers::{
 };
 pub use rustdesk::RustDeskStatus;
 pub use updates::{
-    UpdateItem, UpdateProgressEvent, UpdateSnapshot, UpdateSourceKind, UpdatesError,
-    apply as updates_apply, apply_as_root as updates_apply_as_root, apply_privileged,
-    check as updates_check, check_background as updates_check_background,
+    ConfFileChoice, UpdateApplyScope, UpdateItem, UpdateProgressEvent, UpdateSnapshot,
+    UpdateSourceKind, UpdatesError, apply as updates_apply, apply_as_root as updates_apply_as_root,
+    apply_privileged, apply_scope as updates_apply_scope, check as updates_check,
+    check_background as updates_check_background,
     check_background_from_config as updates_check_background_from_config,
-    check_from_config as updates_check_from_config, reboot_required, refresh as updates_refresh,
-    refresh_as_root as updates_refresh_as_root, refresh_privileged,
+    check_from_config as updates_check_from_config,
+    configure_pending_as_root as updates_configure_pending_as_root, reboot_required,
+    refresh as updates_refresh, refresh_as_root as updates_refresh_as_root, refresh_privileged,
+    resolve_conffile_conflict as updates_resolve_conffile_conflict,
 };
 
 use metis_config::{load_remote_config, save_remote_config};

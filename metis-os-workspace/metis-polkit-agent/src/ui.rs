@@ -1,14 +1,27 @@
-//! GTK4 authentication dialog.
+//! GTK4 authentication dialog — layer-shell Overlay so it always sits above
+//! xdg windows (updater, Settings, …) without them needing to hide.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use gtk::prelude::*;
+use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use crate::agent::UiResponse;
 
+/// Gap below the edge bar for the top-center auth card.
+const TOP_MARGIN: i32 = 56;
+/// Slide in/out duration (matches shell toasts).
+const SLIDE_MS: u32 = 280;
+
 thread_local! {
-    static OPEN: RefCell<HashMap<String, gtk::Window>> = RefCell::new(HashMap::new());
+    static OPEN: RefCell<HashMap<String, AuthSurface>> = RefCell::new(HashMap::new());
+}
+
+struct AuthSurface {
+    window: gtk::Window,
+    revealer: gtk::Revealer,
 }
 
 pub fn present_auth_dialog(
@@ -21,28 +34,35 @@ pub fn present_auth_dialog(
 ) {
     if OPEN.with(|m| m.borrow().contains_key(&cookie)) {
         OPEN.with(|m| {
-            if let Some(w) = m.borrow().get(&cookie) {
-                w.present();
+            if let Some(s) = m.borrow().get(&cookie) {
+                s.revealer.set_reveal_child(true);
+                s.window.present();
             }
         });
         return;
     }
 
-    // Metis draws the window titlebar; hide GTK CSD so we don't get a second
-    // header + close button stacked under the compositor chrome.
+    // Undecorated layer surface — Metis draws no SSD for Overlay namespaces.
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Authentication Required")
         .resizable(false)
-        .modal(true)
         .decorated(false)
         .default_width(420)
         .build();
     window.add_css_class("metis-polkit-window");
-    window.set_deletable(true);
+
+    window.init_layer_shell();
+    window.set_layer(Layer::Overlay);
+    window.set_keyboard_mode(KeyboardMode::Exclusive);
+    window.set_namespace(Some("metis-polkit"));
+    // Top-center: only Top anchored so the compositor centers horizontally.
+    window.set_anchor(Edge::Top, true);
+    window.set_margin(Edge::Top, TOP_MARGIN);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 14);
     root.add_css_class("metis-polkit-dialog");
+    root.set_width_request(420);
 
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let icon = gtk::Image::from_icon_name("dialog-password-symbolic");
@@ -115,7 +135,13 @@ pub fn present_auth_dialog(
     actions.append(&auth);
     root.append(&actions);
 
-    window.set_child(Some(&root));
+    let revealer = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .transition_duration(SLIDE_MS)
+        .reveal_child(false)
+        .child(&root)
+        .build();
+    window.set_child(Some(&revealer));
     window.set_default_widget(Some(&auth));
 
     {
@@ -191,20 +217,26 @@ pub fn present_auth_dialog(
                     })
                     .await;
             });
-            OPEN.with(|m| {
-                m.borrow_mut().remove(&cookie);
-            });
-            glib::Propagation::Proceed
+            // Slide up then destroy — don't Proceed destroy immediately.
+            dismiss_surface(&cookie);
+            glib::Propagation::Stop
         });
     }
 
+    let surface = AuthSurface {
+        window: window.clone().upcast(),
+        revealer: revealer.clone(),
+    };
     OPEN.with(|m| {
-        m.borrow_mut()
-            .insert(cookie.clone(), window.clone().upcast());
+        m.borrow_mut().insert(cookie.clone(), surface);
     });
 
     window.present();
-    password.grab_focus();
+    // Reveal after map so SlideDown animates from the top edge.
+    glib::idle_add_local_once(move || {
+        revealer.set_reveal_child(true);
+        password.grab_focus();
+    });
 }
 
 pub fn cancel_dialog(cookie: &str) {
@@ -212,23 +244,36 @@ pub fn cancel_dialog(cookie: &str) {
 }
 
 pub fn close_dialog(cookie: &str) {
-    OPEN.with(|m| {
-        if let Some(w) = m.borrow_mut().remove(cookie) {
-            w.destroy();
-        }
-    });
+    dismiss_surface(cookie);
+}
+
+fn dismiss_surface(cookie: &str) {
+    let surface = OPEN.with(|m| m.borrow_mut().remove(cookie));
+    let Some(surface) = surface else {
+        return;
+    };
+    if surface.revealer.reveals_child() {
+        surface.revealer.set_reveal_child(false);
+        let window = surface.window;
+        glib::timeout_add_local_once(Duration::from_millis(u64::from(SLIDE_MS)), move || {
+            window.destroy();
+        });
+    } else {
+        surface.window.destroy();
+    }
 }
 
 pub fn show_retry(cookie: &str, retry_message: Option<String>) {
     OPEN.with(|m| {
         let map = m.borrow();
-        let Some(win) = map.get(cookie) else {
+        let Some(surface) = map.get(cookie) else {
             return;
         };
-        if let Some(root) = win.child() {
+        if let Some(root) = surface.revealer.child() {
             restore_dialog_after_retry(&root, retry_message.as_deref());
         }
-        win.present();
+        surface.revealer.set_reveal_child(true);
+        surface.window.present();
     });
 }
 
@@ -250,11 +295,9 @@ fn restore_dialog_after_retry(widget: &gtk::Widget, message: Option<&str>) {
         entry.set_text("");
         entry.grab_focus();
     }
-    if let Some(bx) = widget.downcast_ref::<gtk::Box>() {
-        let mut child = bx.first_child();
-        while let Some(c) = child {
-            restore_dialog_after_retry(&c, message);
-            child = c.next_sibling();
-        }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        restore_dialog_after_retry(&c, message);
+        child = c.next_sibling();
     }
 }

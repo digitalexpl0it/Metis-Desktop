@@ -3,10 +3,11 @@
 //! Check/list run unprivileged. Refresh/apply for PackageKit fallbacks escalate via
 //! `pkexec metis-remote pk-updates-*`. Flatpak/fwupd use their own polkit when needed.
 
-use std::io::{BufRead, BufReader};
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::SyncSender;
+use std::thread;
 
 use serde::{Deserialize, Serialize};
 
@@ -76,12 +77,28 @@ pub enum UpdateProgressEvent {
     Phase {
         name: String,
     },
+    /// dpkg stopped on a modified `/etc` file — the updater should ask the user
+    /// Keep mine vs Use package version, then call [`resolve_conffile_conflict`].
+    ConffileConflict {
+        package: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_path: Option<String>,
+    },
     Finished {
         ok: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
         reboot_required: bool,
     },
+}
+
+/// How to finish a pending dpkg conffile prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfFileChoice {
+    /// Keep the locally modified file (`--force-confold`).
+    KeepLocal,
+    /// Install the package maintainer's file (`--force-confnew`).
+    UsePackage,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -567,11 +584,12 @@ fn emit(tx: &Option<SyncSender<UpdateProgressEvent>>, ev: UpdateProgressEvent) {
     let Some(tx) = tx else {
         return;
     };
-    // Never drop terminal / phase / percent events — only skip surplus logs.
+    // Never drop terminal / phase / percent / conffile events — only skip surplus logs.
     match &ev {
         UpdateProgressEvent::Finished { .. }
         | UpdateProgressEvent::Phase { .. }
-        | UpdateProgressEvent::Progress { .. } => {
+        | UpdateProgressEvent::Progress { .. }
+        | UpdateProgressEvent::ConffileConflict { .. } => {
             let _ = tx.send(ev);
         }
         UpdateProgressEvent::Log { .. } => {
@@ -623,33 +641,103 @@ pub fn refresh(
     Ok(())
 }
 
+/// Which updates to install. `All` covers every enabled source; `Selected`
+/// installs only the listed ids (empty list for a source skips that source).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum UpdateApplyScope {
+    #[default]
+    All,
+    Selected {
+        packages: Vec<String>,
+        flatpaks: Vec<String>,
+        firmware: Vec<String>,
+    },
+}
+
+impl UpdateApplyScope {
+    pub fn selected_count(&self) -> Option<usize> {
+        match self {
+            Self::All => None,
+            Self::Selected {
+                packages,
+                flatpaks,
+                firmware,
+            } => Some(packages.len() + flatpaks.len() + firmware.len()),
+        }
+    }
+
+    pub fn is_empty_selection(&self) -> bool {
+        matches!(self.selected_count(), Some(0))
+    }
+}
+
 /// Apply all enabled update sources. Streams progress events.
 pub fn apply(
     sources: &UpdateSources,
     progress: Option<SyncSender<UpdateProgressEvent>>,
 ) -> Result<(), UpdatesError> {
+    apply_scope(sources, &UpdateApplyScope::All, progress)
+}
+
+/// Apply a subset (or all) of pending updates. Streams progress events.
+pub fn apply_scope(
+    sources: &UpdateSources,
+    scope: &UpdateApplyScope,
+    progress: Option<SyncSender<UpdateProgressEvent>>,
+) -> Result<(), UpdatesError> {
     if package_manager_busy() {
         return Err(UpdatesError::Busy);
+    }
+    if scope.is_empty_selection() {
+        emit(
+            &progress,
+            UpdateProgressEvent::Finished {
+                ok: false,
+                error: Some("No updates selected".into()),
+                reboot_required: reboot_required(),
+            },
+        );
+        return Err(UpdatesError::Message("No updates selected".into()));
     }
 
     let mut ok = true;
     let mut last_err = None;
 
-    if sources.packagekit {
+    let (do_packages, package_ids) = match scope {
+        UpdateApplyScope::All => (sources.packagekit, None),
+        UpdateApplyScope::Selected { packages, .. } => (
+            sources.packagekit && !packages.is_empty(),
+            Some(packages.as_slice()),
+        ),
+    };
+    if do_packages {
         emit(
             &progress,
             UpdateProgressEvent::Phase {
-                name: "Installing system updates".into(),
+                name: if package_ids.is_some() {
+                    "Installing selected system updates".into()
+                } else {
+                    "Installing system updates".into()
+                },
             },
         );
         let r = if packagekit_available() {
             // Do not soft-refresh first — `pkcon refresh` can block for minutes
             // on D-Bus/network and freezes pointer motion session-wide. PackageKit
             // update already brings metadata as needed under one auth prompt.
-            run_streaming("pkcon", &["update", "--noninteractive", "-y"], &progress)
+            let mut args = vec![
+                "update".to_string(),
+                "--noninteractive".to_string(),
+                "-y".to_string(),
+            ];
+            if let Some(ids) = package_ids {
+                args.extend(ids.iter().cloned());
+            }
+            let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+            run_streaming("pkcon", &argv, &progress)
         } else {
             // Single elevation: refresh indexes + upgrade inside pk-updates-apply.
-            escalate_apply(&progress)
+            escalate_apply(package_ids.unwrap_or(&[]), &progress)
         };
         if let Err(e) = r {
             ok = false;
@@ -663,37 +751,94 @@ pub fn apply(
         }
     }
 
-    if sources.flatpak && command_exists("flatpak") {
+    let (do_flatpak, flatpak_ids) = match scope {
+        UpdateApplyScope::All => (sources.flatpak, None),
+        UpdateApplyScope::Selected { flatpaks, .. } => (
+            sources.flatpak && !flatpaks.is_empty(),
+            Some(flatpaks.as_slice()),
+        ),
+    };
+    if do_flatpak && command_exists("flatpak") {
         emit(
             &progress,
             UpdateProgressEvent::Phase {
-                name: "Updating Flatpak apps".into(),
+                name: if flatpak_ids.is_some() {
+                    "Updating selected Flatpak apps".into()
+                } else {
+                    "Updating Flatpak apps".into()
+                },
             },
         );
-        if let Err(e) = run_streaming("flatpak", &["update", "-y", "--noninteractive"], &progress) {
+        let mut args = vec![
+            "update".to_string(),
+            "-y".to_string(),
+            "--noninteractive".to_string(),
+        ];
+        if let Some(ids) = flatpak_ids {
+            args.extend(ids.iter().cloned());
+        }
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        if let Err(e) = run_streaming("flatpak", &argv, &progress) {
             ok = false;
             last_err = Some(e.to_string());
         }
     }
 
-    if sources.fwupd && command_exists("fwupdmgr") {
+    let (do_fwupd, firmware_ids) = match scope {
+        UpdateApplyScope::All => (sources.fwupd, None),
+        UpdateApplyScope::Selected { firmware, .. } => (
+            sources.fwupd && !firmware.is_empty(),
+            Some(firmware.as_slice()),
+        ),
+    };
+    if do_fwupd && command_exists("fwupdmgr") {
         emit(
             &progress,
             UpdateProgressEvent::Phase {
-                name: "Updating firmware".into(),
+                name: if firmware_ids.is_some() {
+                    "Updating selected firmware".into()
+                } else {
+                    "Updating firmware".into()
+                },
             },
         );
-        if let Err(e) = run_streaming(
+        let r = if let Some(ids) = firmware_ids {
+            let mut all_ok = true;
+            let mut err = None;
+            for id in ids {
+                let args = ["update", id.as_str(), "--assume-yes", "--no-reboot-check"];
+                if let Err(e) = run_streaming("fwupdmgr", &args, &progress) {
+                    let msg = e.to_string();
+                    if !msg.to_ascii_lowercase().contains("no updates") {
+                        all_ok = false;
+                        err = Some(msg);
+                    }
+                }
+            }
+            if all_ok {
+                Ok(())
+            } else {
+                Err(UpdatesError::Message(
+                    err.unwrap_or_else(|| "firmware update failed".into()),
+                ))
+            }
+        } else if let Err(e) = run_streaming(
             "fwupdmgr",
             &["update", "--assume-yes", "--no-reboot-check"],
             &progress,
         ) {
-            // No updates is not fatal.
             let msg = e.to_string();
-            if !msg.to_ascii_lowercase().contains("no updates") {
-                ok = false;
-                last_err = Some(msg);
+            if msg.to_ascii_lowercase().contains("no updates") {
+                Ok(())
+            } else {
+                Err(UpdatesError::Message(msg))
             }
+        } else {
+            Ok(())
+        };
+        if let Err(e) = r {
+            ok = false;
+            last_err = Some(e.to_string());
         }
     }
 
@@ -715,16 +860,30 @@ pub fn apply(
     }
 }
 
-fn escalate_apply(progress: &Option<SyncSender<UpdateProgressEvent>>) -> Result<(), UpdatesError> {
+fn escalate_apply(
+    packages: &[String],
+    progress: &Option<SyncSender<UpdateProgressEvent>>,
+) -> Result<(), UpdatesError> {
     emit(
         progress,
         UpdateProgressEvent::Log {
-            line: "Elevating to install system updates…".into(),
+            line: if packages.is_empty() {
+                "Elevating to install system updates…".into()
+            } else {
+                format!(
+                    "Elevating to install {} selected package(s)…",
+                    packages.len()
+                )
+            },
         },
     );
-    let output = run_pkexec(&["pk-updates-apply"], std::time::Duration::from_secs(3600))
-        .map_err(UpdatesError::Message)?;
+    let mut argv = vec!["pk-updates-apply".to_string()];
+    argv.extend(packages.iter().cloned());
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let output =
+        run_pkexec(&refs, std::time::Duration::from_secs(3600)).map_err(UpdatesError::Message)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     for line in stdout.lines() {
         emit(
             progress,
@@ -742,12 +901,21 @@ fn escalate_apply(progress: &Option<SyncSender<UpdateProgressEvent>>) -> Result<
             );
         }
     }
+    for line in stderr.lines() {
+        emit(
+            progress,
+            UpdateProgressEvent::Log {
+                line: format!("! {line}"),
+            },
+        );
+    }
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(UpdatesError::Message(if err.trim().is_empty() {
+        let combined = format!("{stdout}\n{stderr}");
+        emit_conffile_if_present(progress, &combined);
+        return Err(UpdatesError::Message(if stderr.trim().is_empty() {
             format!("apply exited {}", output.status)
         } else {
-            err.trim().to_string()
+            stderr.trim().to_string()
         }));
     }
     Ok(())
@@ -763,34 +931,59 @@ fn run_streaming(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Helps apt backends under PackageKit avoid interactive conffile
+        // prompts when the daemon inherits the client environment.
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("NEEDRESTART_MODE", "a")
+        .env("UCF_FORCE_CONFFOLD", "1")
         .spawn()
         .map_err(|e| UpdatesError::Message(format!("{bin}: {e}")))?;
 
+    // PackageKit / flatpak often write progress with CR updates or on stderr.
+    // Reading only newline-delimited stdout left the UI stuck at 0% until exit
+    // (and could deadlock if stderr filled while we blocked on stdout).
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let (line_tx, line_rx) = std::sync::mpsc::channel::<StreamLine>();
+
+    let t_out = stdout.map(|pipe| {
+        let tx = line_tx.clone();
+        thread::spawn(move || drain_progress_pipe(pipe, false, tx))
+    });
+    let t_err = stderr.map(|pipe| {
+        let tx = line_tx.clone();
+        thread::spawn(move || drain_progress_pipe(pipe, true, tx))
+    });
+    drop(line_tx);
+
     let mut log_budget = 0u32;
-    if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            if let Some(pct) = parse_percent_line(&line) {
-                emit(
-                    progress,
-                    UpdateProgressEvent::Progress {
-                        percent: pct,
-                        item: extract_item_name(&line),
-                    },
-                );
-            }
-            // Cap log spam — unbounded lines filled the GTK queue and made the
-            // pointer unusable while Install ran.
-            log_budget += 1;
-            if log_budget <= 40 || log_budget.is_multiple_of(25) {
-                emit(progress, UpdateProgressEvent::Log { line });
-            }
+    let mut err_budget = 0u32;
+    let mut transcript = String::new();
+    while let Ok(chunk) = line_rx.recv() {
+        let line = chunk.text;
+        if transcript.len() < 32_768 {
+            transcript.push_str(&line);
+            transcript.push('\n');
         }
-    }
-    if let Some(stderr) = child.stderr.take() {
-        let reader = BufReader::new(stderr);
-        let mut err_budget = 0u32;
-        for line in reader.lines().map_while(Result::ok) {
+        if let Some(pct) = parse_percent_line(&line) {
+            emit(
+                progress,
+                UpdateProgressEvent::Progress {
+                    percent: pct,
+                    item: extract_item_name(&line),
+                },
+            );
+        } else if let Some(name) = extract_item_name(&line) {
+            // Status line without a percent — still surfaces activity in the UI.
+            emit(
+                progress,
+                UpdateProgressEvent::Progress {
+                    percent: 0,
+                    item: Some(name),
+                },
+            );
+        }
+        if chunk.from_stderr {
             err_budget += 1;
             if err_budget <= 20 || err_budget.is_multiple_of(10) {
                 emit(
@@ -800,15 +993,72 @@ fn run_streaming(
                     },
                 );
             }
+        } else {
+            log_budget += 1;
+            if log_budget <= 40 || log_budget.is_multiple_of(25) {
+                emit(progress, UpdateProgressEvent::Log { line });
+            }
         }
     }
+
+    if let Some(t) = t_out {
+        let _ = t.join();
+    }
+    if let Some(t) = t_err {
+        let _ = t.join();
+    }
+
     let status = child
         .wait()
         .map_err(|e| UpdatesError::Message(format!("{bin} wait: {e}")))?;
     if status.success() {
         Ok(())
     } else {
+        emit_conffile_if_present(progress, &transcript);
         Err(UpdatesError::Message(format!("{bin} exited with {status}")))
+    }
+}
+
+struct StreamLine {
+    text: String,
+    from_stderr: bool,
+}
+
+/// Split on `\n` and `\r` so CR-style progress ("Downloading… 42%\r") is visible.
+fn drain_progress_pipe(pipe: impl Read, from_stderr: bool, tx: std::sync::mpsc::Sender<StreamLine>) {
+    let mut reader = pipe;
+    let mut buf = Vec::with_capacity(256);
+    loop {
+        buf.clear();
+        let mut byte = [0u8; 1];
+        loop {
+            match reader.read(&mut byte) {
+                Ok(0) => {
+                    if !buf.is_empty() {
+                        let text = String::from_utf8_lossy(&buf).trim().to_string();
+                        if !text.is_empty() {
+                            let _ = tx.send(StreamLine { text, from_stderr });
+                        }
+                    }
+                    return;
+                }
+                Ok(_) => {
+                    if byte[0] == b'\n' || byte[0] == b'\r' {
+                        break;
+                    }
+                    buf.push(byte[0]);
+                    // Cap runaway lines (ANSI / binary noise).
+                    if buf.len() >= 4096 {
+                        break;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+        let text = String::from_utf8_lossy(&buf).trim().to_string();
+        if !text.is_empty() {
+            let _ = tx.send(StreamLine { text, from_stderr });
+        }
     }
 }
 
@@ -865,22 +1115,50 @@ pub fn refresh_as_root() -> Result<(), String> {
 }
 
 /// Root: apply distro package upgrades (refresh indexes first).
-pub fn apply_as_root() -> Result<(), String> {
+///
+/// Empty `packages` upgrades everything available; otherwise only the named
+/// packages are upgraded (`apt-get install --only-upgrade`, `dnf upgrade`,
+/// `pacman -S`).
+///
+/// Conffile prompts are **not** auto-answered here — stdin is null under
+/// pkexec, so a conflict fails the transaction and the Metis updater asks
+/// Keep mine / Use package version, then calls [`configure_pending_as_root`].
+pub fn apply_as_root(packages: &[String]) -> Result<(), String> {
     require_root()?;
     // Fold refresh into apply so Install prompts once, not twice.
     let _ = refresh_as_root();
     let id = distro_id();
     let status = if id == "fedora" || id == "rhel" || id == "centos" || command_exists("dnf") {
-        Command::new("dnf").args(["-y", "upgrade"]).status()
+        let mut cmd = Command::new("dnf");
+        cmd.arg("-y").arg("upgrade");
+        for pkg in packages {
+            cmd.arg(pkg);
+        }
+        cmd.status()
     } else if id == "arch" || id == "manjaro" || command_exists("pacman") {
-        Command::new("pacman")
-            .args(["-Syu", "--noconfirm"])
-            .status()
+        if packages.is_empty() {
+            Command::new("pacman")
+                .args(["-Syu", "--noconfirm"])
+                .status()
+        } else {
+            let mut cmd = Command::new("pacman");
+            cmd.args(["-S", "--noconfirm", "--needed"]);
+            for pkg in packages {
+                cmd.arg(pkg);
+            }
+            cmd.status()
+        }
+    } else if packages.is_empty() {
+        apt_noninteractive(&["-y", "upgrade"], AptConfPolicy::Prompt)
     } else {
-        Command::new("apt-get")
-            .args(["-y", "upgrade"])
-            .env("DEBIAN_FRONTEND", "noninteractive")
-            .status()
+        let mut args = vec![
+            "-y".to_string(),
+            "--only-upgrade".to_string(),
+            "install".to_string(),
+        ];
+        args.extend(packages.iter().cloned());
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        apt_noninteractive(&refs, AptConfPolicy::Prompt)
     }
     .map_err(|e| e.to_string())?;
     if status.success() {
@@ -888,6 +1166,158 @@ pub fn apply_as_root() -> Result<(), String> {
     } else {
         Err(format!("apply exited {status}"))
     }
+}
+
+/// Finish packages left unconfigured after a conffile prompt (Keep / Use package).
+pub fn configure_pending_as_root(choice: ConfFileChoice) -> Result<(), String> {
+    require_root()?;
+    let force = match choice {
+        ConfFileChoice::KeepLocal => "--force-confold",
+        ConfFileChoice::UsePackage => "--force-confnew",
+    };
+    let status = Command::new("dpkg")
+        .args([force, "--configure", "-a"])
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("UCF_FORCE_CONFFOLD", "1")
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err(format!("dpkg --configure exited {status}"));
+    }
+    // Clear any dependency skew left by the interrupted transaction.
+    let policy = match choice {
+        ConfFileChoice::KeepLocal => AptConfPolicy::KeepLocal,
+        ConfFileChoice::UsePackage => AptConfPolicy::UsePackage,
+    };
+    let fix = apt_noninteractive(&["-y", "-f", "install"], policy).map_err(|e| e.to_string())?;
+    if fix.success() {
+        Ok(())
+    } else {
+        Err(format!("apt-get -f install exited {fix}"))
+    }
+}
+
+/// Unprivileged: elevate and finish a pending conffile conflict.
+pub fn resolve_conffile_conflict(choice: ConfFileChoice) -> Result<(), String> {
+    let mode = match choice {
+        ConfFileChoice::KeepLocal => "keep",
+        ConfFileChoice::UsePackage => "package",
+    };
+    let output = run_pkexec(
+        &["pk-updates-configure", mode],
+        std::time::Duration::from_secs(600),
+    )?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let err = String::from_utf8_lossy(&output.stderr);
+        Err(if err.trim().is_empty() {
+            format!("configure exited {}", output.status)
+        } else {
+            err.trim().to_string()
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AptConfPolicy {
+    /// Fail into a Metis dialog when a conffile conflicts (interactive updater).
+    Prompt,
+    KeepLocal,
+    UsePackage,
+}
+
+/// `apt-get` with debconf noninteractive. Force-conf* only when the user (or
+/// auto-apply) already chose Keep / Use package — never silently for Prompt.
+fn apt_noninteractive(
+    args: &[&str],
+    conf: AptConfPolicy,
+) -> std::io::Result<std::process::ExitStatus> {
+    let mut cmd = Command::new("apt-get");
+    match conf {
+        AptConfPolicy::Prompt => {}
+        AptConfPolicy::KeepLocal => {
+            cmd.args([
+                "-o",
+                "Dpkg::Options::=--force-confdef",
+                "-o",
+                "Dpkg::Options::=--force-confold",
+            ]);
+        }
+        AptConfPolicy::UsePackage => {
+            cmd.args([
+                "-o",
+                "Dpkg::Options::=--force-confdef",
+                "-o",
+                "Dpkg::Options::=--force-confnew",
+            ]);
+        }
+    }
+    cmd.args(args);
+    cmd.env("DEBIAN_FRONTEND", "noninteractive");
+    cmd.env("NEEDRESTART_MODE", "a");
+    if matches!(conf, AptConfPolicy::KeepLocal) {
+        cmd.env("UCF_FORCE_CONFFOLD", "1");
+    }
+    cmd.status()
+}
+
+fn emit_conffile_if_present(progress: &Option<SyncSender<UpdateProgressEvent>>, text: &str) {
+    if let Some((package, config_path)) = parse_conffile_conflict(text) {
+        emit(
+            progress,
+            UpdateProgressEvent::ConffileConflict {
+                package,
+                config_path,
+            },
+        );
+    }
+}
+
+fn is_conffile_prompt_error(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    t.contains("conffile prompt")
+        || t.contains("end of file on stdin at conffile")
+        || (t.contains("configuration file")
+            && t.contains("what would you like to do about it"))
+}
+
+fn parse_conffile_conflict(text: &str) -> Option<(String, Option<String>)> {
+    if !is_conffile_prompt_error(text) {
+        return None;
+    }
+    let mut config_path = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed
+            .strip_prefix("Configuration file ")
+            .or_else(|| trimmed.strip_prefix("configuration file "))
+        {
+            let path = rest
+                .trim()
+                .trim_matches(|c| c == '«' || c == '»' || c == '\'' || c == '"')
+                .trim();
+            if path.starts_with('/') {
+                config_path = Some(path.to_string());
+            }
+        }
+    }
+    let mut package = None;
+    for line in text.lines() {
+        // May be glued onto the prompt line: "… [default=N] ? dpkg: error processing package foo (--configure):"
+        if let Some(idx) = line.find("dpkg: error processing package ") {
+            let rest = &line[idx + "dpkg: error processing package ".len()..];
+            let name = rest.split_whitespace().next().unwrap_or("").trim();
+            if !name.is_empty() {
+                package = Some(name.to_string());
+                break;
+            }
+        }
+    }
+    Some((
+        package.unwrap_or_else(|| "system package".into()),
+        config_path,
+    ))
 }
 
 /// Unprivileged wrappers that escalate for distro fallback refresh/apply.
@@ -900,8 +1330,11 @@ pub fn refresh_privileged() -> Result<(), String> {
     }
 }
 
-pub fn apply_privileged() -> Result<(), String> {
-    let output = run_pkexec(&["pk-updates-apply"], std::time::Duration::from_secs(3600))?;
+pub fn apply_privileged(packages: &[String]) -> Result<(), String> {
+    let mut argv = vec!["pk-updates-apply".to_string()];
+    argv.extend(packages.iter().cloned());
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let output = run_pkexec(&refs, std::time::Duration::from_secs(3600))?;
     if output.status.success() {
         Ok(())
     } else {
@@ -923,5 +1356,25 @@ mod tests {
     #[test]
     fn parse_percent() {
         assert_eq!(parse_percent_line("Downloading foo 42%"), Some(42));
+        assert_eq!(parse_percent_line("Percentage:	87%"), Some(87));
+        assert_eq!(parse_percent_line("Downloading foo 42%\r"), Some(42));
+    }
+
+    #[test]
+    fn parse_conffile_from_apt_log() {
+        let log = r#"
+Configuration file «/etc/apparmor.d/abstractions/libvirt-qemu»
+ ==> Modified (by you or by a script) since installation.
+ ==> Package distributor has shipped an updated version.
+   What would you like to do about it ?
+*** libvirt-qemu (Y/I/N/O/D/Z) [default=N] ? dpkg: error processing package libvirt-daemon-driver-qemu (--configure):
+ end of file on stdin at conffile prompt
+"#;
+        let (pkg, path) = parse_conffile_conflict(log).expect("detect");
+        assert_eq!(pkg, "libvirt-daemon-driver-qemu");
+        assert_eq!(
+            path.as_deref(),
+            Some("/etc/apparmor.d/abstractions/libvirt-qemu")
+        );
     }
 }

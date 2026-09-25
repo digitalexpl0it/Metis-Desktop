@@ -2363,6 +2363,7 @@ dependencies = [
  "futures-util",
  "glib",
  "gtk4",
+ "gtk4-layer-shell",
  "libc",
  "metis-config",
  "serde",

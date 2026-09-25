@@ -121,6 +121,18 @@
     <annotate key="org.freedesktop.policykit.exec.argv1">pk-updates-apply</annotate>
   </action>
 
+  <action id="org.metis.software.updates-configure">
+    <description>Finish Metis package configuration after a config-file conflict</description>
+    <message>Authentication is required to finish installing system software updates</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/metis-remote</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">pk-updates-configure</annotate>
+  </action>
+
   <action id="org.metis.accounts.list">
     <description>List local Metis user accounts</description>
     <message>Authentication is required to list user accounts</message>

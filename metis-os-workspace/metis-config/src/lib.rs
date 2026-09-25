@@ -393,8 +393,15 @@ pub fn mark_gaming_setup_complete() -> std::io::Result<()> {
 /// Appearance page). The shell's file watcher re-applies it live.
 pub fn save_theme_tokens(name: &str, tokens: &theme::ThemeTokens) -> std::io::Result<()> {
     ensure_config_dirs()?;
+    let path = theme_file_path_for_name(name);
     let json = serde_json::to_string_pretty(tokens).map_err(std::io::Error::other)?;
-    std::fs::write(theme_file_path_for_name(name), json)
+    // Atomic replace — same pattern as save_app_config — so a crash mid-write
+    // cannot leave a corrupt theme that falls back to stock accents.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &json)?;
+    std::fs::rename(&tmp, &path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// Load a theme token set from `themes/<name>.json`, falling back to the embedded

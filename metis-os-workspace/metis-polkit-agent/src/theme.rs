@@ -51,7 +51,6 @@ fn active_tokens() -> ThemeTokens {
 }
 
 fn stylesheet(tokens: &ThemeTokens) -> String {
-    let bg = &tokens.bg;
     let surface = &tokens.surface;
     let text = &tokens.text;
     let muted = &tokens.text_muted;
@@ -61,14 +60,16 @@ fn stylesheet(tokens: &ThemeTokens) -> String {
     format!(
         r#"
         window.metis-polkit-window {{
-            background-color: {bg};
+            background-color: transparent;
             color: {text};
         }}
         .metis-polkit-dialog {{
             background-color: {surface};
             border-radius: 12px;
-            margin: 16px;
+            margin: 8px 16px 16px 16px;
             padding: 20px;
+            border: 1px solid color-mix(in srgb, {text} 12%, transparent);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
         }}
         .metis-polkit-title {{
             font-weight: 600;

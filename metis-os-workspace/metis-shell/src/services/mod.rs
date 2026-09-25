@@ -61,10 +61,11 @@ pub use updates::{
     is_visible as updates_is_visible, pending_count as updates_pending_count,
     register_refresh as register_updates_refresh,
     register_updater_refresh as register_updates_updater_refresh,
-    request_check as updates_request_check, snapshot as updates_snapshot,
+    request_check as updates_request_check,
+    resolve_conffile as updates_resolve_conffile, snapshot as updates_snapshot,
     snooze_hours as updates_snooze_hours, snooze_one_day as updates_snooze_one_day,
     snooze_tonight as updates_snooze_tonight, spawn_updates_service,
-    start_apply as updates_start_apply,
+    start_apply_scope as updates_start_apply_scope,
 };
 pub use volumes::{
     VolumeEntry, VolumeKind, activate as volumes_activate, eject as volumes_eject,

@@ -14,8 +14,9 @@ use std::time::{Duration, Instant};
 use gtk::glib;
 use metis_config::{UpdatesConfig, load_updates_config, save_updates_config};
 use metis_remote::{
-    UpdateProgressEvent, UpdateSnapshot, updates_apply, updates_check_background_from_config,
-    updates_check_from_config,
+    ConfFileChoice, UpdateApplyScope, UpdateProgressEvent, UpdateSnapshot, updates_apply_scope,
+    updates_check_background_from_config, updates_check_from_config,
+    updates_resolve_conffile_conflict,
 };
 
 thread_local! {
@@ -353,16 +354,22 @@ fn schedule_snooze_expiry_refresh(cfg: &UpdatesConfig) {
     glib::timeout_add_seconds_local_once(secs, fire_refresh);
 }
 
-/// Run apply on a background thread; progress events arrive on `on_event` (GTK thread).
-pub fn start_apply(on_event: std::rc::Rc<dyn Fn(UpdateProgressEvent)>) {
+/// Apply pending updates (`scope` chooses all vs a subset).
+pub fn start_apply_scope(
+    scope: UpdateApplyScope,
+    on_event: std::rc::Rc<dyn Fn(UpdateProgressEvent)>,
+) {
     let cfg = load_updates_config();
     let sources = cfg.sources.clone();
     let (tx, rx) = mpsc::sync_channel::<UpdateProgressEvent>(64);
+    let clear_all = matches!(scope, UpdateApplyScope::All);
     std::thread::spawn(move || {
-        let _ = updates_apply(&sources, Some(tx));
+        let _ = updates_apply_scope(&sources, &scope, Some(tx));
     });
-    const MAX_PER_TICK: usize = 8;
-    glib::timeout_add_local(Duration::from_millis(200), move || {
+    // Drain apply events promptly — a 64-deep channel + slow UI ticks made
+    // large PackageKit runs look frozen even when progress was flowing.
+    const MAX_PER_TICK: usize = 32;
+    glib::timeout_add_local(Duration::from_millis(50), move || {
         let mut processed = 0;
         loop {
             if processed >= MAX_PER_TICK {
@@ -372,7 +379,7 @@ pub fn start_apply(on_event: std::rc::Rc<dyn Fn(UpdateProgressEvent)>) {
                 Ok(ev) => {
                     processed += 1;
                     let done = matches!(ev, UpdateProgressEvent::Finished { .. });
-                    if matches!(ev, UpdateProgressEvent::Finished { ok: true, .. }) {
+                    if matches!(ev, UpdateProgressEvent::Finished { ok: true, .. }) && clear_all {
                         // Apply covered every enabled source; the soft re-check
                         // below cannot see Flatpak / fwupd, so clear them here.
                         SNAPSHOT.with(|s| {
@@ -394,6 +401,28 @@ pub fn start_apply(on_event: std::rc::Rc<dyn Fn(UpdateProgressEvent)>) {
                     return glib::ControlFlow::Break;
                 }
             }
+        }
+    });
+}
+
+/// Finish a pending dpkg conffile conflict (`keep` / `package`) via pkexec.
+pub fn resolve_conffile(
+    choice: ConfFileChoice,
+    on_done: std::rc::Rc<dyn Fn(Result<(), String>)>,
+) {
+    let (tx, rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    std::thread::spawn(move || {
+        let _ = tx.send(updates_resolve_conffile_conflict(choice));
+    });
+    glib::timeout_add_local(Duration::from_millis(100), move || match rx.try_recv() {
+        Ok(result) => {
+            on_done(result);
+            glib::ControlFlow::Break
+        }
+        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(mpsc::TryRecvError::Disconnected) => {
+            on_done(Err("configure cancelled".into()));
+            glib::ControlFlow::Break
         }
     });
 }
