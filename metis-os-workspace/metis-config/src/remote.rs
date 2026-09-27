@@ -5,13 +5,16 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Remote desktop backend. Default remains GNOME RDP (GRD); RustDesk is optional.
+/// Remote desktop backend. Default remains GNOME RDP (GRD).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteBackend {
     #[default]
     GnomeRdp,
     RustDesk,
+    /// Experimental FreeRDP shadow server (`freerdp-shadow-cli`), RDP-compatible
+    /// with Metis Viewer. GRD stays the supported default until this is GA.
+    MetisNative,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

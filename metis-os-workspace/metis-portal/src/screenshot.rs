@@ -69,12 +69,20 @@ impl ScreenshotImpl for MetisScreenshot {
         let _guard = ScreenshotGuard;
 
         tracing::info!(?app_id, "portal screenshot request");
+        let app_label = crate::consent::display_app_label(app_id.as_ref());
+        if !crate::consent::request_capture_consent(
+            crate::consent::CaptureKind::Screenshot,
+            &app_label,
+        )
+        .await
+        {
+            return Err(PortalError::Cancelled("Screenshot declined by user".into()));
+        }
         let portal_app = compositor_ipc::portal_app_id(app_id);
         if let Err(message) = compositor_ipc::begin_capture_overlay(portal_app.clone()) {
+            // Fail closed — never return a capture after compositor refusal.
             tracing::warn!(%message, "BeginCaptureOverlay rejected");
-            if message.contains("session is locked") {
-                return Err(PortalError::Failed(message));
-            }
+            return Err(PortalError::Failed(message));
         }
         let result = self.capture.screenshot_png().await;
         if result.is_err() {

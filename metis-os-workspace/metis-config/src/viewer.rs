@@ -1,4 +1,4 @@
-//! RDP viewer recent hosts — `~/.config/metis/viewer.json`.
+//! RDP viewer recent / saved hosts — `~/.config/metis/viewer.json`.
 //!
 //! Passwords are never stored here.
 
@@ -13,6 +13,9 @@ pub struct ViewerHost {
     pub port: u16,
     #[serde(default)]
     pub username: String,
+    /// Optional display name shown on saved-host cards.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
 }
 
 fn default_port() -> u16 {
@@ -48,13 +51,26 @@ pub fn save_viewer_config(cfg: &ViewerConfig) -> std::io::Result<()> {
     std::fs::write(viewer_config_path(), json)
 }
 
+fn same_endpoint(a: &ViewerHost, b: &ViewerHost) -> bool {
+    a.host == b.host && a.port == b.port && a.username == b.username
+}
+
 /// Push `entry` to the front of recent hosts (dedupe by host+port+user).
+/// Preserves an existing label when the new entry's label is empty.
 pub fn remember_host(entry: ViewerHost) -> std::io::Result<()> {
     let mut cfg = load_viewer_config();
-    cfg.recent.retain(|h| {
-        !(h.host == entry.host && h.port == entry.port && h.username == entry.username)
-    });
-    cfg.recent.insert(0, entry);
+    let prior_label = cfg
+        .recent
+        .iter()
+        .find(|h| same_endpoint(h, &entry))
+        .map(|h| h.label.clone())
+        .unwrap_or_default();
+    cfg.recent.retain(|h| !same_endpoint(h, &entry));
+    let mut stored = entry;
+    if stored.label.is_empty() {
+        stored.label = prior_label;
+    }
+    cfg.recent.insert(0, stored);
     if cfg.recent.len() > MAX_RECENT {
         cfg.recent.truncate(MAX_RECENT);
     }
@@ -65,9 +81,7 @@ pub fn remember_host(entry: ViewerHost) -> std::io::Result<()> {
 pub fn remove_recent(entry: &ViewerHost) -> std::io::Result<()> {
     let mut cfg = load_viewer_config();
     let before = cfg.recent.len();
-    cfg.recent.retain(|h| {
-        !(h.host == entry.host && h.port == entry.port && h.username == entry.username)
-    });
+    cfg.recent.retain(|h| !same_endpoint(h, entry));
     if cfg.recent.len() == before {
         return Ok(());
     }
@@ -96,11 +110,23 @@ mod tests {
             host: "192.168.1.10".into(),
             port: 3389,
             username: "alice".into(),
+            label: "Home PC".into(),
         };
         remember_host(entry.clone()).unwrap();
         let cfg = load_viewer_config();
         assert_eq!(cfg.recent.len(), 1);
         assert_eq!(cfg.recent[0], entry);
+
+        // Re-remember without label keeps prior label.
+        remember_host(ViewerHost {
+            host: "192.168.1.10".into(),
+            port: 3389,
+            username: "alice".into(),
+            label: String::new(),
+        })
+        .unwrap();
+        let cfg = load_viewer_config();
+        assert_eq!(cfg.recent[0].label, "Home PC");
 
         remove_recent(&entry).unwrap();
         let cfg = load_viewer_config();

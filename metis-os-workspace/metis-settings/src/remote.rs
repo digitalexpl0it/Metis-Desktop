@@ -435,6 +435,48 @@ pub fn rustdesk_disable(kill: bool) -> Result<(), String> {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct NativeBackendSnapshot {
+    #[serde(default)]
+    pub installed: bool,
+    #[serde(default)]
+    pub binary: Option<String>,
+    #[serde(default)]
+    pub running: bool,
+    #[serde(default)]
+    pub backend_selected: bool,
+    #[serde(default)]
+    pub config_enabled: bool,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub install_hint: String,
+    pub error: Option<String>,
+}
+
+pub fn native_backend_status() -> Option<NativeBackendSnapshot> {
+    match run_remote(&["native", "status"]) {
+        Ok(json) => {
+            let trimmed = json.trim();
+            let payload = trimmed.find('{').map(|i| &trimmed[i..]).unwrap_or(trimmed);
+            serde_json::from_str(payload).ok()
+        }
+        Err(_) => None,
+    }
+}
+
+pub fn native_enable() -> Result<(), String> {
+    run_remote(&["native", "enable"]).map(|_| ())
+}
+
+pub fn native_disable() -> Result<(), String> {
+    run_remote(&["native", "disable"]).map(|_| ())
+}
+
+pub fn native_install_hint() -> &'static str {
+    "sudo apt install freerdp-shadow-x11"
+}
+
 /// Desktop notification for sharing state changes.
 ///
 /// Uses `notify-send` so Metis's `org.freedesktop.Notifications` daemon (Notification

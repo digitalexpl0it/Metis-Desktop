@@ -7,11 +7,12 @@ use metis_remote::{
     autostart_from_config, datetime_status_as_root, disable, enable, firewall_apply,
     firewall_apply_as_root, firewall_clear, firewall_clear_as_root, firewall_rustdesk_apply,
     firewall_rustdesk_apply_as_root, firewall_rustdesk_clear, firewall_rustdesk_clear_as_root,
-    firewall_rustdesk_status, firewall_status, pause, privileged_exe, remove_user_as_root, resume,
-    rustdesk_disable, rustdesk_enable, rustdesk_status, set_account_password_as_root,
-    set_admin_as_root, set_display_name_as_root, set_lan_only, set_ntp_as_root, set_password,
-    set_time_as_root, set_timezone_as_root, set_user_icon_as_root, status, ubuntu_drivers_install,
-    updates_apply_as_root, updates_configure_pending_as_root, updates_refresh_as_root,
+    firewall_rustdesk_status, firewall_status, native_disable, native_enable, native_status, pause,
+    privileged_exe, remove_user_as_root, resume, rustdesk_disable, rustdesk_enable,
+    rustdesk_status, set_account_password_as_root, set_admin_as_root, set_display_name_as_root,
+    set_lan_only, set_ntp_as_root, set_password, set_time_as_root, set_timezone_as_root,
+    set_user_icon_as_root, status, ubuntu_drivers_install, updates_apply_as_root,
+    updates_configure_pending_as_root, updates_refresh_as_root,
 };
 use zeroize::Zeroize;
 
@@ -150,6 +151,22 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 rustdesk_disable(kill)
             }
             _ => Err(String::from("usage: metis-remote rustdesk {status|enable|disable [--kill]}")),
+        },
+        Some("native") => match args.get(1).map(String::as_str) {
+            Some("status") => {
+                let snap = native_status();
+                let json = serde_json::to_string_pretty(&snap).map_err(|e| e.to_string())?;
+                println!("{json}");
+                Ok(())
+            }
+            Some("enable") => native_enable(),
+            Some("disable") => {
+                let kill = args.get(2).map(String::as_str) != Some("--keep-process");
+                native_disable(kill)
+            }
+            _ => Err(String::from(
+                "usage: metis-remote native {status|enable|disable [--keep-process]}",
+            )),
         },
         Some("pk-apt-install") => {
             let pkgs: Vec<String> = args.into_iter().skip(1).collect();
@@ -351,6 +368,9 @@ fn print_help() {
   rustdesk status     Print RustDesk install/running JSON
   rustdesk enable     Start RustDesk + optional LAN firewall (GRD stays default host)
   rustdesk disable    Clear RustDesk backend preference ([--kill] stops process)
+  native status       Print Metis-native FreeRDP shadow status JSON
+  native enable       Start freerdp-shadow-cli (experimental; GRD remains default)
+  native disable      Stop shadow + restore GNOME RDP backend ([--keep-process])
   pk-apt-install …    Polkit: install allowlisted apt packages
   pk-ubuntu-drivers-install  Polkit: ubuntu-drivers install (NVIDIA consent path)
   pk-updates-refresh / apply / configure  Polkit: refresh / upgrade / finish conffile prompts

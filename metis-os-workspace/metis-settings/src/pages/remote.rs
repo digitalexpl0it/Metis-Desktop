@@ -187,6 +187,38 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     sec_body.append(&hint_label);
     content.append(&sec_card);
 
+    // Experimental Metis-native FreeRDP shadow host (RDP-compatible with Metis Viewer).
+    let (native_card, native_body) = ui::section(&tr("Metis native (experimental)"));
+    let native_status = gtk::Label::new(None);
+    native_status.set_xalign(0.0);
+    native_status.add_css_class("metis-settings-value");
+    native_body.append(&readout_row(&tr("Status"), &native_status));
+    let native_hint = gtk::Label::new(Some(&tr(
+        "Starts FreeRDP’s shadow server (freerdp-shadow-cli) so Metis Viewer can \
+         connect over RDP without gnome-remote-desktop. Experimental: packaged \
+         shadow is X11-oriented and may not capture a pure Wayland Metis session. \
+         GNOME Remote Desktop remains the supported default.",
+    )));
+    native_hint.set_xalign(0.0);
+    native_hint.set_wrap(true);
+    native_hint.add_css_class("metis-settings-hint");
+    native_hint.set_margin_top(4);
+    native_body.append(&native_hint);
+    let native_enable_btn = gtk::Button::with_label(&tr("Enable Metis native host"));
+    native_enable_btn.set_halign(gtk::Align::Start);
+    native_enable_btn.add_css_class("suggested-action");
+    let native_disable_btn = gtk::Button::with_label(&tr("Disable Metis native host"));
+    native_disable_btn.set_halign(gtk::Align::Start);
+    let native_copy_btn = gtk::Button::with_label(&tr("Copy install command"));
+    native_copy_btn.set_halign(gtk::Align::Start);
+    let native_actions = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    native_actions.add_css_class("metis-settings-actions");
+    native_actions.append(&native_enable_btn);
+    native_actions.append(&native_disable_btn);
+    native_actions.append(&native_copy_btn);
+    native_body.append(&native_actions);
+    content.append(&native_card);
+
     // RustDesk third-party preset (detect / open / notes — not metis-remote).
     let (rd_card, rd_body) = ui::section(&tr("RustDesk (third-party)"));
     let rd_status = gtk::Label::new(None);
@@ -606,6 +638,99 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
                     sections_viewer.error_label.set_visible(true);
                 }
             }
+        });
+    }
+
+    let refresh_native = {
+        let native_status = native_status.clone();
+        let native_enable_btn = native_enable_btn.clone();
+        Rc::new(move || {
+            let snap = remote::native_backend_status();
+            let label = match &snap {
+                Some(s) if s.backend_selected && s.running => {
+                    tr("FreeRDP shadow running — Metis native backend active").to_string()
+                }
+                Some(s) if s.backend_selected && s.installed => {
+                    tr("Metis native backend selected (not running)").to_string()
+                }
+                Some(s) if s.installed => {
+                    format!(
+                        "{} ({})",
+                        tr("FreeRDP shadow installed"),
+                        s.binary.as_deref().unwrap_or("freerdp-shadow-cli")
+                    )
+                }
+                Some(s) => s
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| tr("FreeRDP shadow not installed").to_string()),
+                None => tr("Could not query Metis native status").to_string(),
+            };
+            native_status.set_text(&label);
+            let installed = snap.as_ref().is_some_and(|s| s.installed);
+            native_enable_btn.set_sensitive(installed);
+            if !installed {
+                native_enable_btn.set_tooltip_text(Some(&tr(
+                    "Install freerdp-shadow-x11 first (Copy install command).",
+                )));
+            } else {
+                native_enable_btn.set_tooltip_text(None);
+            }
+        })
+    };
+    refresh_native();
+
+    {
+        let sections_n = sections.clone();
+        let refresh_native = refresh_native.clone();
+        native_enable_btn.connect_clicked(move |_| match remote::native_enable() {
+            Ok(()) => {
+                sections_n.hint_label.set_text(&tr(
+                    "Metis native FreeRDP host enabled (experimental). Connect with Metis Viewer.",
+                ));
+                refresh_native();
+            }
+            Err(err) => {
+                *sections_n.action_error.borrow_mut() = Some(err.clone());
+                sections_n.error_label.set_text(&err);
+                sections_n.error_label.set_visible(true);
+            }
+        });
+    }
+    {
+        let sections_n = sections.clone();
+        let refresh_native = refresh_native.clone();
+        native_disable_btn.connect_clicked(move |_| match remote::native_disable() {
+            Ok(()) => {
+                sections_n.hint_label.set_text(&tr(
+                    "Metis native host stopped; GNOME RDP is the preferred backend again.",
+                ));
+                refresh_native();
+            }
+            Err(err) => {
+                *sections_n.action_error.borrow_mut() = Some(err.clone());
+                sections_n.error_label.set_text(&err);
+                sections_n.error_label.set_visible(true);
+            }
+        });
+    }
+    {
+        let sections_n = sections.clone();
+        native_copy_btn.connect_clicked(move |_| {
+            let text = remote::native_install_hint();
+            if let Some(display) = gtk::gdk::Display::default() {
+                display.clipboard().set_text(text);
+            }
+            sections_n
+                .hint_label
+                .set_text(&tr("Copied FreeRDP shadow install command."));
+        });
+    }
+    {
+        let refresh_native = refresh_native.clone();
+        glib::timeout_add_local(Duration::from_secs(5), move || {
+            refresh_native();
+            glib::ControlFlow::Continue
         });
     }
 

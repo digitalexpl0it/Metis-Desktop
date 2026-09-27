@@ -1,4 +1,4 @@
-//! Metis Viewer — GTK4 RDP connect UI over FreeRDP (host remains GRD).
+//! Metis Viewer — GTK4 RDP connect UI over FreeRDP (host: GRD or Metis native).
 
 mod freerdp;
 mod theme;
@@ -124,8 +124,8 @@ fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title(tr("Metis Viewer"))
-        .default_width(440)
-        .default_height(560)
+        .default_width(560)
+        .default_height(620)
         .resizable(true)
         .decorated(!under_metis)
         .build();
@@ -234,6 +234,11 @@ fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
     }
     card.append(&field_box(&tr("Username"), &user_entry));
 
+    let label_entry = gtk::Entry::new();
+    label_entry.set_placeholder_text(Some(&tr("Optional display name")));
+    label_entry.set_hexpand(true);
+    card.append(&field_box(&tr("Label"), &label_entry));
+
     let pass_entry = gtk::PasswordEntry::new();
     pass_entry.set_show_peek_icon(true);
     pass_entry.set_placeholder_text(Some(&tr("Optional")));
@@ -267,39 +272,72 @@ fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.add_css_class("metis-viewer-actions");
     actions.set_halign(gtk::Align::End);
+    let save_btn = gtk::Button::with_label(&tr("Save"));
+    save_btn.add_css_class("metis-viewer-secondary");
+    save_btn.set_tooltip_text(Some(&tr(
+        "Save host, port, username, and label to the grid (passwords are never saved).",
+    )));
     let connect_btn = gtk::Button::with_label(&tr("Connect"));
     connect_btn.add_css_class("suggested-action");
     connect_btn.set_sensitive(freerdp.is_some());
     if freerdp.is_none() {
         connect_btn.set_tooltip_text(Some(&tr("Install FreeRDP to enable Connect")));
     }
+    actions.append(&save_btn);
     actions.append(&connect_btn);
     page.append(&actions);
 
-    let recent_header = gtk::Label::new(Some(&tr("Recent")));
-    recent_header.set_xalign(0.0);
-    recent_header.add_css_class("metis-viewer-card-title");
-    recent_header.set_margin_top(4);
-    page.append(&recent_header);
+    let hosts_header = gtk::Label::new(Some(&tr("Saved hosts")));
+    hosts_header.set_xalign(0.0);
+    hosts_header.add_css_class("metis-viewer-card-title");
+    hosts_header.add_css_class("metis-viewer-hosts-title");
+    page.append(&hosts_header);
 
-    let recent_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    recent_box.add_css_class("metis-viewer-recent");
-    recent_box.set_visible(false);
-    let recent_list = gtk::ListBox::new();
-    recent_list.set_selection_mode(gtk::SelectionMode::None);
-    recent_list.set_show_separators(false);
-    recent_box.append(&recent_list);
-    page.append(&recent_box);
+    let hosts_grid = gtk::FlowBox::new();
+    hosts_grid.add_css_class("metis-viewer-hosts-grid");
+    hosts_grid.set_selection_mode(gtk::SelectionMode::None);
+    hosts_grid.set_homogeneous(true);
+    hosts_grid.set_column_spacing(10);
+    hosts_grid.set_row_spacing(10);
+    hosts_grid.set_max_children_per_line(2);
+    hosts_grid.set_min_children_per_line(1);
+    hosts_grid.set_hexpand(true);
+    hosts_grid.set_visible(false);
+    page.append(&hosts_grid);
 
-    let recent_empty = gtk::Label::new(Some(&tr("No recent hosts yet.")));
-    recent_empty.set_xalign(0.0);
-    recent_empty.add_css_class("metis-viewer-empty");
-    page.append(&recent_empty);
+    let hosts_empty = gtk::Label::new(Some(&tr(
+        "No saved hosts yet — connect or Save to add one.",
+    )));
+    hosts_empty.set_xalign(0.0);
+    hosts_empty.add_css_class("metis-viewer-empty");
+    page.append(&hosts_empty);
 
     let connect_busy = Rc::new(RefCell::new(false));
     let watched_child: Rc<RefCell<Option<Child>>> = Rc::new(RefCell::new(None));
-    // Filled after do_connect is built so recent rows can invoke it.
+    // Filled after do_connect is built so host cards can invoke it.
     let connect_slot: Rc<RefCell<Option<ConnectFn>>> = Rc::new(RefCell::new(None));
+
+    let refresh_hosts = {
+        let hosts_grid = hosts_grid.clone();
+        let hosts_empty = hosts_empty.clone();
+        let host_entry = host_entry.clone();
+        let port_entry = port_entry.clone();
+        let user_entry = user_entry.clone();
+        let label_entry = label_entry.clone();
+        let connect_slot = connect_slot.clone();
+        Rc::new(move || {
+            let on_connect = connect_slot.borrow().clone();
+            refill_hosts_grid(
+                &hosts_grid,
+                &hosts_empty,
+                &host_entry,
+                &port_entry,
+                &user_entry,
+                &label_entry,
+                on_connect,
+            );
+        })
+    };
 
     let do_connect: ConnectFn = Rc::new({
         let connect_busy = connect_busy.clone();
@@ -307,13 +345,11 @@ fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
         let host_entry = host_entry.clone();
         let port_entry = port_entry.clone();
         let user_entry = user_entry.clone();
+        let label_entry = label_entry.clone();
         let pass_entry = pass_entry.clone();
         let status = status.clone();
-        let recent_list = recent_list.clone();
-        let recent_box = recent_box.clone();
-        let recent_empty = recent_empty.clone();
         let watched_child = watched_child.clone();
-        let connect_slot = connect_slot.clone();
+        let refresh_hosts = refresh_hosts.clone();
 
         move || {
             if *connect_busy.borrow() {
@@ -333,6 +369,7 @@ fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
             let host = host_entry.text().to_string();
             let port_text = port_entry.text().to_string();
             let username = user_entry.text().to_string();
+            let label = label_entry.text().to_string();
             let password = pass_entry.text().to_string();
 
             let port: u16 = match port_text.trim().parse() {
@@ -381,20 +418,12 @@ fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
                         host: host.trim().to_string(),
                         port,
                         username: username.trim().to_string(),
+                        label: label.trim().to_string(),
                     };
                     if let Err(e) = remember_host(entry) {
                         tracing::warn!("viewer.json save failed: {e}");
                     }
-                    let on_connect = connect_slot.borrow().clone();
-                    refill_recent(
-                        &recent_list,
-                        &recent_box,
-                        &recent_empty,
-                        &host_entry,
-                        &port_entry,
-                        &user_entry,
-                        on_connect,
-                    );
+                    refresh_hosts();
 
                     let started = Instant::now();
                     *watched_child.borrow_mut() = Some(spawned.child);
@@ -442,6 +471,56 @@ fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
         let do_connect = do_connect.clone();
         connect_btn.connect_clicked(move |_| do_connect());
     }
+    {
+        let host_entry = host_entry.clone();
+        let port_entry = port_entry.clone();
+        let user_entry = user_entry.clone();
+        let label_entry = label_entry.clone();
+        let status = status.clone();
+        let refresh_hosts = refresh_hosts.clone();
+        save_btn.connect_clicked(move |_| {
+            let host = host_entry.text();
+            let port_text = port_entry.text();
+            let username = user_entry.text();
+            let label = label_entry.text();
+            let port: u16 = match port_text.trim().parse() {
+                Ok(0) | Err(_) => {
+                    set_status(
+                        &status,
+                        &tr("Enter a valid port (1–65535)."),
+                        StatusKind::Error,
+                    );
+                    return;
+                }
+                Ok(p) => p,
+            };
+            if host.trim().is_empty() {
+                set_status(
+                    &status,
+                    &tr("Enter a host name or IP address."),
+                    StatusKind::Error,
+                );
+                return;
+            }
+            let entry = ViewerHost {
+                host: host.trim().to_string(),
+                port,
+                username: username.trim().to_string(),
+                label: label.trim().to_string(),
+            };
+            match remember_host(entry) {
+                Ok(()) => {
+                    set_status(&status, &tr("Host saved."), StatusKind::Ok);
+                    refresh_hosts();
+                }
+                Err(e) => set_status(
+                    &status,
+                    &tr(&format!("Could not save host: {e}")),
+                    StatusKind::Error,
+                ),
+            }
+        });
+    }
     for entry in [&host_entry, &port_entry, &user_entry] {
         let do_connect = do_connect.clone();
         entry.connect_activate(move |_| do_connect());
@@ -451,15 +530,7 @@ fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
         pass_entry.connect_activate(move |_| do_connect());
     }
 
-    refill_recent(
-        &recent_list,
-        &recent_box,
-        &recent_empty,
-        &host_entry,
-        &port_entry,
-        &user_entry,
-        Some(do_connect),
-    );
+    refresh_hosts();
 
     let scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -530,53 +601,68 @@ fn set_status(label: &gtk::Label, text: &str, kind: StatusKind) {
     }
 }
 
-fn refill_recent(
-    list: &gtk::ListBox,
-    card: &gtk::Box,
+fn refill_hosts_grid(
+    grid: &gtk::FlowBox,
     empty: &gtk::Label,
     host_entry: &gtk::Entry,
     port_entry: &gtk::Entry,
     user_entry: &gtk::Entry,
+    label_entry: &gtk::Entry,
     on_connect: Option<ConnectFn>,
 ) {
-    while let Some(row) = list.row_at_index(0) {
-        list.remove(&row);
+    while let Some(child) = grid.child_at_index(0) {
+        grid.remove(&child);
     }
     let cfg = metis_config::load_viewer_config();
     if cfg.recent.is_empty() {
-        card.set_visible(false);
+        grid.set_visible(false);
         empty.set_visible(true);
         return;
     }
     empty.set_visible(false);
-    card.set_visible(true);
+    grid.set_visible(true);
 
     for entry in cfg.recent {
-        let row = gtk::ListBoxRow::new();
-        row.set_activatable(false);
-
-        let outer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        outer.add_css_class("metis-viewer-recent-row");
+        let card = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        card.add_css_class("metis-viewer-host-card");
+        card.set_hexpand(true);
 
         let btn = gtk::Button::new();
         btn.set_has_frame(false);
         btn.set_hexpand(true);
         btn.set_tooltip_text(Some(&tr("Fill and connect")));
+        btn.add_css_class("metis-viewer-host-card-body");
+
         let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
         col.set_hexpand(true);
-        let host_l = gtk::Label::new(Some(&format!("{}:{}", entry.host, entry.port)));
-        host_l.set_xalign(0.0);
-        host_l.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        host_l.add_css_class("metis-viewer-recent-host");
-        let meta = if entry.username.is_empty() {
-            tr("No username").to_string()
+        let title = if entry.label.is_empty() {
+            format!("{}:{}", entry.host, entry.port)
         } else {
-            entry.username.clone()
+            entry.label.clone()
         };
-        let meta_l = gtk::Label::new(Some(&meta));
+        let title_l = gtk::Label::new(Some(&title));
+        title_l.set_xalign(0.0);
+        title_l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title_l.add_css_class("metis-viewer-host-card-title");
+        let endpoint = if entry.label.is_empty() {
+            if entry.username.is_empty() {
+                tr("No username").to_string()
+            } else {
+                entry.username.clone()
+            }
+        } else {
+            let user = if entry.username.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", entry.username)
+            };
+            format!("{}:{}{user}", entry.host, entry.port)
+        };
+        let meta_l = gtk::Label::new(Some(&endpoint));
         meta_l.set_xalign(0.0);
-        meta_l.add_css_class("metis-viewer-recent-meta");
-        col.append(&host_l);
+        meta_l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        meta_l.add_css_class("metis-viewer-host-card-meta");
+        col.append(&title_l);
         col.append(&meta_l);
         btn.set_child(Some(&col));
 
@@ -584,50 +670,53 @@ fn refill_recent(
             let h = host_entry.clone();
             let p = port_entry.clone();
             let u = user_entry.clone();
+            let l = label_entry.clone();
             let e = entry.clone();
             let connect = on_connect.clone();
             btn.connect_clicked(move |_| {
                 h.set_text(&e.host);
                 p.set_text(&e.port.to_string());
                 u.set_text(&e.username);
+                l.set_text(&e.label);
                 if let Some(f) = &connect {
                     f();
                 }
             });
         }
-        outer.append(&btn);
+        card.append(&btn);
 
         let trash = gtk::Button::from_icon_name("user-trash-symbolic");
         trash.set_has_frame(false);
-        trash.set_tooltip_text(Some(&tr("Remove from recent")));
+        trash.set_tooltip_text(Some(&tr("Remove saved host")));
         trash.add_css_class("flat");
+        trash.add_css_class("metis-viewer-host-card-remove");
+        trash.set_valign(gtk::Align::Start);
         {
-            let list = list.clone();
-            let card = card.clone();
+            let grid = grid.clone();
             let empty = empty.clone();
             let host_entry = host_entry.clone();
             let port_entry = port_entry.clone();
             let user_entry = user_entry.clone();
+            let label_entry = label_entry.clone();
             let e = entry.clone();
             let connect = on_connect.clone();
             trash.connect_clicked(move |_| {
                 if let Err(err) = remove_recent(&e) {
                     tracing::warn!("viewer.json remove failed: {err}");
                 }
-                refill_recent(
-                    &list,
-                    &card,
+                refill_hosts_grid(
+                    &grid,
                     &empty,
                     &host_entry,
                     &port_entry,
                     &user_entry,
+                    &label_entry,
                     connect.clone(),
                 );
             });
         }
-        outer.append(&trash);
+        card.append(&trash);
 
-        row.set_child(Some(&outer));
-        list.append(&row);
+        grid.append(&card);
     }
 }

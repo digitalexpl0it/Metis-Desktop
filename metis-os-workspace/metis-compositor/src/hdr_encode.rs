@@ -1,4 +1,4 @@
-//! HDR encode at scanout — SDR desktop → PQ or HLG.
+//! HDR encode at scanout — SDR desktop → PQ or HLG — and per-surface decode.
 //!
 //! When an output has HDR signaling active, the DRM path composites the usual
 //! sRGB desktop into an offscreen buffer, then blits it through a texture
@@ -11,8 +11,24 @@
 //! so the panel (already in HDR mode) displays SDR content at a sensible
 //! brightness. PQ is preferred when EDID advertises ST.2084; HLG is used for
 //! HLG-only panels.
+//!
+//! Mixed SDR+HDR (urgent #2): HDR client windows are rendered to an offscreen
+//! texture and blitted through a PQ/HLG **decode** shader (EOTF → BT.2020→709 →
+//! soft tone-map to reference white → sRGB) before compositing with SDR chrome.
+//! Fullscreen / HDR-only on an HDR output still uses encode pass-through.
 
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram, UniformName, UniformType};
+use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
+use smithay::backend::renderer::element::{AsRenderElements, surface::WaylandSurfaceRenderElement};
+use smithay::backend::renderer::gles::element::TextureShaderElement;
+use smithay::backend::renderer::gles::{
+    GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName, UniformType,
+};
+use smithay::backend::renderer::{Bind, Offscreen};
+use smithay::desktop::Window;
+use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 /// BT.2408 reference white for mapping SDR peak to HDR (nits).
 pub const REFERENCE_WHITE_NITS: f32 = 203.0;
@@ -193,11 +209,191 @@ void main() {
 }
 "#;
 
-/// Persistent HDR-encode GL resources, owned by `MetisState`.
+/// Custom texture shader: PQ code values → linear → BT.2020→709 → tone-map → sRGB.
+const PQ_DECODE_SHADER: &str = r#"#version 100
+
+//_DEFINES_
+
+#if defined(EXTERNAL)
+#extension GL_OES_EGL_image_external : require
+#endif
+
+precision highp float;
+#if defined(EXTERNAL)
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
+
+uniform float alpha;
+varying vec2 v_coords;
+uniform float reference_white;
+
+#if defined(DEBUG_FLAGS)
+uniform float tint;
+#endif
+
+float pq_to_linear(float n) {
+    // ST 2084 EOTF; n in [0,1] → luminance normalized to 10 000 nits.
+    n = clamp(n, 0.0, 1.0);
+    float m1 = 2610.0 / 16384.0;
+    float m2 = 2523.0 / 32.0;
+    float c1 = 3424.0 / 4096.0;
+    float c2 = 2413.0 / 128.0;
+    float c3 = 2392.0 / 128.0;
+    float np = pow(n, 1.0 / m2);
+    float num = max(np - c1, 0.0);
+    float den = c2 - c3 * np;
+    return pow(num / max(den, 1e-6), 1.0 / m1);
+}
+
+vec3 bt2020_to_rec709(vec3 c) {
+    return vec3(
+         1.6605 * c.r - 0.5876 * c.g - 0.0728 * c.b,
+        -0.1246 * c.r + 1.1329 * c.g - 0.0083 * c.b,
+        -0.0182 * c.r - 0.1006 * c.g + 1.1187 * c.b
+    );
+}
+
+float linear_to_srgb(float c) {
+    c = max(c, 0.0);
+    if (c <= 0.0031308) {
+        return 12.92 * c;
+    }
+    return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+void main() {
+    vec4 pq = texture2D(tex, v_coords);
+#if defined(NO_ALPHA)
+    pq.a = 1.0;
+#endif
+
+    // PQ code → linear relative to 10 000 nits, then absolute nits.
+    vec3 lin = vec3(
+        pq_to_linear(pq.r),
+        pq_to_linear(pq.g),
+        pq_to_linear(pq.b)
+    ) * 10000.0;
+
+    // Soft Reinhard-style map around reference white; preserves SDR mid-tones.
+    float rw = max(reference_white, 1.0);
+    vec3 mapped = (lin / rw) / (vec3(1.0) + lin / rw);
+    mapped = bt2020_to_rec709(mapped);
+    mapped = clamp(mapped, 0.0, 1.0);
+
+    vec3 srgb = vec3(
+        linear_to_srgb(mapped.r),
+        linear_to_srgb(mapped.g),
+        linear_to_srgb(mapped.b)
+    );
+
+    vec4 color = vec4(srgb, pq.a) * alpha;
+
+#if defined(DEBUG_FLAGS)
+    if (tint == 1.0)
+        color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
+#endif
+
+    gl_FragColor = color;
+}
+"#;
+
+/// Custom texture shader: HLG code values → linear → BT.2020→709 → tone-map → sRGB.
+const HLG_DECODE_SHADER: &str = r#"#version 100
+
+//_DEFINES_
+
+#if defined(EXTERNAL)
+#extension GL_OES_EGL_image_external : require
+#endif
+
+precision highp float;
+#if defined(EXTERNAL)
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
+
+uniform float alpha;
+varying vec2 v_coords;
+uniform float reference_white;
+
+#if defined(DEBUG_FLAGS)
+uniform float tint;
+#endif
+
+float hlg_to_linear(float x) {
+    // Rec.2100 HLG inverse OETF; x in [0,1] → scene-referred linear [0,1].
+    x = clamp(x, 0.0, 1.0);
+    float a = 0.17883277;
+    float b = 1.0 - 4.0 * a;
+    float c = 0.5 - a * log(4.0 * a);
+    if (x <= 0.5) {
+        return (x * x) / 3.0;
+    }
+    return (exp((x - c) / a) + b) / 12.0;
+}
+
+vec3 bt2020_to_rec709(vec3 c) {
+    return vec3(
+         1.6605 * c.r - 0.5876 * c.g - 0.0728 * c.b,
+        -0.1246 * c.r + 1.1329 * c.g - 0.0083 * c.b,
+        -0.0182 * c.r - 0.1006 * c.g + 1.1187 * c.b
+    );
+}
+
+float linear_to_srgb(float c) {
+    c = max(c, 0.0);
+    if (c <= 0.0031308) {
+        return 12.92 * c;
+    }
+    return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+void main() {
+    vec4 hlg = texture2D(tex, v_coords);
+#if defined(NO_ALPHA)
+    hlg.a = 1.0;
+#endif
+
+    vec3 scene = vec3(
+        hlg_to_linear(hlg.r),
+        hlg_to_linear(hlg.g),
+        hlg_to_linear(hlg.b)
+    );
+    // Match encode: scene 1.0 ≈ 1000-nit HLG system peak.
+    vec3 lin = scene * 1000.0;
+
+    float rw = max(reference_white, 1.0);
+    vec3 mapped = (lin / rw) / (vec3(1.0) + lin / rw);
+    mapped = bt2020_to_rec709(mapped);
+    mapped = clamp(mapped, 0.0, 1.0);
+
+    vec3 srgb = vec3(
+        linear_to_srgb(mapped.r),
+        linear_to_srgb(mapped.g),
+        linear_to_srgb(mapped.b)
+    );
+
+    vec4 color = vec4(srgb, hlg.a) * alpha;
+
+#if defined(DEBUG_FLAGS)
+    if (tint == 1.0)
+        color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
+#endif
+
+    gl_FragColor = color;
+}
+"#;
+
+/// Persistent HDR encode/decode GL resources, owned by `MetisState`.
 #[derive(Default)]
 pub struct HdrEncodeRuntime {
     pub pq_program: Option<GlesTexProgram>,
     pub hlg_program: Option<GlesTexProgram>,
+    pub pq_decode_program: Option<GlesTexProgram>,
+    pub hlg_decode_program: Option<GlesTexProgram>,
 }
 
 impl HdrEncodeRuntime {
@@ -205,6 +401,8 @@ impl HdrEncodeRuntime {
     pub fn invalidate_gl(&mut self) {
         self.pq_program = None;
         self.hlg_program = None;
+        self.pq_decode_program = None;
+        self.hlg_decode_program = None;
     }
 
     pub fn ensure_program(&mut self, renderer: &mut GlesRenderer, transfer: HdrTransfer) {
@@ -248,7 +446,139 @@ impl HdrEncodeRuntime {
             }
         }
     }
+
+    pub fn ensure_decode_program(&mut self, renderer: &mut GlesRenderer, transfer: HdrTransfer) {
+        match transfer {
+            HdrTransfer::Pq => {
+                if self.pq_decode_program.is_some() {
+                    return;
+                }
+                match renderer.compile_custom_texture_shader(
+                    PQ_DECODE_SHADER,
+                    &[UniformName::new("reference_white", UniformType::_1f)],
+                ) {
+                    Ok(program) => {
+                        tracing::info!("hdr: compiled PQ→sRGB decode shader");
+                        self.pq_decode_program = Some(program);
+                    }
+                    Err(err) => {
+                        tracing::warn!(?err, "hdr: failed to compile PQ decode shader")
+                    }
+                }
+            }
+            HdrTransfer::Hlg => {
+                if self.hlg_decode_program.is_some() {
+                    return;
+                }
+                match renderer.compile_custom_texture_shader(
+                    HLG_DECODE_SHADER,
+                    &[UniformName::new("reference_white", UniformType::_1f)],
+                ) {
+                    Ok(program) => {
+                        tracing::info!("hdr: compiled HLG→sRGB decode shader");
+                        self.hlg_decode_program = Some(program);
+                    }
+                    Err(err) => {
+                        tracing::warn!(?err, "hdr: failed to compile HLG decode shader")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Render `window` to an offscreen buffer, run PQ/HLG→sRGB decode, and return
+    /// a fullscreen-style texture element placed at `place_at` (render-target local).
+    pub fn try_decode_window_element(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        window: &Window,
+        place_at: Point<i32, Physical>,
+        scale: Scale<f64>,
+        alpha: f32,
+        transfer: HdrTransfer,
+    ) -> Option<TextureShaderElement> {
+        self.ensure_decode_program(renderer, transfer);
+        let program = match transfer {
+            HdrTransfer::Pq => self.pq_decode_program.clone()?,
+            HdrTransfer::Hlg => self.hlg_decode_program.clone()?,
+        };
+
+        let geo = window.geometry();
+        let width = geo.size.w.max(1);
+        let height = geo.size.h.max(1);
+        let size_phys: Size<i32, Physical> =
+            Size::<i32, Logical>::from((width, height)).to_physical_precise_round(scale);
+        if size_phys.w <= 0 || size_phys.h <= 0 {
+            return None;
+        }
+        // Cap decode targets so a pathological client cannot force a huge FBO.
+        if size_phys.w > 7680 || size_phys.h > 4320 {
+            tracing::warn!(
+                w = size_phys.w,
+                h = size_phys.h,
+                "hdr: refusing decode offscreen larger than 8K"
+            );
+            return None;
+        }
+
+        let size_buf: Size<i32, Buffer> = Size::from((size_phys.w, size_phys.h));
+        let loc =
+            Point::<i32, Logical>::from((-geo.loc.x, -geo.loc.y)).to_physical_precise_round(scale);
+        let elems = AsRenderElements::<GlesRenderer>::render_elements::<
+            WaylandSurfaceRenderElement<GlesRenderer>,
+        >(window, renderer, loc, scale, alpha);
+        if elems.is_empty() {
+            return None;
+        }
+
+        let mut scene = None;
+        for format in [Fourcc::Abgr2101010, Fourcc::Abgr8888] {
+            let mut offscreen =
+                match Offscreen::<GlesTexture>::create_buffer(renderer, format, size_buf) {
+                    Ok(buf) => buf,
+                    Err(_) => continue,
+                };
+            let ok = {
+                let mut framebuffer = match renderer.bind(&mut offscreen) {
+                    Ok(fb) => fb,
+                    Err(_) => continue,
+                };
+                let mut damage_tracker =
+                    OutputDamageTracker::new(size_phys, scale, Transform::Normal);
+                damage_tracker
+                    .render_output(renderer, &mut framebuffer, 0, &elems, DECODE_CLEAR)
+                    .is_ok()
+            };
+            if ok {
+                scene = Some(offscreen);
+                break;
+            }
+        }
+        let scene = scene?;
+
+        let buffer = TextureBuffer::from_texture(renderer, scene, 1, Transform::Normal, None);
+        let src_rect = Rectangle::<f64, Logical>::new(
+            Point::from((0.0, 0.0)),
+            Size::from((size_phys.w as f64, size_phys.h as f64)),
+        );
+        let inner = TextureRenderElement::from_texture_buffer(
+            Point::<f64, Physical>::from((place_at.x as f64, place_at.y as f64)),
+            &buffer,
+            None,
+            Some(src_rect),
+            Some(Size::from((size_phys.w, size_phys.h))),
+            Kind::Unspecified,
+        );
+        Some(TextureShaderElement::new(
+            inner,
+            program,
+            vec![Uniform::new("reference_white", REFERENCE_WHITE_NITS)],
+        ))
+    }
 }
 
 /// Clear colour for the final HDR scanout pass (fullscreen encode element covers it).
 pub const HDR_CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+/// Transparent clear when rendering a single HDR window for decode.
+const DECODE_CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 0.0];

@@ -135,13 +135,26 @@ impl ScreencastImpl for MetisScreencast {
         _options: StartCastOptions,
     ) -> ashpd::backend::Result<Streams> {
         tracing::info!(?app_id, "portal screencast start");
+        let app_label = crate::consent::display_app_label(app_id.as_ref());
+        if !crate::consent::request_capture_consent(
+            crate::consent::CaptureKind::Screencast,
+            &app_label,
+        )
+        .await
+        {
+            return Err(PortalError::Cancelled(
+                "Screen share declined by user".into(),
+            ));
+        }
         let portal_app = compositor_ipc::portal_app_id(app_id);
         if let Err(message) = compositor_ipc::begin_capture_overlay(portal_app) {
             let locked = message.contains("session is locked");
+            tracing::warn!(%message, locked, "BeginCaptureOverlay rejected");
             if should_refuse_cast_while_locked(locked) {
                 return Err(PortalError::Failed(message));
             }
-            tracing::warn!(%message, "BeginCaptureOverlay rejected");
+            // Non-lock rejections (rate limit, etc.) also fail closed.
+            return Err(PortalError::Failed(message));
         }
         let (width, height) = self.capture.output_size(None).await;
         let stream = self

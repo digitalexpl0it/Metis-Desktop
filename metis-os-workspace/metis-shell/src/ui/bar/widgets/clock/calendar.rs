@@ -771,10 +771,7 @@ impl Inner {
             let (ox, oy) = if let Some(btn) = btn.as_ref()
                 && let Some(bounds) = btn.compute_bounds(&overlay)
             {
-                (
-                    bounds.x() as f64,
-                    (bounds.y() + bounds.height()) as f64,
-                )
+                (bounds.x() as f64, (bounds.y() + bounds.height()) as f64)
             } else {
                 (8.0, 8.0)
             };

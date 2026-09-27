@@ -408,8 +408,6 @@ pub struct MetisState {
     pub wallpaper: crate::wallpaper::Wallpaper,
     pub blur: crate::blur::BlurRuntime,
     pub hdr_encode: crate::hdr_encode::HdrEncodeRuntime,
-    /// Wave 3c: any mapped client advertised PQ/HLG via colour management.
-    pub(crate) hdr_client_content_visible: bool,
     pub color_lut: crate::color_lut::ColorLutRuntime,
     pub decorations: crate::decoration::DecorationRuntime,
     pub decoration_overrides: crate::decoration_overrides::DecorationsRuntime,
@@ -515,6 +513,10 @@ pub struct MetisState {
     /// Windows a game rule asked to fullscreen, awaiting readiness (fullscreen is
     /// applied once the client has committed a buffer and been placed).
     pub(crate) pending_game_fullscreen: std::collections::HashSet<u32>,
+    /// Output name → workspace reserved for FreeRDP client sessions.
+    pub(crate) remote_viewer_workspace: std::collections::HashMap<String, u32>,
+    /// Window ids already auto-placed onto a remote-viewer workspace.
+    pub(crate) remote_viewer_placed: std::collections::HashSet<u32>,
     /// `linux-drm-syncobj-v1` explicit-sync state. `Some` only when the primary
     /// GPU supports syncobj eventfd. Explicit sync removes implicit-sync stutter
     /// on NVIDIA + DXVK/VKD3D and modern XWayland — critical for Proton.
@@ -1110,7 +1112,6 @@ impl MetisState {
             wallpaper: crate::wallpaper::Wallpaper::new(),
             blur: crate::blur::BlurRuntime::default(),
             hdr_encode: crate::hdr_encode::HdrEncodeRuntime::default(),
-            hdr_client_content_visible: false,
             color_lut: crate::color_lut::ColorLutRuntime::default(),
             decorations: crate::decoration::DecorationRuntime::default(),
             decoration_overrides: crate::decoration_overrides::DecorationsRuntime::load(),
@@ -1161,6 +1162,8 @@ impl MetisState {
             game_rules: metis_config::load_game_rules_config(),
             gaming_config: metis_config::load_gaming_config(),
             pending_game_fullscreen: std::collections::HashSet::new(),
+            remote_viewer_workspace: std::collections::HashMap::new(),
+            remote_viewer_placed: std::collections::HashSet::new(),
             drm_syncobj_state: None,
             idle_inhibit_state,
             idle_notifier_state,
@@ -8812,6 +8815,107 @@ impl MetisState {
         self.windows
             .set_workspace(id, self.active_workspace_for(&key));
         self.ensure_app_tile_for_window(id);
+        self.maybe_place_remote_viewer_window(id);
+    }
+
+    /// Move FreeRDP client windows onto a dedicated workspace and switch to it.
+    pub(crate) fn maybe_place_remote_viewer_window(&mut self, id: u32) {
+        if self.remote_viewer_placed.contains(&id) {
+            return;
+        }
+        let Some(record) = self.windows.get(id) else {
+            return;
+        };
+        let Some(app_id) = record.app_id.as_deref() else {
+            return;
+        };
+        if !crate::decoration_policy::id_looks_freerdp_client(app_id) {
+            return;
+        }
+        let key = self.desk_key_for_window(id);
+        let target = self.pick_remote_viewer_workspace(&key, id);
+        self.remote_viewer_workspace.insert(key.clone(), target);
+        self.remote_viewer_placed.insert(id);
+        tracing::info!(
+            id,
+            %key,
+            workspace = target,
+            app_id,
+            "remote viewer: placing FreeRDP session on dedicated workspace"
+        );
+        self.move_window_to_workspace(id, target);
+        self.switch_workspace(&key, target);
+        self.focus_window_id(id);
+    }
+
+    fn pick_remote_viewer_workspace(&self, key: &str, window_id: u32) -> u32 {
+        let count = self.workspace_count().max(1);
+        if let Some(&cached) = self.remote_viewer_workspace.get(key)
+            && (1..=count).contains(&cached)
+        {
+            // Keep using the cached desk while it still hosts remote sessions or is empty.
+            if self.workspace_has_remote_viewer(key, cached, Some(window_id))
+                || self.workspace_occupant_count(key, cached, Some(window_id)) == 0
+            {
+                return cached;
+            }
+        }
+        for ws in 1..=count {
+            if self.workspace_occupant_count(key, ws, Some(window_id)) == 0 {
+                return ws;
+            }
+        }
+        count
+    }
+
+    fn workspace_occupant_count(&self, key: &str, ws: u32, exclude: Option<u32>) -> usize {
+        self.windows
+            .ids()
+            .into_iter()
+            .filter(|&id| {
+                if exclude == Some(id) {
+                    return false;
+                }
+                let Some(rec) = self.windows.get(id) else {
+                    return false;
+                };
+                if self.windows.is_minimized(id) {
+                    return false;
+                }
+                rec.output == key && rec.workspace == ws
+            })
+            .count()
+    }
+
+    fn workspace_has_remote_viewer(&self, key: &str, ws: u32, exclude: Option<u32>) -> bool {
+        self.windows.ids().into_iter().any(|id| {
+            if exclude == Some(id) {
+                return false;
+            }
+            let Some(rec) = self.windows.get(id) else {
+                return false;
+            };
+            rec.output == key
+                && rec.workspace == ws
+                && rec
+                    .app_id
+                    .as_deref()
+                    .is_some_and(crate::decoration_policy::id_looks_freerdp_client)
+        })
+    }
+
+    pub(crate) fn clear_remote_viewer_placement(&mut self, id: u32) {
+        self.remote_viewer_placed.remove(&id);
+        // Drop cached workspace when no FreeRDP clients remain on that output.
+        let keys: Vec<String> = self.remote_viewer_workspace.keys().cloned().collect();
+        for key in keys {
+            let Some(&ws) = self.remote_viewer_workspace.get(&key) else {
+                continue;
+            };
+            if !self.workspace_has_remote_viewer(&key, ws, Some(id)) {
+                self.remote_viewer_workspace.remove(&key);
+            }
+        }
     }
 
     /// Bring an XWayland toplevel under full Metis management: register it in the
@@ -8971,6 +9075,7 @@ impl MetisState {
             app_id,
             suggested_rect,
         });
+        self.maybe_place_remote_viewer_window(id);
         self.note_window_focus(id);
         self.focus_window_id(id);
         self.event_bus.emit(&CompositorEvent::WindowFocused { id });
@@ -9570,6 +9675,7 @@ impl MetisState {
         self.save_window_geometry(id);
         self.floating.remove(&id);
         self.pending_game_fullscreen.remove(&id);
+        self.clear_remote_viewer_placement(id);
         self.clear_auto_hide(id);
         let desk_key = self.desk_key_for_window(id);
         self.remove_app_tile_everywhere(id);

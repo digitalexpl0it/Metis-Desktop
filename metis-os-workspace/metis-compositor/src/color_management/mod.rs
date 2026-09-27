@@ -146,7 +146,7 @@ impl ColorManagementRuntime {
     }
 
     /// Surface image-description record id, if the client set one via
-    /// `wp_color_management_surface_v1`. HDR TF hints feed Wave 3c pass-through.
+    /// `wp_color_management_surface_v1`. HDR TF hints feed pass-through / decode.
     pub fn surface_description_id(&self, surface_id: &ObjectId) -> Option<u64> {
         self.surface_descriptions.get(surface_id).copied()
     }

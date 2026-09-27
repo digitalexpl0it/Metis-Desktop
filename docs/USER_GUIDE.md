@@ -476,6 +476,9 @@ Flatpak setup in `~/.config/metis/gaming.json` instead of env-var recipes:
 - **MangoHud / Gamescope (Metis launches only)** — optional toggles in
   `gaming.json` / Settings → Gaming. When Metis starts Steam or Big Picture and
   the binary is on `PATH`, Metis sets `MANGOHUD=1` or prefixes `gamescope --`.
+  **Per-app Gamescope profiles** (Settings → Gaming → Gamescope profiles, or
+  `gamescope_profiles` in `gaming.json`) wrap Metis-spawned
+  `steam -applaunch <id>` / `steam://rungameid/<id>` with `gamescope [flags] --`.
   These never write Steam Properties or Launch Options.
 - **Optimize for gaming** — Flatpak overrides + input-group Fix.
 - **Run gaming setup** — stepped wizard: Steam → Vulkan → controllers →
@@ -528,8 +531,9 @@ screen will not blank and the machine will not auto-suspend mid-game. For
 sustained performance, pick a performance profile in *Settings → Power*.
 
 **Gaming polish (optional).** Prefer Metis Settings toggles for MangoHud /
-Gamescope on Metis-launched Steam / Big Picture. For a single title only, you
-can still add Steam launch-option prefixes:
+Gamescope on Metis-launched Steam / Big Picture, and **Gamescope profiles** for
+per-Steam-appid wraps when Metis spawns the launch. For titles Steam starts
+itself (library Play button), you can still add Steam launch-option prefixes:
 
 ```text
 gamemoderun %command%                         # sudo apt install gamemode
@@ -558,8 +562,10 @@ menus typically destroy the lock so absolute clicks work; keyboard navigation
 is always a fallback.
 
 **Gamescope (optional):** SteamOS Gaming Mode uses [Gamescope](https://github.com/ValveSoftware/gamescope)
-as its compositor. On Metis, Gamescope is optional — add to a game's Steam launch
-options to wrap only that title:
+as its compositor. On Metis, Gamescope is optional. Prefer
+**Settings → Gaming → Gamescope profiles** (Steam app id + flags such as
+`-W 1920 -H 1080 -f`) for Metis-spawned launches, or add Steam launch options
+when Steam starts the title itself:
 
 ```text
 gamescope -W 1920 -H 1080 -f -- %command%
@@ -1097,22 +1103,32 @@ printf '%s\n' 'your-password' | metis-remote set-credentials YOUR_USER
 **Metis Viewer** (`metis-viewer`) is the first-party RDP *client* — a GTK connect
 dialog that spawns FreeRDP (`wlfreerdp3` → `wlfreerdp` → `xfreerdp3` →
 `xfreerdp`, searched under `/usr/bin` only; argv spawn, no shell). Host sharing
-stays **Settings → Remote access** + `gnome-remote-desktop` / `metis-remote`.
+defaults to **Settings → Remote access** + `gnome-remote-desktop` / `metis-remote`.
+An experimental **Metis native** host (`metis-remote native enable`, FreeRDP
+shadow / `freerdp-shadow-x11`) is also RDP-compatible with this viewer; GRD
+remains the supported default (shadow is X11-oriented and may not capture a
+pure Wayland Metis session).
 
 1. Install a FreeRDP client on the machine that will connect (Ubuntu):
    `sudo apt install freerdp3-wayland`  
    (or `freerdp2-x11` if Wayland FreeRDP is unavailable).
 2. Open **Metis Viewer** from the app launcher, `metis-cmd viewer`, or
    **Settings → Remote access → Connect with Metis Viewer…**.
-3. Enter host, port (default **3389**), username, and optionally password.
-   Recent hosts are stored in `~/.config/metis/viewer.json` (**no passwords**).
-   Click a recent row to fill fields and connect; use the trash control to remove
-   an entry. If the password field is left empty, FreeRDP prompts (GUI dialog);
-   if filled, Metis passes `/p:` only on the FreeRDP child argv (never logged,
-   never written to config — briefly visible in `/proc` while FreeRDP starts).
-   Quick FreeRDP failures (auth/connect) surface in the status line within a few
-   seconds. Metis Viewer passes `/cert:ignore` so GNOME Remote Desktop’s
-   self-signed LAN certificates work without an interactive prompt.
+3. Enter host, port (default **3389**), username, optional display **label**,
+   and optionally password. Saved hosts are stored in
+   `~/.config/metis/viewer.json` (**no passwords**) and shown as a **card grid**.
+   Click a card to fill fields and connect; **Save** upserts without connecting;
+   use the trash control to remove an entry. If the password field is left empty,
+   FreeRDP prompts (GUI dialog); if filled, Metis passes `/p:` only on the
+   FreeRDP child argv (never logged, never written to config — briefly visible
+   in `/proc` while FreeRDP starts). Quick FreeRDP failures (auth/connect)
+   surface in the status line within a few seconds. Metis Viewer passes
+   `/cert:ignore` so GNOME Remote Desktop’s self-signed LAN certificates work
+   without an interactive prompt.
+4. Under Metis, FreeRDP session windows open on their **own workspace** so they
+   appear in Super+Tab Task View and Super+Alt+←/→ desktop cycling (bar workspace
+   dots work too). The Metis Viewer connect window itself stays on the current
+   desktop.
 
 **Other clients.** Windows: *Remote Desktop Connection* (`mstsc`). macOS:
 *Microsoft Remote Desktop* from the App Store. Linux CLI:
@@ -1311,7 +1327,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | *(cache)* `~/.cache/metis/updates-snapshot.json` | Pending update list shared by Settings Check now, the edge-bar badge, and the updater |
 | `remote.json` | Desktop sharing: enabled, backend (`gnome_rdp` default / `rustdesk`), auto-start, LAN-only + firewall state |
 | `dashboard.json` | Control Center: enabled, widgets, height %, refresh, confirm-before-kill, process monitor |
-| `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, `extra_steam_paths`, Metis MangoHud/Gamescope toggles |
+| `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, `extra_steam_paths`, Metis MangoHud/Gamescope toggles, per-appid `gamescope_profiles` |
 | `gaming-flatpak.json` | Record of applied Flatpak gaming overrides (managed by `metis-gaming`) |
 | `game-rules.json` | Float / fullscreen rules for games and launchers (built-in defaults if absent) |
 | `outputs.json` | Per-output scale, resolution/refresh, arrangement (`layout_x`/`layout_y`), `display_mode` / `mirror_source`, VRR / HDR toggles, night-light prefs |

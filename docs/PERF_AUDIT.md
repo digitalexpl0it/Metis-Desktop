@@ -79,6 +79,14 @@ remains deferred.
 **Recommendation:** validate OBS / gnome-remote-desktop under a live DRM
 session; watch portal logs for `dmabuf` vs MemFd negotiation.
 
+### P1 — Hybrid cross-GPU transfer (CPU readback) — **improved 2026-09-27**
+
+**Status:** `cross_gpu::try_transfer_frame` composites on the primary GPU with
+blur, then prefers **GBM dmabuf** bind + secondary `import_dmabuf` (no
+`copy_framebuffer` → `to_vec`). ExportMem/ImportMem remains the fallback when
+dmabuf allocate/import fails. Full Smithay `MultiRenderer` + generic
+`OutputStack` (Anvil-style) is still the end state for zero-copy element paths.
+
 ### P1 — Fullscreen direct scanout (hybrid PRIME)
 
 **Status:** Fullscreen fast path skips wallpaper, blur, night-light, and

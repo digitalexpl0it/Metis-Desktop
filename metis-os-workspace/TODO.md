@@ -2,11 +2,14 @@
 
 **Current phase:** Phases **1–17** are complete for their shipped product bars
 (Phase 17 Task View / Super+Tab shipped).
+**2026-09-27 engineering review** folded into **Urgent priorities** (portal
+consent + Mutter lock/EIS gates) and **Engineering review backlog**
+(security P1/P2, perf/resources, maintainability).
 **Phase 18** (security / IPC / isolation polish) **A–D complete** 2026-08-08;
-§E: colour management UAF stays track-only; **MultiRenderer promoted to urgent**
-(see **Urgent priorities**).
+§E: colour management UAF stays track-only; **MultiRenderer** remains urgent
+product work (see **Urgent priorities**).
 **Phase 19** (Gaming Setup UX — guided drivers + first-run polish) shipped
-2026-08-08 — see Phase 19 below; **per-app Gamescope UI now urgent**.
+2026-08-08 — see Phase 19 below; **per-app Gamescope UI** still urgent.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -26,31 +29,125 @@ individual phase sections for deferred follow-ups.
 
 ---
 
-## Urgent priorities (promoted 2026-09-20)
+## Urgent priorities (updated 2026-09-27)
 
-Former stretch / deferred items now **front of queue**. Detail and history stay
-in the phase sections linked below — this list is the active order of work.
+Active front-of-queue work. Phase history stays in the sections below.
+Security items from the **2026-09-27 code review** sit above product stretch.
 
-- [ ] **1. GLES `MultiRenderer` / zero-copy cross-GPU path** — replace CPU
-      readback for hybrid multi-monitor (outputs on separate GPUs). ScreenCast
-      dmabuf is already done; this is compositor binding.
+### Security — do first
+
+- [x] **S1. Portal capture consent** — xdg ScreenCast / Screenshot show a
+      layer-shell Allow/Deny dialog before capture (`metis-portal` `consent.rs`).
+      Session allowlist per app; `METIS_PORTAL_AUTO_APPROVE=1` for CI. (2026-09-27)
+- [x] **S2. Mutter ScreenCast honour session lock** — on `BeginCaptureOverlay`
+      rejection, abort and destroy the PipeWire stream (no pump). (2026-09-27)
+- [x] **S3. Gate Mutter `ConnectToEIS`** — requires started Remote Desktop
+      session **and** `remote.json` `enabled`; otherwise AccessDenied/Failed.
+      (2026-09-27)
+
+### Product (promoted 2026-09-20)
+
+- [ ] **1. GLES `MultiRenderer` / zero-copy cross-GPU path** — hybrid transfer
+      now prefers **GBM dmabuf** primary→secondary (no CPU `to_vec`); ExportMem
+      remains fallback. **Residual:** Anvil-style generic `OutputStack` /
+      `DecorationElement` for true Smithay `MultiRenderer` (blur/HDR/deco typed
+      for MultiTexture). ScreenCast dmabuf already done.
       → Wave 3a residual, Phase 3 multi-GPU notes, Phase 18 §E.
-- [ ] **2. True per-surface HDR decode** — apps with distinct HDR metadata
-      streams render natively per window (beyond today’s global encode + 3c
-      pass-through hints). Fuller tone-map matrix welcome.
-      → Phase 5 §B residual (pass-through ≠ decode).
-- [ ] **3. Metis-native remote host** — first-party host protocol + client path
-      so session sharing is not only `gnome-remote-desktop`. Decision already
-      recorded; implementation now urgent.
+      *(dmabuf transfer landed 2026-09-27)*
+- [ ] **2. True per-surface HDR decode** — mixed SDR+HDR now decodes PQ/HLG
+      windows to sRGB (Reinhard @ 203 nits) before the encode pass; HDR-only /
+      fullscreen still pass-through. **Residual:** float scene-linear composite
+      (preserve highlight headroom), scroll-column crop+decode, fuller tone-map
+      / mastering metadata, default-on `wp_color_management_v1`.
+      → Phase 5 §B residual. *(decode path landed 2026-09-27)*
+- [ ] **3. Metis-native remote host** — **Partial (2026-09-27):** experimental
+      `RemoteBackend::MetisNative` via FreeRDP shadow (`metis-remote native`);
+      Metis Viewer saved-host grid + FreeRDP sessions auto-placed on a dedicated
+      workspace (Task View / Super+Alt+arrows). **Residual:** Wayland/portal
+      capture for shadow, credential UX parity, promote past experimental
+      (GRD remains default).
       → Wave 4c, Phase 7, Phase 15 §F,
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
-- [ ] **4. Per-Steam-appid Gamescope profile UI** — Settings UI over existing
-      `gaming.json` → `gamescope_profiles` (config retained; Big Picture already
-      uses `gamescope_big_picture`).
-      → Phase 19 §C.
+- [x] **4. Per-Steam-appid Gamescope profile UI** — Settings → Gaming editor for
+      `gamescope_profiles`; Metis spawn wraps matching `-applaunch` /
+      `steam://rungameid` with sanitized `gamescope [flags] --`. Big Picture
+      still uses `gamescope_big_picture`.
+      → Phase 19 §C. *(landed 2026-09-27)*
 
-**Suggested order:** 1 → 2 → 4 → 3 (graphics first; native remote last —
-largest surface). Profile MultiRenderer before deep investment.
+**Suggested order:** S1–S3 done → **1** → 2 → 4 → 3 (graphics first; native
+remote last). Profile MultiRenderer before deep investment. Broader review
+follow-ups: **Engineering review backlog** below.
+
+---
+
+## Engineering review backlog (2026-09-27)
+
+Standing review across security, performance/resources, and maintainability.
+Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](../SECURITY.md),
+[`docs/PERF_AUDIT.md`](../docs/PERF_AUDIT.md).
+
+### Security (P1 / P2)
+
+- [ ] **Fail-closed secret / capture paths** — never fall back to `/tmp` for
+      password files, VPN passwd files, or screenshot PNGs when
+      `XDG_RUNTIME_DIR` is missing (`metis-remote` `pkhelpers`, portal
+      `capture/mod.rs`, shell/settings VPN helpers). Match protocol’s
+      fail-closed runtime dir.
+- [ ] **Biometric unlock vs empty PAM** — ensure empty-password / `nullok`
+      cannot unlock without a real biometric success (`lock.rs`,
+      `lock_auth_cues.rs`).
+- [ ] **Clipboard `image_path` allowlist** — `SetClipboard` should only read
+      under `$XDG_RUNTIME_DIR` (or Metis cache), not arbitrary readable paths.
+- [ ] **Portal / screensaver panic hygiene** — replace
+      `unwrap`/`expect` on locks and thread spawn in security-adjacent portal
+      paths with soft failure + tracing.
+- [ ] **Session Secret Service story** — keep Secret Service as the contract
+      (gnome-keyring / KWallet / KeePassXC all OK); prefer Metis owning the
+      *default session provider* (not a private Metis-only store). Update
+      `metis-portals.conf` `Secret=` accordingly when a default is chosen.
+
+### Performance / resources
+
+- [ ] **ScreenCast MemFd path** — avoid full-frame `to_vec` / BGRx copies when
+      PipeWire rejects DmaBuf (`metis-portal` capture session/pump; hybrid
+      NVIDIA). Dmabuf-success path is fine.
+- [ ] **Throttle DRM housekeeping** — `tick_housekeeping` / sysfs
+      `on_battery()` should not run every 16 ms when undamaged; poll battery /
+      config on a 1–5 s cadence (`udev.rs`, `state.rs`).
+- [ ] **Portal / polkit watchdogs** — add respawn backoff; avoid spawn-storms
+      when D-Bus name claim is slow (`metis-compositor` `main.rs`).
+- [ ] **Pause NC timers when closed** — 1 s date/world + 500 ms calendar
+      `try_recv` only while the panel is open.
+- [ ] **Refresh `PERF_AUDIT.md`** — re-measure release binary sizes (~52 MB
+      four-bin vs ~40 MB June audit) and DRM idle/`perf` under ScreenCast.
+- [ ] Shell poll: keep pushing D-Bus signals; reduce `nmcli` /
+      `bluetoothctl` / `solaar` forks on the slow tick.
+
+### Code quality / maintainability
+
+- [ ] **Layer-shell popover invariant** — shared factory
+      (`autohide(false)` + register + idle popup); fix
+      `desktop_widgets/content/folders.rs` (four `autohide(true)`) and
+      clipboard settings popover; CI `rg` ban for `autohide(true)` /
+      tooltips / nested `Popover` under NC/calendar/toast.
+- [ ] **Config load/save helpers** — promote `bar.rs` migrate-converge +
+      atomic write to every watched `~/.config/metis/*.json` (many still
+      bare `fs::write`: clocks, calendars, keybinds, wallpaper, input, …).
+- [ ] **Split `state.rs`** (~9.8k) — desk/workspace, geometry, X11 lifecycle
+      modules; continue when touching those areas.
+- [ ] **Split / share CSS** — `metis-config` `css.rs` (~4.6k) by surface;
+      stop duplicating megasheets in `metis-settings` `theme.rs`; shared
+      GTK theme bootstrap helper across shell / settings / viewer /
+      screenshot / polkit-agent.
+- [ ] **Break up large UI modules** as touched — onboarding, dashboard,
+      bar, menu, settings network / desktop_widgets / gaming, screenshot
+      editor.
+- [ ] **Test floor** — migrate idempotence for every watched config;
+      tray/poll/net pure helpers; compositor grab policy around layer
+      popups. Shell (~22 tests) and settings (~2) are thin vs LOC.
+- [ ] **`cargo deny` tighten** — track `multiple-versions` allowlist; schedule
+      `unmaintained` / `unsound` from `none` → `warn` → `deny` as the
+      Smithay tree allows (`deny.toml`).
 
 ---
 
@@ -68,22 +165,25 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 
 ### Wave 3 — Graphics
 - [x] **3a** Primary→secondary transfer for hybrid outputs (CPU readback path;
-      local+no-blur fallback). **Urgent residual:** full GLES `MultiRenderer`
-      element typing / dmabuf path without CPU readback — see **Urgent priorities**.
+      local+no-blur fallback). **2026-09-27:** prefer GBM dmabuf bind/import
+      (CPU ExportMem fallback). **Urgent residual:** full GLES `MultiRenderer`
+      element typing — see **Urgent priorities**.
 - [ ] **3b** Default-on `wp_color_management_v1` — **blocked** on upstream
       wayland-rs server/sys ObjectData UAF; keep `METIS_COLOR_MGMT=1` opt-in
       ([docs/upstream/](../docs/upstream/README.md))
 - [x] **3c** Per-surface HDR **pass-through** into encode path (PQ/HLG hints;
-      mixed SDR+HDR approximate). **Urgent residual:** true per-surface HDR
-      **decode** + fuller tone-map — see **Urgent priorities** (pass-through ≠ decode).
+      mixed SDR+HDR approximate). **Partial (2026-09-27):** per-window PQ/HLG
+      decode into the SDR composite + HDR-only pass-through. **Residual:** float
+      scene-linear path + fuller tone-map — see **Urgent priorities**.
 
 ### Wave 4 — Remote
 - [x] **4a** `metis-remote rustdesk status|enable|disable` + firewall/Polkit +
       Settings; GRD remains default until native host ships
 - [x] **4b** Decision doc:
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md)
-- [ ] **4c** **Urgent:** Metis-native remote host protocol + client — see
-      **Urgent priorities** (GRD path stays supported meanwhile)
+- [ ] **4c** **Urgent residual:** Wayland/portal-backed FreeRDP host + GA
+      criteria — experimental FreeRDP shadow + Viewer polish landed 2026-09-27
+      (GRD stays default; see **Urgent priorities**)
 
 ### Wave 5 — Session startup
 - [x] `startup.json` — global enable + ordered desktop ids + per-entry enable/delay
@@ -611,7 +711,8 @@ Phase 3) — none of these are possible under the nested winit dev session.
       (hardware QA still welcome). **Still deferred (upstream):** default-on
       colour protocol
       ([wayland-rs#949](https://github.com/Smithay/wayland-rs/issues/949)).
-      **Urgent:** true per-surface HDR **decode** (3c pass-through is done;
+      **Urgent residual:** float scene-linear HDR composite + crop-aware decode
+      (per-window PQ/HLG→sRGB decode + smarter pass-through landed 2026-09-27;
       see **Urgent priorities**).
 ---
 
@@ -811,9 +912,10 @@ Mode. Track compatibility either way:
 **Status: complete for the GNOME RDP path (2026-07-25 security closeout).** Metis
 hardens session sharing via `metis-remote` + `gnome-remote-desktop` + portal
 clipboard/input. **Phase 15 §F:** first-party **viewer** + RustDesk Settings
-preset shipped; host remains GRD for now. **Urgent:** Metis-native host protocol
-(see **Urgent priorities** / Wave 4c). Optional `metis-remote` RustDesk backend
-still TBD. Deep per-app X11 isolation shipped as Phase 15 §E opt-in.
+preset shipped; host remains GRD by default. **2026-09-27:** experimental
+Metis-native FreeRDP shadow host + Viewer host grid / dedicated workspace
+(see **Urgent priorities** / Wave 4c). Deep per-app X11 isolation shipped as
+Phase 15 §E opt-in.
 
 Let you **remote into a Metis machine from another device** (laptop, tablet,
 phone) with full interactive control — not just “share screen” in a call.
@@ -1681,9 +1783,9 @@ re-doing ScreenCast dmabuf (already shipped).
 - [ ] **Default-on `wp_color_management_v1`** — only after upstream wayland-rs
       **server/sys** ObjectData UAF fix (keep `METIS_COLOR_MGMT=1` opt-in). No
       local ObjectData lifecycle wrapper in Metis (**blocked**, not urgent)
-- [ ] **Urgent: GLES `MultiRenderer` / zero-copy compositor path** — Phase 3
-      residual for hybrid multi-GPU *compositor* binding (ScreenCast dmabuf
-      already done). See **Urgent priorities**; profile before deep investment
+- [ ] **Urgent: GLES `MultiRenderer` element typing** — Phase 3 residual after
+      dmabuf transfer (2026-09-27). Generic `OutputStack` / deco / blur for
+      Smithay `MultiRenderer` (Anvil-style). See **Urgent priorities**.
 
 ### F. Explicitly deferred / rejected from review
 
@@ -1740,8 +1842,9 @@ out-kernelling CachyOS.
 
 - [x] **`gamescope_profiles` config retained** — Big Picture uses
       `gamescope_big_picture`
-- [ ] **Urgent: per-Steam-appid Gamescope profile UI** — Settings editor over
-      `gaming.json` → `gamescope_profiles` (see **Urgent priorities**)
+- [x] **Per-Steam-appid Gamescope profile UI** — Settings editor + spawn-time
+      wrap for Metis-launched `steam -applaunch` / `steam://rungameid` (sanitized
+      argv; never Steam VDF). See **Urgent priorities**.
 - [x] **Optional toggles** — `mangohud_for_games` / `gamescope_big_picture` in
       Settings, applied via env/wrapper when Metis starts Steam / Big Picture
 - [x] **Settings UI** for `extra_steam_paths` (Flatpak only) — path picker using

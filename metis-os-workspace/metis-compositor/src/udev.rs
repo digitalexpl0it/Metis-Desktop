@@ -199,6 +199,8 @@ pub struct BackendData {
     pub surfaces: HashMap<crtc::Handle, SurfaceData>,
     pub render_node: DrmNode,
     pub registration_token: RegistrationToken,
+    /// Cloned GBM device for cross-GPU transfer buffer allocation (Wave 3a dmabuf).
+    pub gbm: GbmDevice<DrmDeviceFd>,
 }
 
 impl UdevState {
@@ -223,6 +225,14 @@ impl UdevState {
             .get_mut(&id.device)?
             .surfaces
             .get_mut(&id.crtc)
+    }
+
+    /// GBM device for the backend whose render node matches `render_node`.
+    pub fn gbm_for_render_node(&self, render_node: DrmNode) -> Option<&GbmDevice<DrmDeviceFd>> {
+        self.backends
+            .values()
+            .find(|b| b.render_node == render_node)
+            .map(|b| &b.gbm)
     }
 
     pub fn output_id_by_name(&self, name: &str) -> Option<UdevOutputId> {
@@ -265,6 +275,7 @@ struct OpenedDevice {
     /// The DRM device fd, retained so we can set up `linux-drm-syncobj-v1`
     /// explicit sync against the GPU that imports client buffers.
     device_fd: DrmDeviceFd,
+    gbm: GbmDevice<DrmDeviceFd>,
 }
 
 pub fn init_udev(
@@ -318,6 +329,7 @@ pub fn init_udev(
                         surfaces: HashMap::new(),
                         render_node: opened.render_node,
                         registration_token: opened.drm_token,
+                        gbm: opened.gbm,
                     },
                 );
             }
@@ -673,6 +685,7 @@ fn open_device(
         GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
     );
     let exporter = GbmFramebufferExporter::new(gbm.clone(), NodeFilter::from(Some(render_node)));
+    let gbm_for_backend = gbm.clone();
 
     let manager = DrmOutputManager::new(
         drm,
@@ -696,6 +709,7 @@ fn open_device(
         manager,
         drm_token,
         device_fd,
+        gbm: gbm_for_backend,
     })
 }
 
@@ -812,12 +826,19 @@ fn render_local_output_frame(
     }
 
     let (frame_elements, clear): (Vec<OutputStack>, [f32; 4]) = {
-        state.refresh_hdr_content_flag();
-        let passthrough = hdr_active && state.hdr_client_content_visible;
+        let mode = state.hdr_content_mode_for_output(Some(output_name.as_str()));
+        let passthrough = mode.allows_passthrough(hdr_active);
         if passthrough {
             tracing::trace!(
                 output = %output_name,
-                "HDR client content visible — skipping SDR→HDR encode (pass-through)"
+                ?mode,
+                "HDR-only client content — skipping SDR→HDR encode (pass-through)"
+            );
+        } else if mode.needs_surface_decode(hdr_active) {
+            tracing::trace!(
+                output = %output_name,
+                ?mode,
+                "HDR surfaces decoded into SDR composite before encode"
             );
         }
         match crate::output_colour::apply_colour_post_pass(
@@ -1890,6 +1911,7 @@ impl MetisState {
                                     surfaces: HashMap::new(),
                                     render_node: opened.render_node,
                                     registration_token: opened.drm_token,
+                                    gbm: opened.gbm,
                                 },
                             );
                         }

@@ -355,17 +355,33 @@ impl MetisState {
                         .map(|c| Rectangle::new(c.loc - render_origin, c.size))
                 }
             });
-            let elems = AsRenderElements::<GlesRenderer>::render_elements::<
-                WaylandSurfaceRenderElement<GlesRenderer>,
-            >(window, renderer, loc, win_scale, alpha);
-            if let Some(clip) = clip {
-                for e in elems {
-                    if let Some(c) = CropRenderElement::from_element(e, win_scale, clip) {
-                        render_elements.push(OutputStack::CropSurface(c));
-                    }
-                }
+            // Mixed SDR+HDR (or HDR on an SDR panel): decode the window through
+            // PQ/HLG→sRGB before it joins the stack. Skip when clipped (scroll
+            // columns) — CropRenderElement cannot wrap TextureShaderElement.
+            let decoded = if clip.is_none()
+                && self.should_decode_hdr_surfaces(target.output_name)
+                && let Some(tf) = self.window_hdr_transfer(window)
+            {
+                self.hdr_encode
+                    .try_decode_window_element(renderer, window, loc, win_scale, alpha, tf)
             } else {
-                render_elements.extend(elems.into_iter().map(OutputStack::Surface));
+                None
+            };
+            if let Some(decoded) = decoded {
+                render_elements.push(OutputStack::HdrEncode(decoded));
+            } else {
+                let elems = AsRenderElements::<GlesRenderer>::render_elements::<
+                    WaylandSurfaceRenderElement<GlesRenderer>,
+                >(window, renderer, loc, win_scale, alpha);
+                if let Some(clip) = clip {
+                    for e in elems {
+                        if let Some(c) = CropRenderElement::from_element(e, win_scale, clip) {
+                            render_elements.push(OutputStack::CropSurface(c));
+                        }
+                    }
+                } else {
+                    render_elements.extend(elems.into_iter().map(OutputStack::Surface));
+                }
             }
             if let Some(id) = id
                 && let Some(spec) = deco_by_id.get(&id).filter(|s| !s.overlay)

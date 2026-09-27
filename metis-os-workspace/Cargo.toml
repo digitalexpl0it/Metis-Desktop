@@ -25,7 +25,7 @@ rust-version = "1.95"
 license = "MIT"
 # Product / crate SemVer. GitHub tags like v0.1.0.N map to Cargo 0.1.N
 # via scripts/sync-version.sh (also run by package-deb.sh).
-version = "0.1.18"
+version = "0.1.19"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

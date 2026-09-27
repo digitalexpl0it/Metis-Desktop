@@ -468,8 +468,8 @@ reference.
 
 Optional follow-up (remaining): default-on colour-management protocol (upstream
 wayland-rs ObjectData UAF — still opt-in `METIS_COLOR_MGMT=1`); fuller per-surface
-HDR tone-map; dmabuf MultiRenderer without CPU readback; per-Steam-appid
-Gamescope profile UI.
+HDR tone-map / float scene-linear; Anvil-style MultiRenderer element typing;
+Wayland/portal-backed Metis-native RDP host (experimental FreeRDP shadow landed).
 
 See [`metis-os-workspace/TODO.md`](metis-os-workspace/TODO.md) for the detailed
 roadmap, [`CHANGELOG.md`](CHANGELOG.md) for recent changes,

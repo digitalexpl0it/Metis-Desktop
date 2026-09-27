@@ -7,8 +7,40 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-09-27]
 
+### Added
+
+- **Metis Viewer saved-host grid** — FlowBox of saved RDP hosts (optional label,
+  Save / click-to-connect); passwords still never stored in `viewer.json`.
+- **FreeRDP sessions on their own workspace** — `wlfreerdp` / `xfreerdp` client
+  windows are moved to a dedicated desktop and that workspace is activated
+  (visible in Super+Tab Task View and Super+Alt+←/→ cycling).
+- **Experimental Metis-native RDP host** — Settings → Remote access and
+  `metis-remote native enable` start FreeRDP shadow (`freerdp-shadow-x11`) so
+  Metis Viewer can connect without GRD. GNOME Remote Desktop remains the
+  supported default; Wayland capture limitations are documented.
+- **Per-Steam-appid Gamescope profiles** — Settings → Gaming edits
+  `gaming.json` → `gamescope_profiles`. Metis-spawned
+  `steam -applaunch <id>` / `steam://rungameid/<id>` get
+  `gamescope [flags] --` when `gamescope` is on `PATH` (args sanitized; never
+  writes Steam Launch Options).
+- **Per-surface HDR decode (mixed SDR+HDR)** — windows that advertise PQ/HLG via
+  `wp_color_management_v1` are decoded to sRGB before compositing when they share
+  an output with SDR content (or when the panel is SDR). Fullscreen / HDR-only
+  on an HDR output still skips the encode pass (pass-through). Requires
+  `METIS_COLOR_MGMT=1`.
+
 ### Fixed
 
+- **Hybrid cross-GPU transfer** — primary→secondary present prefers a GBM
+  dmabuf bind/import path (no full-frame CPU `to_vec`); ExportMem remains the
+  fallback. Full Smithay `MultiRenderer` element typing still TODO.
+- **Portal ScreenCast / Screenshot consent** — xdg clients get an Allow/Deny
+  dialog before capture (was auto-approve). Set `METIS_PORTAL_AUTO_APPROVE=1`
+  to skip in automation.
+- **Mutter ScreenCast while locked** — `BeginCaptureOverlay` rejection aborts
+  the stream; lock UI is no longer pumpable.
+- **Mutter `ConnectToEIS` ungated** — inject FDs require a started Remote
+  Desktop session and Settings → Remote access enabled.
 - **Settings Check now ↔ updater / edge-bar badge** — Settings now writes the
   shared `~/.cache/metis/updates-snapshot.json` and sends `reload-updates-snapshot`
   so the bar icon and updater show the same list (no more “3 available” in

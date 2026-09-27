@@ -132,7 +132,8 @@ off by default (`xwayland_abstract_socket: false`).
 | Tool | Status | Capture / input | Notes |
 |------|--------|-----------------|-------|
 | **gnome-remote-desktop (RDP)** | **Supported (v1)** | Portal / PipeWire via `metis-portal`; EIS remote input | Settings toggle; text+image clipboard; LAN-only defaults; multi-monitor `RecordMonitor` selects by connector name |
-| **Metis Viewer (`metis-viewer`)** | **Supported (v1 client)** | FreeRDP → GRD host | GTK connect UI; argv spawn of `wlfreerdp3`/`xfreerdp…`; recent hosts in `viewer.json` (no passwords) |
+| **Metis native (FreeRDP shadow)** | **Experimental** | FreeRDP `freerdp-shadow-cli` (`freerdp-shadow-x11`) | `metis-remote native enable`; X11-oriented capture — may not mirror pure Wayland Metis; GRD remains default |
+| **Metis Viewer (`metis-viewer`)** | **Supported (v1 client)** | FreeRDP → GRD or Metis native RDP | GTK connect UI; saved-host card grid in `viewer.json` (no passwords); FreeRDP windows get a dedicated workspace |
 | **RustDesk** | **Settings preset (detect/open)** | Prefer portal/PipeWire on Wayland; own capture may fail | Settings → Remote access card; not in `metis-remote` — see below |
 | **wayvnc** | **Spike / unsupported** | Needs compositor screencopy or portal consumer | No Metis integration; Smithay capture path TBD |
 | **TigerVNC / x11vnc** | **Not applicable** | X11 | Metis is Wayland-first; do not expect these to attach to the DRM session |
@@ -231,6 +232,10 @@ sudo apt install -y xdg-desktop-portal xdg-desktop-portal-gtk
 `./run-metis.sh --install-session` installs `metis-portal` plus
 `metis.portal` / `metis-portals.conf` under `/usr/share/xdg-desktop-portal/`.
 The compositor starts `metis-portal` before `xdg-desktop-portal` on DRM boot.
+
+xdg Screenshot / ScreenCast requests show a Metis Allow/Deny dialog (session
+remembered per app). For headless CI set `METIS_PORTAL_AUTO_APPROVE=1`.
+`--capture-test` bypasses the dialog (direct compositor capture).
 
 To verify screenshot capture without Flameshot:
 

@@ -6,6 +6,7 @@ mod datetime;
 mod firewall;
 mod gnome_rdp;
 mod host;
+mod native_rdp;
 mod pkhelpers;
 mod rustdesk;
 mod updates;
@@ -26,6 +27,7 @@ pub use gnome_rdp::{
     status_snapshot,
 };
 pub use host::{hostname, lan_addresses};
+pub use native_rdp::NativeRdpStatus;
 pub use pkhelpers::{
     APT_ALLOWLIST, add_input_group, apt_install, ensure_polkit_agent, privileged_exe,
     ubuntu_drivers_install, validate_username,
@@ -44,7 +46,7 @@ pub use updates::{
     save_updates_snapshot_cache, updates_snapshot_cache_path,
 };
 
-use metis_config::{load_remote_config, save_remote_config};
+use metis_config::{RemoteBackend, load_remote_config, save_remote_config};
 use zeroize::Zeroize;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -78,10 +80,30 @@ fn default_true() -> bool {
     true
 }
 
-/// Read live status from gnome-remote-desktop and merge with `remote.json`.
+/// Read live status from the active backend and merge with `remote.json`.
 pub fn status() -> RemoteStatus {
     let cfg = load_remote_config();
     let fw = firewall::status();
+    if matches!(cfg.backend, RemoteBackend::MetisNative) {
+        let n = native_rdp::status();
+        return RemoteStatus {
+            available: n.installed,
+            running: n.running,
+            rdp_enabled: n.running && cfg.enabled,
+            port: n.port,
+            password_set: true, // FreeRDP shadow manages its own auth
+            username: None,
+            hostname: n.hostname,
+            addresses: n.addresses,
+            backend: "metis_native".into(),
+            config_enabled: cfg.enabled,
+            lan_only: cfg.lan_only,
+            firewall_applied: fw.applied,
+            firewall_backend: fw.backend,
+            firewall_detail: cfg.firewall_last_error.clone().or_else(|| n.error.clone()),
+            error: if n.installed { None } else { n.error },
+        };
+    }
     let mut snap = status_snapshot();
     snap.config_enabled = cfg.enabled;
     snap.lan_only = cfg.lan_only;
@@ -113,7 +135,19 @@ pub fn status() -> RemoteStatus {
 /// Returns once RDP is up and config is saved. LAN firewall apply (pkexec) runs
 /// in the background so Settings never sticks on "Starting…" waiting for admin.
 pub fn enable() -> Result<(), String> {
-    let mut cfg = load_remote_config();
+    let cfg = load_remote_config();
+    match cfg.backend {
+        RemoteBackend::MetisNative => return native_rdp::enable(),
+        RemoteBackend::RustDesk => {
+            return Err(
+                "RustDesk backend is selected — use `metis-remote rustdesk enable` or switch \
+                 backend to GNOME RDP / Metis native in Settings"
+                    .into(),
+            );
+        }
+        RemoteBackend::GnomeRdp => {}
+    }
+    let mut cfg = cfg;
     if !gnome_rdp::grdctl_available() {
         return Err(
             "gnome-remote-desktop is not installed (install the gnome-remote-desktop package)"
@@ -150,7 +184,26 @@ pub fn enable() -> Result<(), String> {
 /// update immediately. Stopping the daemon and clearing firewall rules runs
 /// in the background (firewall clear may need pkexec).
 pub fn disable() -> Result<(), String> {
-    let mut cfg = load_remote_config();
+    let cfg = load_remote_config();
+    if matches!(cfg.backend, RemoteBackend::MetisNative) {
+        let _ = native_rdp::pause();
+        let mut cfg = cfg;
+        cfg.enabled = false;
+        // Keep MetisNative selected so the experimental card still reflects intent;
+        // use `native disable` to restore GRD as the preferred backend.
+        save_remote_config(&cfg).map_err(|e| e.to_string())?;
+        std::thread::Builder::new()
+            .name("metis-remote-native-fw-clear".into())
+            .spawn(|| {
+                if let Err(err) = firewall::clear() {
+                    tracing::warn!(%err, "firewall clear after native disable failed");
+                }
+            })
+            .ok();
+        return Ok(());
+    }
+
+    let mut cfg = cfg;
     // Instant: stop accepting connections before anything else.
     if gnome_rdp::grdctl_available() {
         let _ = pause_sharing();
@@ -189,6 +242,10 @@ pub fn disable() -> Result<(), String> {
 
 /// Pause RDP listen while keeping `remote.json.enabled` (used on session lock).
 pub fn pause() -> Result<(), String> {
+    let cfg = load_remote_config();
+    if matches!(cfg.backend, RemoteBackend::MetisNative) {
+        return native_rdp::pause();
+    }
     if !gnome_rdp::grdctl_available() {
         return Ok(());
     }
@@ -198,6 +255,9 @@ pub fn pause() -> Result<(), String> {
 /// Resume RDP if config still wants sharing (used on session unlock).
 pub fn resume() -> Result<(), String> {
     let cfg = load_remote_config();
+    if matches!(cfg.backend, RemoteBackend::MetisNative) {
+        return native_rdp::resume();
+    }
     if !cfg.enabled || !gnome_rdp::grdctl_available() {
         return Ok(());
     }
@@ -210,6 +270,18 @@ pub fn resume() -> Result<(), String> {
         let _ = firewall::apply();
     }
     Ok(())
+}
+
+pub fn native_status() -> NativeRdpStatus {
+    native_rdp::status()
+}
+
+pub fn native_enable() -> Result<(), String> {
+    native_rdp::enable()
+}
+
+pub fn native_disable(kill: bool) -> Result<(), String> {
+    native_rdp::disable(kill)
 }
 
 /// Persist and optionally re-apply LAN-only firewall when sharing is active.

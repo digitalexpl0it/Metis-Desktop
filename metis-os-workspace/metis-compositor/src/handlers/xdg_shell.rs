@@ -465,6 +465,7 @@ impl MetisState {
             // already been positioned.
             self.maybe_autoplace_window(id);
         }
+        self.maybe_place_remote_viewer_window(id);
         if self.windows.is_ready(id) {
             use metis_protocol::CompositorEvent;
             self.event_bus

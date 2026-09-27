@@ -199,6 +199,33 @@ pub fn id_skips_maximize_wobble(app_id: &str) -> bool {
     false
 }
 
+/// FreeRDP client session windows (not Metis Viewer’s connect UI).
+pub fn id_looks_freerdp_client(app_id: &str) -> bool {
+    let id = norm_app_id(app_id);
+    if id.contains("metis.viewer") || id == "com.metis.viewer" {
+        return false;
+    }
+    id.contains("wlfreerdp")
+        || id.contains("xfreerdp")
+        || id.starts_with("org.freerdp.")
+        || id == "freerdp"
+        || id.ends_with(".freerdp")
+}
+
+#[cfg(test)]
+mod freerdp_detect_tests {
+    use super::id_looks_freerdp_client;
+
+    #[test]
+    fn detects_freerdp_not_viewer() {
+        assert!(id_looks_freerdp_client("wlfreerdp"));
+        assert!(id_looks_freerdp_client("org.freerdp.wlfreerdp"));
+        assert!(id_looks_freerdp_client("xfreerdp3"));
+        assert!(!id_looks_freerdp_client("com.metis.Viewer"));
+        assert!(!id_looks_freerdp_client("firefox"));
+    }
+}
+
 /// True when the app id belongs to a Chromium-based browser (native CSD on Wayland).
 pub fn id_looks_chromium_family(app_id: &str) -> bool {
     let id = norm_app_id(app_id);

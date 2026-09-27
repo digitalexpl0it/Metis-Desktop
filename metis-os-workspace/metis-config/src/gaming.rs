@@ -20,8 +20,49 @@ pub enum GraphicsMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameScopeProfile {
     pub steam_app_id: u32,
+    /// Extra `gamescope` flags before `--` (space-separated; no shell).
+    /// Empty means wrap with bare `gamescope -- <steam…>`.
     #[serde(default)]
     pub args: String,
+}
+
+/// Validate Gamescope flag text stored in `gaming.json`.
+///
+/// Rejects shell metacharacters so spawn stays argv-only (never `sh -c`).
+/// Returns a whitespace-normalized string, or `None` when unsafe.
+pub fn sanitize_gamescope_args(args: &str) -> Option<String> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return Some(String::new());
+    }
+    if trimmed.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '|'
+                | '&'
+                | '`'
+                | '$'
+                | '('
+                | ')'
+                | '<'
+                | '>'
+                | '\n'
+                | '\r'
+                | '\''
+                | '"'
+                | '\\'
+                | '\0'
+        )
+    }) {
+        return None;
+    }
+    if !trimmed
+        .bytes()
+        .all(|b| b.is_ascii_graphic() || b == b' ' || b == b'\t')
+    {
+        return None;
+    }
+    Some(trimmed.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,8 +84,8 @@ pub struct GamingConfig {
     /// Recommend native `.deb` Steam over Flatpak in setup wizards.
     #[serde(default = "default_true")]
     pub steam_prefer_native: bool,
-    /// Optional per-title Gamescope launch args (Steam app id → flags).
-    /// Deferred: not yet wired to per-app launches (Phase 19 leaves empty).
+    /// Per-title Gamescope wrap for Metis-spawned Steam launches
+    /// (`steam -applaunch <id>` / `steam://rungameid/<id>`). Never writes Steam VDF.
     #[serde(default)]
     pub gamescope_profiles: Vec<GameScopeProfile>,
     /// Extra host directories granted to Flatpak Steam via `--filesystem`
@@ -161,6 +202,35 @@ fn sanitize(cfg: GamingConfig) -> GamingConfig {
         }
     }
     out.extra_steam_paths = paths;
+
+    let mut profiles: Vec<GameScopeProfile> = Vec::new();
+    for mut profile in out.gamescope_profiles.drain(..) {
+        if profile.steam_app_id == 0 {
+            tracing::warn!("rejected gaming.json gamescope_profiles entry (app id 0)");
+            continue;
+        }
+        match sanitize_gamescope_args(&profile.args) {
+            Some(args) => profile.args = args,
+            None => {
+                tracing::warn!(
+                    app_id = profile.steam_app_id,
+                    args = %profile.args,
+                    "rejected gaming.json gamescope_profiles args (fail-closed)"
+                );
+                continue;
+            }
+        }
+        if let Some(existing) = profiles
+            .iter_mut()
+            .find(|p| p.steam_app_id == profile.steam_app_id)
+        {
+            *existing = profile;
+        } else {
+            profiles.push(profile);
+        }
+    }
+    profiles.sort_by_key(|p| p.steam_app_id);
+    out.gamescope_profiles = profiles;
     out
 }
 
@@ -314,5 +384,46 @@ mod tests {
         assert!(!prefer_dgpu_for_launch("gedit", &cfg));
         // Games still prefer dGPU.
         assert!(prefer_dgpu_for_launch("steam", &cfg));
+    }
+
+    #[test]
+    fn gamescope_args_sanitize() {
+        assert_eq!(
+            sanitize_gamescope_args("  -W 1920 -H 1080 -f  "),
+            Some("-W 1920 -H 1080 -f".into())
+        );
+        assert_eq!(sanitize_gamescope_args(""), Some(String::new()));
+        assert!(sanitize_gamescope_args("-W 1920; rm -rf /").is_none());
+        assert!(sanitize_gamescope_args("$(reboot)").is_none());
+        assert!(sanitize_gamescope_args("-e 'evil'").is_none());
+    }
+
+    #[test]
+    fn gamescope_profiles_dedupe_and_drop_bad() {
+        let cfg = GamingConfig {
+            gamescope_profiles: vec![
+                GameScopeProfile {
+                    steam_app_id: 570,
+                    args: "-f".into(),
+                },
+                GameScopeProfile {
+                    steam_app_id: 570,
+                    args: "-W 1280 -H 720".into(),
+                },
+                GameScopeProfile {
+                    steam_app_id: 0,
+                    args: "-f".into(),
+                },
+                GameScopeProfile {
+                    steam_app_id: 730,
+                    args: "-f; id".into(),
+                },
+            ],
+            ..GamingConfig::default()
+        };
+        let clean = sanitize(cfg);
+        assert_eq!(clean.gamescope_profiles.len(), 1);
+        assert_eq!(clean.gamescope_profiles[0].steam_app_id, 570);
+        assert_eq!(clean.gamescope_profiles[0].args, "-W 1280 -H 720");
     }
 }

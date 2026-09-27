@@ -3,6 +3,7 @@ mod capture;
 mod compositor_events;
 mod compositor_ipc;
 mod compositor_remote_input;
+mod consent;
 mod mutter;
 mod pipewire;
 mod power_profile;

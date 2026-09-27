@@ -305,21 +305,48 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
         button.suggested-action:disabled {{
             opacity: 0.45;
         }}
+        button.metis-viewer-secondary {{
+            min-height: 36px;
+            padding: 0 18px;
+            border-radius: {rs}px;
+            background-color: {raised};
+            color: {text};
+            border: 1px solid {border};
+        }}
 
-        .metis-viewer-recent {{
+        .metis-viewer-hosts-title {{
+            margin-top: 4px;
+        }}
+        .metis-viewer-hosts-grid {{
+            min-height: 80px;
+        }}
+        .metis-viewer-host-card {{
             background-color: {surface};
             border: 1px solid {border};
             border-radius: {rl}px;
+            padding: 10px 12px;
+            min-width: 160px;
+            min-height: 72px;
         }}
-        .metis-viewer-recent-row {{
-            padding: 8px 10px;
+        .metis-viewer-host-card:hover {{
+            border-color: {accent};
+            background-color: {raised};
         }}
-        .metis-viewer-recent-host {{
+        .metis-viewer-host-card-body {{
+            margin: 0;
+        }}
+        .metis-viewer-host-card-title {{
             font-weight: 600;
             color: {text};
         }}
-        .metis-viewer-recent-meta {{
+        .metis-viewer-host-card-meta {{
             color: {muted};
+            font-size: 12px;
+        }}
+        .metis-viewer-host-card-remove {{
+            min-width: 28px;
+            min-height: 28px;
+            padding: 0;
         }}
         "#
     )

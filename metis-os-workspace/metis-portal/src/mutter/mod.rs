@@ -205,6 +205,18 @@ impl RemoteDesktopSession {
 
     #[zbus(name = "ConnectToEIS")]
     async fn connect_to_eis(&mut self, _options: HashMap<&str, Value<'_>>) -> fdo::Result<OwnedFd> {
+        // Only a started Remote Desktop session may inject input — and only when
+        // the user has enabled sharing in Settings (`remote.json`).
+        if !self.started {
+            return Err(fdo::Error::Failed(
+                "ConnectToEIS requires a started Remote Desktop session".into(),
+            ));
+        }
+        if !metis_config::load_remote_config().enabled {
+            return Err(fdo::Error::AccessDenied(
+                "Remote Desktop is disabled in Metis Settings".into(),
+            ));
+        }
         tracing::info!(session = %self.session_id, "mutter shim: ConnectToEIS");
         let fd = eis::client_fd().map_err(fdo::Error::Failed)?;
         Ok(fd.into())
@@ -412,10 +424,15 @@ impl ScreenCastStream {
             .map_err(|e| fdo::Error::Failed(e.to_string()))?;
         self.node_id = Some(handle.node_id);
 
+        // Fail closed: never start the pump if the compositor refuses (session
+        // lock, etc.). Logging alone left lock UI streamable.
         if let Err(message) =
             compositor_ipc::begin_capture_overlay(Some("gnome-remote-desktop".into()))
         {
-            tracing::warn!(%message, "BeginCaptureOverlay rejected");
+            tracing::warn!(%message, "BeginCaptureOverlay rejected — aborting Mutter ScreenCast");
+            self.hub.pipewire.destroy_stream(handle.node_id);
+            self.node_id = None;
+            return Err(fdo::Error::Failed(message));
         }
 
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
