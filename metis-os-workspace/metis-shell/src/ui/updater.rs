@@ -768,15 +768,18 @@ fn begin_apply(
                 }
                 conffile_pending.set(true);
                 pulse_stop.set(true);
-                handles
-                    .status
-                    .set_text(&metis_i18n::tr("Configuration file conflict — choose an option…"));
+                handles.status.set_text(&metis_i18n::tr(
+                    "Configuration file conflict — choose an option…",
+                ));
                 handles.progress.set_text(Some("…"));
                 let applying = applying_cb.clone();
                 let install_btn = install_btn.clone();
                 let handles = handles.clone();
-                present_conffile_dialog(&parent_win, &package, config_path.as_deref(), move |choice| {
-                    match choice {
+                present_conffile_dialog(
+                    &parent_win,
+                    &package,
+                    config_path.as_deref(),
+                    move |choice| match choice {
                         None => {
                             applying.set(false);
                             install_btn.set_sensitive(true);
@@ -805,9 +808,9 @@ fn begin_apply(
                                     Ok(()) => {
                                         handles.progress.set_fraction(1.0);
                                         handles.progress.set_text(Some("100%"));
-                                        handles.status.set_text(&metis_i18n::tr(
-                                            "Updates installed",
-                                        ));
+                                        handles
+                                            .status
+                                            .set_text(&metis_i18n::tr("Updates installed"));
                                     }
                                     Err(err) => {
                                         handles.status.set_text(&err);
@@ -822,8 +825,8 @@ fn begin_apply(
                             });
                             services::updates_resolve_conffile(choice, on_done);
                         }
-                    }
-                });
+                    },
+                );
             }
             UpdateProgressEvent::Finished {
                 ok,
@@ -865,9 +868,9 @@ fn begin_apply(
                         if ok {
                             state.progress.set_text(Some("100%"));
                         }
-                        state.reboot_banner.set_visible(
-                            reboot_required || state.reboot_banner.is_visible(),
-                        );
+                        state
+                            .reboot_banner
+                            .set_visible(reboot_required || state.reboot_banner.is_visible());
                     }
                 });
             }
@@ -904,14 +907,18 @@ fn present_conffile_dialog(
         .cancel_button(2)
         .default_button(0)
         .build();
-    dialog.choose(Some(parent), Option::<&gtk::gio::Cancellable>::None, move |result| {
-        let choice = match result {
-            Ok(0) => Some(metis_remote::ConfFileChoice::KeepLocal),
-            Ok(1) => Some(metis_remote::ConfFileChoice::UsePackage),
-            _ => None,
-        };
-        on_choice(choice);
-    });
+    dialog.choose(
+        Some(parent),
+        Option::<&gtk::gio::Cancellable>::None,
+        move |result| {
+            let choice = match result {
+                Ok(0) => Some(metis_remote::ConfFileChoice::KeepLocal),
+                Ok(1) => Some(metis_remote::ConfFileChoice::UsePackage),
+                _ => None,
+            };
+            on_choice(choice);
+        },
+    );
 }
 
 fn flush_log(buffer: &gtk::TextBuffer, pending: &Rc<RefCell<String>>) {

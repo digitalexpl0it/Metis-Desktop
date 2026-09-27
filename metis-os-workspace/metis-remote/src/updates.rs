@@ -1077,7 +1077,11 @@ struct StreamLine {
 }
 
 /// Split on `\n` and `\r` so CR-style progress ("Downloading… 42%\r") is visible.
-fn drain_progress_pipe(pipe: impl Read, from_stderr: bool, tx: std::sync::mpsc::Sender<StreamLine>) {
+fn drain_progress_pipe(
+    pipe: impl Read,
+    from_stderr: bool,
+    tx: std::sync::mpsc::Sender<StreamLine>,
+) {
     let mut reader = pipe;
     let mut buf = Vec::with_capacity(256);
     loop {
@@ -1330,8 +1334,7 @@ fn is_conffile_prompt_error(text: &str) -> bool {
     let t = text.to_ascii_lowercase();
     t.contains("conffile prompt")
         || t.contains("end of file on stdin at conffile")
-        || (t.contains("configuration file")
-            && t.contains("what would you like to do about it"))
+        || (t.contains("configuration file") && t.contains("what would you like to do about it"))
 }
 
 fn parse_conffile_conflict(text: &str) -> Option<(String, Option<String>)> {

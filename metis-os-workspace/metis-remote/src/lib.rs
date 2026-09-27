@@ -38,11 +38,10 @@ pub use updates::{
     check_background as updates_check_background,
     check_background_from_config as updates_check_background_from_config,
     check_from_config as updates_check_from_config,
-    configure_pending_as_root as updates_configure_pending_as_root,
-    load_updates_snapshot_cache, reboot_required, refresh as updates_refresh,
-    refresh_as_root as updates_refresh_as_root, refresh_privileged,
-    resolve_conffile_conflict as updates_resolve_conffile_conflict, save_updates_snapshot_cache,
-    updates_snapshot_cache_path,
+    configure_pending_as_root as updates_configure_pending_as_root, load_updates_snapshot_cache,
+    reboot_required, refresh as updates_refresh, refresh_as_root as updates_refresh_as_root,
+    refresh_privileged, resolve_conffile_conflict as updates_resolve_conffile_conflict,
+    save_updates_snapshot_cache, updates_snapshot_cache_path,
 };
 
 use metis_config::{load_remote_config, save_remote_config};

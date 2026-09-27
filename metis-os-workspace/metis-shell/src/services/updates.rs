@@ -13,9 +13,10 @@ use std::time::{Duration, Instant};
 use gtk::glib;
 use metis_config::{UpdatesConfig, load_updates_config, save_updates_config};
 use metis_remote::{
-    ConfFileChoice, UpdateApplyScope, UpdateProgressEvent, UpdateSnapshot, updates_apply_scope,
+    ConfFileChoice, UpdateApplyScope, UpdateProgressEvent, UpdateSnapshot,
+    load_updates_snapshot_cache, save_updates_snapshot_cache, updates_apply_scope,
     updates_check_background_from_config, updates_check_from_config,
-    load_updates_snapshot_cache, save_updates_snapshot_cache, updates_resolve_conffile_conflict,
+    updates_resolve_conffile_conflict,
 };
 
 thread_local! {
@@ -231,9 +232,7 @@ fn run_check(manual: bool, force: bool) {
                     snap.firmware = prev.firmware.clone();
                     // Same for packages: a flaky soft pkcon must not wipe a
                     // list Settings / a full check just wrote.
-                    if snap.packages.is_empty()
-                        && !prev.packages.is_empty()
-                        && snap.error.is_none()
+                    if snap.packages.is_empty() && !prev.packages.is_empty() && snap.error.is_none()
                     {
                         snap.packages = prev.packages.clone();
                         snap.reboot_required = snap.reboot_required || prev.reboot_required;
@@ -392,7 +391,10 @@ fn prune_snapshot_after_apply(scope: &UpdateApplyScope) {
     fire_refresh();
 }
 
-fn scope_needs_full_recheck(scope: &UpdateApplyScope, sources: &metis_config::UpdateSources) -> bool {
+fn scope_needs_full_recheck(
+    scope: &UpdateApplyScope,
+    sources: &metis_config::UpdateSources,
+) -> bool {
     match scope {
         UpdateApplyScope::All => sources.flatpak || sources.fwupd,
         UpdateApplyScope::Selected {
@@ -450,10 +452,7 @@ pub fn start_apply_scope(
 }
 
 /// Finish a pending dpkg conffile conflict (`keep` / `package`) via pkexec.
-pub fn resolve_conffile(
-    choice: ConfFileChoice,
-    on_done: std::rc::Rc<dyn Fn(Result<(), String>)>,
-) {
+pub fn resolve_conffile(choice: ConfFileChoice, on_done: std::rc::Rc<dyn Fn(Result<(), String>)>) {
     let (tx, rx) = mpsc::sync_channel::<Result<(), String>>(1);
     std::thread::spawn(move || {
         let _ = tx.send(updates_resolve_conffile_conflict(choice));
