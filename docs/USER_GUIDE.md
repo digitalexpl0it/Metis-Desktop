@@ -11,23 +11,33 @@ For installation and build prerequisites, see [`UBUNTU_DEV.md`](UBUNTU_DEV.md).
 
 ## 1. Launching Metis
 
-You can run Metis as a **nested** session inside your current Wayland desktop
-(via the winit backend — ideal for development), or as a **standalone** DRM
-session from the greeter / a free VT (see also [`UBUNTU_DEV.md`](UBUNTU_DEV.md)
-and `./run-metis.sh --install-session`).
+**Start nested — it will not replace your current desktop.** Metis can run inside
+your existing Wayland session (GNOME, KDE, Sway, …) via the **winit** backend:
+you get a Metis window; closing it or running `./run-metis.sh --stop` leaves the
+host session untouched. That is the safest way to try the compositor, edge bar,
+server-side decorations, and Control Center before committing to a greeter entry
+or a standalone **DRM** session on its own TTY/GPU.
 
-### Nested (dev)
+| Mode | Backend | When to use |
+|------|---------|-------------|
+| **Nested** | winit | First try / daily development — window inside your current DE |
+| **Standalone** | DRM/KMS + libseat | Installed “Metis” session at the greeter, or `--session --drm` on a free VT |
+
+See also [`UBUNTU_DEV.md`](UBUNTU_DEV.md) and `./run-metis.sh --install-session`.
+
+### Nested (safe try / development)
 
 ```bash
 cd metis-os-workspace/metis-shell
 
-./run-metis.sh --session            # start the compositor + shell
+./run-metis.sh --session            # start the compositor + shell (winit window)
 ./run-metis.sh --build --session    # rebuild first, then start
-./run-metis.sh --stop               # stop a running session
+./run-metis.sh --stop               # stop nested Metis; host desktop unchanged
 ```
 
 The compositor opens a window that *is* your Metis desktop. The shell (edge bar)
-is spawned automatically.
+is spawned automatically. Nothing about your login manager or default session is
+modified until you explicitly install a session entry.
 
 **Wallpaper & briefing.** A nested dev session turns the wallpaper and login
 briefing off by default. Turn them on for the run:
@@ -250,11 +260,13 @@ time to close without capturing.
 
 From a script: `metis-cmd screenshot` (same as PrtSc).
 
-**Third-party apps** (Flameshot, browser pickers, etc.) still use the freedesktop
-**Screenshot** portal (`org.freedesktop.impl.portal.Screenshot`):
+**Third-party apps** (Flameshot, browser pickers, OBS / Discord / browser
+screen share, etc.) use the freedesktop portal stack through **`metis-portal`**:
+**Screenshot** (`org.freedesktop.impl.portal.Screenshot`) and **ScreenCast**
+(PipeWire, dmabuf when available):
 
-- The **first** capture from an app may show a permission dialog; grant it once
-  and later captures proceed silently.
+- The **first** capture / share from an app may show a permission dialog; grant
+  it once and later requests proceed silently.
 - Portal screenshots are saved as PNGs under `$XDG_RUNTIME_DIR/metis-screenshot-*.png`
   and returned to the requesting app as a `file://` URI.
 
@@ -269,15 +281,18 @@ ls -la /tmp/test.png
 
 ### Flatpak apps and games
 
-Flatpak apps run as ordinary Wayland clients in the same session and use the same
-**xdg-desktop-portal** stack as native apps. Metis does not ship a Flatpak-specific
-runner — installed Flatpaks launch like any other app.
+Metis is built as a **daily-driver Wayland desktop**: Flatpak, Electron, and
+browser apps use the same **xdg-desktop-portal** stack as on GNOME or KDE.
+**`metis-portal`** is Metis’s first-party backend (Settings, Screenshot,
+ScreenCast, Background, PowerProfileMonitor); file dialogs and notifications
+prefer **`xdg-desktop-portal-gtk`**. Flatpak apps are ordinary Wayland clients —
+Metis does not ship a separate Flatpak runner.
 
 **Host prerequisites** (Debian/Ubuntu shown; use your distro's packages otherwise):
 
 ```bash
 # Flatpak + the portal stack Metis relies on for file dialogs, notifications,
-# screenshots, and screencast.
+# screenshots, and screencast (metis-portal ships with the Metis session).
 sudo apt install flatpak xdg-desktop-portal xdg-desktop-portal-gtk
 flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 
@@ -305,9 +320,12 @@ right alongside native apps, and new installs appear live without a restart.
    often `--device=all` for gamepads (`flatpak override --user --device=all …`).
 2. **Portal prompts** — screenshot/screencast/file access; stored by system
    `xdg-permission-store` (the first-time Flameshot dialog).
-3. **Metis portal backends** — Settings, Screenshot, ScreenCast, Background, and
-   PowerProfileMonitor via `metis-portal`; idle-inhibit via legacy ScreenSaver
-   D-Bus names; file dialogs and notifications via the GTK portal backend.
+3. **Metis portal backends (`metis-portal`)** — first-party
+   `org.freedesktop.impl.portal.*` for **Settings**, **Screenshot**, **ScreenCast**,
+   **Background**, and **PowerProfileMonitor** (registered in `metis.portal` /
+   `metis-portals.conf`, started with the DRM session before `xdg-desktop-portal`).
+   Idle-inhibit uses legacy ScreenSaver / PowerManagement D-Bus names; file
+   dialogs and notifications use the GTK portal backend.
 
 #### Portal permission management
 

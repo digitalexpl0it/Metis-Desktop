@@ -214,8 +214,9 @@ backend follow-up; portal dmabuf zero-copy already landed for ScreenCast apps).
 - Switching away from the Metis VT (Ctrl+Alt+F3, etc.) typically pauses DRM
   presentation; remote viewers may freeze until you switch back.
 - **Multi-seat** (two users, two GPUs/seats) is unsupported.
-- Nesting (`run-metis.sh` without `--drm`) is for development only — do not use
-  it to validate remote desktop.
+- Nesting (`run-metis.sh` without `--drm`) is the **safe try path** and for
+  day-to-day development — it does not take over your host session. Do **not**
+  use nested mode to validate remote desktop / ScreenCast (those need DRM).
 
 ### Portal stack (standalone session)
 
@@ -329,7 +330,12 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-## Build & run
+## Build & run (nested — safe)
+
+**Recommended first step:** run Metis **nested** inside your current Wayland
+desktop. The **winit** backend opens Metis in a window; it does not take over
+DRM, your greeter, or your login session. Close the window or `./run-metis.sh
+--stop` to return to the host compositor unchanged.
 
 ```bash
 cd metis-os-workspace/metis-shell
@@ -344,8 +350,8 @@ METIS_VIRTUAL_OUTPUTS=2 ./run-metis.sh --session
 ```
 
 For day-to-day usage (keybinds, workspaces, scrolling layout, settings), see the
-[User Guide](USER_GUIDE.md).
-
+[User Guide](USER_GUIDE.md). When you are ready for a full GPU session, use
+[Standalone session](#standalone-session-run-on-a-real-ttygpu) below.
 ## Standalone session (run on a real TTY/GPU)
 
 Metis autodetects its backend: with `WAYLAND_DISPLAY`/`DISPLAY` set it nests

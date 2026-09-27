@@ -2,7 +2,9 @@
 
 > **Beta** — Metis is under active development. Expect rough edges: session setup,
 > window management, and configuration formats may change between releases. Bug
-> reports and feedback are welcome.
+> reports and feedback are welcome. For daily use, Flatpaks and screen-sharing
+> tools talk to Metis through a first-party **xdg-desktop-portal** backend
+> ([`metis-portal`](#xdg-integrations-daily-driver)).
 
 > **Metis** is a next-generation Wayland desktop environment built in Rust. The
 > **Metis compositor** owns the Wayland session, the window grid, and the
@@ -35,11 +37,54 @@ quits the app.
 
 ## Philosophy
 
-- **Performance first** — idiomatic, low-overhead Rust with `tokio` async and damage-driven rendering.
+- **Performance first** — idiomatic, low-overhead Rust with `tokio` async and
+  **damage-driven** GL rendering (redraw only what changed).
 - **Compositor-first** — a Smithay compositor owns the session; the shell is spawned by it.
 - **On-demand shell** — `wlr-layer-shell` overlays (edge bar, launcher, popovers,
   Notification Center, Control Center, optional desktop widgets) summoned when
   needed and torn down cleanly.
+- **Freedesktop-native** — first-party `xdg-desktop-portal` backend so Flatpaks,
+  Electron apps, browsers, and capture tools work like on GNOME/KDE — not a
+  compositor that only runs “native” Wayland clients.
+
+## Compositor polish
+
+Metis is a **Smithay** compositor written in safe Rust — designed for people who
+care about architecture *and* how the desktop looks and feels.
+
+| Feature | Why it matters |
+| ------- | -------------- |
+| **Damage-driven GL pipeline** | The compositor marks damage on input and commits and redraws only dirty regions — no busy-loop full-screen paint. Idle CPU stays low; interactive frames stay sharp. |
+| **Server-side decorations (SSD)** | Consistent Metis titlebars (close / minimize / maximize, theme tokens, light/dark) across apps — including stubborn Electron/Wine cases — instead of a patchwork of client chrome. |
+| **GTK4 Control Center** | Pull the edge bar toward the desktop (or click the grid icon) for a frosted system monitor: live charts, temperatures, searchable process tree. On-demand layer-shell — no permanent dashboard process. |
+| **Theme tokens end-to-end** | Accents, surfaces, and semantic colours from `themes/*.json` drive the shell, Settings, SSD, and portal Settings — ricing without forking the compositor. |
+| **Grid + scrolling desks** | Classic tiling grid *or* a niri/PaperWM-style scrolling strip per workspace (`Super`+`\`), with Task View (`Super`+`Tab`) for overview. |
+| **Hardware session when ready** | Nested **winit** for safe trials; DRM/KMS + libseat for a real greeter session — same compositor binary, two backends. |
+
+## XDG integrations (daily driver)
+
+Metis is meant to be a **daily Wayland session** for developers and gamers, not
+only a tiling demo. Session apps talk to the standard
+[`xdg-desktop-portal`](https://flatpak.github.io/xdg-desktop-portal/) stack;
+**`metis-portal`** is Metis’s implementation, started with the DRM session
+before `xdg-desktop-portal`.
+
+| Portal / service | Backend | What it unlocks |
+| ---------------- | ------- | --------------- |
+| **Settings** | `metis-portal` | Appearance / color-scheme for libadwaita, Electron, Flatpaks |
+| **Screenshot** | `metis-portal` | Flameshot, browsers, and other portal clients |
+| **ScreenCast** | `metis-portal` (PipeWire + dmabuf when available) | OBS, Discord, browsers, remote desktop capture |
+| **Background** | `metis-portal` | Sandboxed apps that request background activity |
+| **PowerProfileMonitor** | `metis-portal` | Apps that follow power / performance profiles |
+| **FileChooser / Notification / …** | `xdg-desktop-portal-gtk` (preferred) | Open/save dialogs, notifications for Flatpaks |
+| **Secret** | gnome-keyring (preferred) | Credential store for sandboxed apps |
+| **Idle inhibit** | compositor + ScreenSaver D-Bus | Games / video players that request “don’t sleep” |
+
+Flatpak apps launch like any other client (Wayland + portals); Metis adds Flatpak
+export dirs to `XDG_DATA_DIRS` so they appear in the launcher. Gaming setup can
+optimize Flatpak Steam/Lutris/Heroic overrides. Details:
+[User Guide — Flatpak apps and games](docs/USER_GUIDE.md#flatpak-apps-and-games)
+and [Screenshots](docs/USER_GUIDE.md#screenshots) (portal capture via `metis-portal`).
 
 ## Workspace layout
 
@@ -86,12 +131,49 @@ quits the app.
 ## Technology stack
 
 - **Language:** Rust (stable, edition 2024, MSRV 1.95), `tokio` async, `serde`/`serde_json` for JSON contracts.
-- **Compositor:** [Smithay](https://github.com/Smithay/smithay) with a `winit` nested backend for development; DRM/KMS session backend; `calloop` event loop; `image` for wallpaper decode; XWayland for X11 apps.
-- **Shell / UI:** GTK 4.18+ (`gtk4-rs` 0.11) with [`gtk4-layer-shell`](https://github.com/wmww/gtk4-layer-shell); `zbus` for the freedesktop notification daemon.
-- **IPC:** JSON over Unix sockets (`metis-protocol`) plus a runtime command file under `$XDG_RUNTIME_DIR/metis/`.
+- **Compositor:** [Smithay](https://github.com/Smithay/smithay) with **damage-driven**
+  GL rendering; **winit** nested backend for safe in-desktop trials; DRM/KMS +
+  libseat for greeter sessions; `calloop` event loop; server-side decorations;
+  XWayland for X11 apps.
+- **Shell / UI:** GTK 4.18+ (`gtk4-rs` 0.11) with [`gtk4-layer-shell`](https://github.com/wmww/gtk4-layer-shell);
+  on-demand Control Center / Notification Center / Task View; `zbus` for notifications.- **IPC:** JSON over Unix sockets (`metis-protocol`) plus a runtime command file under `$XDG_RUNTIME_DIR/metis/`.
+- **Portals:** first-party **`metis-portal`** (`xdg-desktop-portal` backend:
+  Settings, Screenshot, ScreenCast, Background, PowerProfileMonitor) plus
+  `xdg-desktop-portal-gtk` for FileChooser / notifications.
 - **Configuration:** JSON under `~/.config/metis/`.
 
 ## Quick start
+
+### Try nested first (safe — recommended)
+
+**You do not need to leave your current desktop.** Metis can run as a **nested
+session** inside GNOME, KDE, Sway, or any Wayland compositor via the **winit**
+backend: Metis opens in a window; closing that window (or `./run-metis.sh --stop`)
+returns you to your host session with nothing replaced. Use this to evaluate
+the edge bar, SSD, Control Center, and theming before installing a greeter entry
+or logging into a standalone DRM session.
+
+```bash
+git clone https://github.com/digitalexpl0it/Metis.git
+cd Metis
+./install.sh --deps-only          # or see docs/UBUNTU_DEV.md
+cd metis-os-workspace/metis-shell
+./run-metis.sh --build --session  # nested Metis in a window
+./run-metis.sh --stop             # leave nested Metis; host desktop unchanged
+```
+
+Optional polish while nested:
+
+```bash
+METIS_NO_WALLPAPER= METIS_NO_BRIEFING= ./run-metis.sh --session   # wallpaper + briefing
+METIS_VIRTUAL_OUTPUTS=2 ./run-metis.sh --session                 # fake dual-monitor
+```
+
+On GNOME, the host often owns **Super** — nested Metis may default to **Alt** as
+the modifier (`METIS_MOD=alt`). Details: [User Guide §1](docs/USER_GUIDE.md#1-launching-metis).
+
+When you are ready for a full session (own TTY / greeter), install and pick
+**Metis** at login — that path uses the **DRM/KMS** backend.
 
 ### Install from a `.deb` (Ubuntu / Debian)
 
@@ -133,27 +215,16 @@ cd Metis
 
 ### Build from source (dev)
 
-See [`docs/UBUNTU_DEV.md`](docs/UBUNTU_DEV.md), or `./install.sh --deps-only`.
+See [`docs/UBUNTU_DEV.md`](docs/UBUNTU_DEV.md). After deps, the same nested path
+as [Try nested first](#try-nested-first-safe--recommended) applies:
 
 ```bash
 cd metis-os-workspace/metis-shell
 ./run-metis.sh --build --session
 ```
 
-The nested session runs inside your existing Wayland session via the winit
-backend. Session mode disables the wallpaper and login briefing by default;
-re-enable them with:
-
-```bash
-METIS_NO_WALLPAPER= METIS_NO_BRIEFING= ./run-metis.sh --session
-```
-
-To simulate multiple monitors in the dev session, split the window into N
-side-by-side virtual outputs:
-
-```bash
-METIS_VIRTUAL_OUTPUTS=2 ./run-metis.sh --session
-```
+Standalone DRM (real GPU / greeter) is separate — `./run-metis.sh --install-session`
+then log out and pick **Metis**, or `./run-metis.sh --session --drm` from a free VT.
 
 ### Standalone session (real TTY/GPU)
 
@@ -226,7 +297,12 @@ Full walkthrough in the **[User Guide](docs/USER_GUIDE.md)**. The essentials:
 - **Screenshots** — **PrtSc** opens a native Metis overlay (Selection / Full screen /
   Window); **Shift+PrtSc** captures the full screen instantly; **Ctrl+PrtSc** starts in
   Window mode. **Esc** dismisses without capturing. Third-party apps (Flameshot, etc.)
-  still use the xdg-desktop-portal Screenshot interface via `metis-portal`.
+  use the standard **xdg-desktop-portal Screenshot** API through **`metis-portal`**.
+  Screen sharing (OBS, browsers, Discord, remote desktop) uses **ScreenCast** on the
+  same backend (PipeWire / dmabuf when available).
+- **Flatpak & portals** — Flatpaks are first-class: launcher integration, shared
+  portal stack (`metis-portal` + GTK portal), and Gaming → Optimize Flatpak for
+  Steam / Lutris / Heroic. See [XDG integrations](#xdg-integrations-daily-driver).
 - **Notification Center** — click the clock for a right-side panel (notifications,
   calendar events, world clocks / timer / alarms). Toasts appear top-right with a
   close button.
