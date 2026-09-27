@@ -164,6 +164,9 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
     let success = &t.semantic.success;
     let rl = t.radius_lg;
     let rs = t.radius_sm;
+    // Soft card wash: surface → slightly raised (no purple / glow).
+    let card_grad_a = surface;
+    let card_grad_b = raised;
     format!(
         r#"
         window,
@@ -210,6 +213,44 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             background-color: {bg};
         }}
 
+        .metis-viewer-rail {{
+            min-width: 56px;
+            padding: 14px 10px;
+            background-color: {surface};
+            border: none;
+        }}
+        .metis-viewer-rail-sep {{
+            background-color: {border};
+            min-width: 1px;
+        }}
+        .metis-viewer-rail-btn {{
+            min-width: 40px;
+            min-height: 40px;
+            padding: 0;
+            border-radius: {rs}px;
+            border: none;
+            background-color: transparent;
+            color: {muted};
+            -gtk-icon-size: 20px;
+        }}
+        .metis-viewer-rail-btn:hover {{
+            background-color: {raised};
+            color: {text};
+        }}
+        .metis-viewer-rail-btn:checked {{
+            background-color: {raised};
+            color: {accent};
+            box-shadow: inset 0 0 0 1px {border};
+        }}
+
+        .metis-viewer-toolbar {{
+            padding: 16px 20px 8px;
+        }}
+        .metis-viewer-page-title {{
+            font-size: 22px;
+            font-weight: 650;
+            color: {text};
+        }}
         .metis-viewer-title {{
             font-size: 20px;
             font-weight: 650;
@@ -228,6 +269,16 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             background-color: {surface};
             border: 1px solid {border};
             border-radius: {rl}px;
+            margin: 0 20px 12px;
+        }}
+        .metis-viewer-add-panel {{
+            margin-top: 4px;
+        }}
+        .metis-viewer-add-panel-header {{
+            padding: 12px 16px 4px;
+        }}
+        .metis-viewer-about-card {{
+            padding: 20px 18px;
         }}
         .metis-viewer-card-title {{
             font-size: 11px;
@@ -245,6 +296,14 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             font-weight: 600;
             color: {muted};
             margin-bottom: 4px;
+        }}
+        .metis-viewer-actions {{
+            padding: 4px 16px 14px;
+        }}
+        .metis-viewer-settings-value {{
+            font-size: 13px;
+            color: {text};
+            padding: 4px 16px 8px;
         }}
 
         entry, passwordentry {{
@@ -270,6 +329,7 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             border: 1px solid {warning};
             border-radius: {rl}px;
             padding: 12px 14px;
+            margin: 8px 16px;
         }}
         .metis-viewer-banner-title {{
             font-size: 13px;
@@ -289,6 +349,7 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
         .metis-viewer-status, .metis-viewer-ready, .metis-viewer-empty {{
             font-size: 12px;
             color: {muted};
+            padding: 0 16px 8px;
         }}
         .metis-viewer-status.error {{ color: {error}; font-weight: 500; }}
         .metis-viewer-status.ok {{ color: {success}; }}
@@ -314,29 +375,67 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             border: 1px solid {border};
         }}
 
-        .metis-viewer-hosts-title {{
-            margin-top: 4px;
+        .metis-viewer-hosts-scroll {{
+            background-color: {bg};
+        }}
+        .metis-viewer-hosts-body {{
+            padding: 8px 20px 24px;
         }}
         .metis-viewer-hosts-grid {{
             min-height: 80px;
         }}
+        .metis-viewer-empty-state {{
+            padding: 48px 24px;
+        }}
+        .metis-viewer-empty-icon {{
+            color: {muted};
+            opacity: 0.7;
+        }}
+        .metis-viewer-empty-title {{
+            font-size: 16px;
+            font-weight: 650;
+            color: {text};
+        }}
+
         .metis-viewer-host-card {{
+            background-image: linear-gradient(160deg, {card_grad_a} 0%, {card_grad_b} 100%);
             background-color: {surface};
             border: 1px solid {border};
             border-radius: {rl}px;
-            padding: 10px 12px;
-            min-width: 160px;
-            min-height: 72px;
+            padding: 12px 12px 12px 14px;
+            min-width: 200px;
+            min-height: 84px;
         }}
         .metis-viewer-host-card:hover {{
             border-color: {accent};
-            background-color: {raised};
+            background-image: linear-gradient(160deg, {card_grad_b} 0%, {surface} 100%);
         }}
         .metis-viewer-host-card-body {{
             margin: 0;
+            padding: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }}
+        .metis-viewer-host-card-body:hover {{
+            background: transparent;
+        }}
+        .metis-viewer-host-card-icon-wrap {{
+            min-width: 40px;
+            min-height: 40px;
+            border-radius: {rs}px;
+            background-image: linear-gradient(145deg, {raised} 0%, {surface} 100%);
+            border: 1px solid {border};
+        }}
+        .metis-viewer-host-card-icon-wrap image,
+        .metis-viewer-host-card-icon {{
+            color: {accent};
+            margin: 9px;
+            -gtk-icon-style: symbolic;
         }}
         .metis-viewer-host-card-title {{
-            font-weight: 600;
+            font-weight: 650;
+            font-size: 14px;
             color: {text};
         }}
         .metis-viewer-host-card-meta {{
@@ -347,6 +446,10 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             min-width: 28px;
             min-height: 28px;
             padding: 0;
+            color: {muted};
+        }}
+        .metis-viewer-host-card-remove:hover {{
+            color: {text};
         }}
         "#
     )
