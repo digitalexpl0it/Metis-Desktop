@@ -5,6 +5,33 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-09-27]
+
+### Fixed
+
+- **Settings Check now ↔ updater / edge-bar badge** — Settings now writes the
+  shared `~/.cache/metis/updates-snapshot.json` and sends `reload-updates-snapshot`
+  so the bar icon and updater show the same list (no more “3 available” in
+  Settings while the updater says up to date). Soft PackageKit checks no longer
+  wipe a non-empty package list.
+- **Appearance accents wiped on login** — stock `themes/{dark,light}.json` are
+  only seeded when missing; custom accent / semantic / font edits persist across
+  sessions.
+- **Polkit auth behind the updater** — `metis-polkit-agent` is a top-center
+  layer-shell Overlay (slide-down) with exclusive keyboard, so Authentication
+  Required stays above xdg windows without hiding the updater.
+- **Updater progress feedback** — PackageKit/apt progress is read from stdout and
+  stderr (including CR-style lines); the progress bar pulses until real percent
+  arrives.
+- **dpkg conffile conflicts** — interactive install prompts **Keep my version** /
+  **Use package version** (`pk-updates-configure`) instead of failing with
+  “end of file on stdin at conffile prompt”.
+
+### Changed
+
+- **Updater UI** — select-all / per-item Install, zebra rows, opaque theme-aware
+  chrome; deferred open check is a full sources pass only when nothing is pending.
+
 ## [2026-09-22]
 
 ### Changed

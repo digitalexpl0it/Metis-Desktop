@@ -108,14 +108,21 @@ Widgets appear in the order set by `bar.json#widgets`. The defaults:
 | **Notifications** | *(optional)* Legacy bell — opens the same Notification Center as the clock. Removed from the default bar layout in Phase 13. |
 | **Clock** | Date/time with unread badge. Click opens the **Notification Center** (right panel): notifications, calendar events, and calendar/tools (world clocks, stopwatch, timer, alarms). **Esc** closes. |
 
-**Software updates.** The shell checks on a schedule (default every 6 hours;
-configure under Settings → System → Updates). Checks are unprivileged (no
-password) — like GNOME Software, authentication is only required when you
-**Install**. When updates are found you get a notification with **Install** /
-**Later**, and the Updates icon appears on the edge bar. The updater shows
-packages by source, progress, an expandable live log, and a restart banner when
-`/var/run/reboot-required` (or PackageKit) says so. Flatpak and fwupd may show
-their own PolicyKit prompts when elevation is required.
+**Software updates.** After you log in, the shell runs a soft PackageKit check
+about **90 seconds** later, then again on the schedule under Settings → System →
+Updates (default **every 6 hours**). Checks are unprivileged (no password) —
+like GNOME Software, authentication is only required when you **Install**.
+**Settings → Check now** runs a full check (PackageKit + Flatpak + fwupd) and
+shares the result with the edge-bar Updates icon and the updater window via
+`~/.cache/metis/updates-snapshot.json`. When updates are found you get a
+notification with **Install** / **Later**, and the Updates icon appears on the
+edge bar. The updater lists packages with select-all / per-item Install, zebra
+rows, progress (with live log), and a restart banner when
+`/var/run/reboot-required` (or PackageKit) says so. Metis’s PolicyKit dialog
+slides down as a top-center overlay above other windows. If a package hits a
+modified config file under `/etc`, the updater asks **Keep my version** or
+**Use package version** instead of failing silently. Flatpak and fwupd may still
+show their own prompts when elevation is required.
 
 **Per-output bars.** With multiple outputs you can show the bar on **all
 displays** (each is independent and live) or **the primary display only** —
@@ -855,8 +862,9 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   output so HDR content is not double-transformed (mixed SDR+HDR is approximate).
   Rotation is still upcoming.
 - **Appearance** — Light/Dark style; accent, secondary, and semantic status
-  colors; font. (Wallpaper, edge bar, and window chrome live on their own pages
-  below.)
+  colors; font. Edits write `themes/dark.json` / `themes/light.json` and survive
+  logout (stock themes are only seeded when those files are missing). Wallpaper,
+  edge bar, and window chrome live on their own pages below.
 - **Background** — picture / solid colour / gradient, applied live and remembered
   in `wallpaper.json`, with optional per-output picture overrides. Changes
   **crossfade** (~280 ms) from the previous background — the desktop never goes
@@ -931,7 +939,7 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   then a default icon. Changing your picture also writes `~/.face.icon` and
   calls AccountsService `SetIconFile` (privileged copy fallback). Privileged
   actions show Metis’s PolicyKit password dialog (`metis-polkit-agent` +
-  `metis-remote`).
+  `metis-remote`) — a top-center layer-shell overlay above other apps.
 - **Date & Time** — automatic date/time (NTP), automatic timezone, manual
   clock/timezone when auto is off, 12/24-hour bar format, and calendar first day
   of the week (`datetime.json`).
@@ -986,13 +994,15 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   nested dev. Open with `metis-cmd settings remote` or `metis-cmd viewer`.
 - **Sound** — default output and input device selection (bar volume widget
   unchanged).
-- **Updates** — automatic check interval, source toggles (PackageKit / Flatpak /
-  fwupd), notify-on-available, optional PackageKit security auto-install,
-  **Check now**, and **Open updater** (asks the running shell via
-  `show-updater`). Preferences live in `updates.json`. Installing system
-  packages uses PackageKit (`pkcon`) or a polkit-backed distro fallback;
-  Flatpak/fwupd use their own auth when needed. A restart banner appears when
-  the OS marks reboot-required.
+- **Updates** — automatic checks (default every 6 hours; first soft check ~90s
+  after login), source toggles (PackageKit / Flatpak / fwupd), notify-on-available,
+  optional PackageKit security auto-install, **Check now** (full sources — also
+  refreshes the edge-bar badge and updater list), and **Open updater**
+  (`show-updater`). Preferences live in `updates.json`; the pending package list
+  is shared in `~/.cache/metis/updates-snapshot.json`. Installing system packages
+  uses PackageKit (`pkcon`) or a polkit-backed distro fallback; config-file
+  conflicts open a Keep / Use package dialog. Flatpak/fwupd use their own auth
+  when needed. A restart banner appears when the OS marks reboot-required.
 - **Reset** — factory-reset Metis preferences under `~/.config/metis` with an
   optional backup to `~/metis-config-backup-…`, keep custom themes (not stock
   dark/light), and optionally run first-run setup again. Confirm before wipe;
@@ -1260,7 +1270,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `bar.json` | Edge bar position/size/opacity/blur, widget order, workspaces, borders, default layout |
 | `clock.json` | World clocks and alarms |
 | `calendars.json` | Calendar accounts (no passwords — secrets in Keyring / Secret Service) |
-| `themes/dark.json`, `themes/light.json` | Design tokens — accents, semantic colors, `text_on_accent`, shadows/glows |
+| `themes/dark.json`, `themes/light.json` | Design tokens — accents, semantic colors, `text_on_accent`, shadows/glows (seeded once; your edits are kept across logins) |
 | `config.json` | Active theme, onboarding state, briefing-on-login |
 | `menu.json` | App launcher layout style, feature toggles, terminal / file-manager defaults, and pinned apps |
 | `datetime.json` | Auto-timezone preference and calendar first day of week |
@@ -1274,7 +1284,8 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `keybinds.json` | Desktop shortcuts (chords → actions); browse in Settings → Shortcuts, edit under Keyboard → Shortcuts |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action, dim-on-battery (compositor overlay) |
 | `startup.json` | Session startup apps: master enable + desktop ids (empty by default; Settings → Startup) |
-| `updates.json` | Software updates: enabled, check interval, snooze, notify, auto-install security, PackageKit/Flatpak/fwupd sources, last check/error |
+| `updates.json` | Software updates prefs: enabled, check interval, snooze, notify, auto-install security, PackageKit/Flatpak/fwupd sources, last check/error |
+| *(cache)* `~/.cache/metis/updates-snapshot.json` | Pending update list shared by Settings Check now, the edge-bar badge, and the updater |
 | `remote.json` | Desktop sharing: enabled, backend (`gnome_rdp` default / `rustdesk`), auto-start, LAN-only + firewall state |
 | `dashboard.json` | Control Center: enabled, widgets, height %, refresh, confirm-before-kill, process monitor |
 | `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, `extra_steam_paths`, Metis MangoHud/Gamescope toggles |
@@ -1346,13 +1357,15 @@ changes live.
 | gdbus request path "does not exist" | Portal request objects are ephemeral — trigger a fresh `Screenshot` call; use `gdbus monitor --session --dest org.freedesktop.portal.Desktop` *before* the call to see the `Response` signal |
 | Bluetooth shows stale battery | Many devices only refresh over BT on reconnect; install **Solaar** for Logitech charging state, or use a Unifying/Bolt receiver |
 | Session won't start / behaves oddly | `./run-metis.sh --stop` then `./run-metis.sh --build --session` |
-| Theme looks wrong | Delete `~/.config/metis/themes/*.json` and restart to regenerate, or use **Settings → System → Reset** |
+| Theme looks wrong | Delete `~/.config/metis/themes/*.json` and restart to regenerate stock tokens (this resets custom accents), or use **Settings → System → Reset** |
 | Want factory defaults | **Settings → System → Reset** (backup first); then log out and sign back in |
 | Verify the shell is reachable | `./run-metis.sh --verify` |
 | Compare compositor vs shell grid | `./run-metis.sh --verify-grid` |
 | Remote desktop toggle greyed out | Install `gnome-remote-desktop`; set a password on **Settings → Remote access** before enabling |
 | LAN firewall not applied / Retry times out | Install `nftables` (or active `ufw`); ensure `metis-polkit-agent` is running (`ps` / session logs); use **Retry firewall apply** under Security, or `pkexec metis-remote firewall apply`. On polkit 127+, confirm `systemctl is-active polkit-agent-helper.socket` |
-| PolicyKit password dialog missing / auth fails | Confirm `metis-polkit-agent` is running; kill competing GNOME/KDE agents if register fails. Helper path: socket `/run/polkit/agent-helper.socket` or setuid `polkit-agent-helper-1` |
+| PolicyKit password dialog missing / auth fails | Confirm `metis-polkit-agent` is running; kill competing GNOME/KDE agents if register fails. Helper path: socket `/run/polkit/agent-helper.socket` or setuid `polkit-agent-helper-1`. Auth is a top-center layer-shell overlay — it should sit above the updater and other apps |
+| Settings says updates available but updater / bar icon empty | Rebuild/reinstall shell + settings (shared `updates-snapshot.json`). Use **Check now**, then **Open updater**; the badge should match |
+| Update install stops on a config-file prompt | The updater should offer **Keep my version** / **Use package version**. If packages were left half-configured from an older build: `sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --fix-broken install` |
 | User list shows default icon instead of DE picture | Metis reads `~/.face`, `~/.face.icon`, then `/var/lib/AccountsService/icons/<username>`. Set a picture in Settings → Users or ensure the AccountsService icon exists and is world-readable |
 | RDP connects but screen is black | Confirm you are on a DRM session (not nested dev); unlock if the session is locked; check `metis-remote status` and PipeWire/portal stack |
 | `metis-remote` not found | Package may be missing — `dpkg -l metis-desktop` and reinstall with `sudo apt install ./metis-desktop_*.deb`. Dev trees: `./run-metis.sh --install-session` |

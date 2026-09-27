@@ -113,13 +113,14 @@ Metis integration: `~/.config/metis/remote.json` + `metis-remote
 {status|enable|disable|autostart|set-credentials|firewall|…}`; Settings page
 **Remote access**; `metis-session` calls `metis-remote autostart` when enabled.
 LAN-only firewall apply uses timed `pkexec` — Metis starts `metis-polkit-agent`
-with the session so the admin password dialog can appear (no third-party
-PolicyKit agent required). Users / Date & Time settings use the same agent with
-actions in `packaging/polkit/org.metis.policy` (install to
+with the session so the admin password dialog can appear as a top-center
+layer-shell overlay (no third-party PolicyKit agent required). Users / Date &
+Time / Updates settings use the same agent with actions in
+`packaging/polkit/org.metis.policy` (install to
 `/usr/share/polkit-1/actions/org.metis.policy` when updating `metis-remote`).
 On Ubuntu polkit 127+, keep `polkit-agent-helper.socket` enabled so the agent
 can authenticate via `/run/polkit/agent-helper.socket` without a setuid helper.
-See USER_GUIDE → Remote desktop / Users.
+See USER_GUIDE → Remote desktop / Users / Updates.
 
 **XWayland:** default one shared server (`xwayland_mode: shared`). Opt-in
 `xwayland_mode: isolated` in `config.json` starts a second gaming bucket
@@ -441,7 +442,7 @@ Created later, on demand:
 | Layer surfaces invisible | Confirm Wayland session + `echo $WAYLAND_DISPLAY` |
 | Missing layer-shell | Install `libgtk4-layer-shell-dev` (Ubuntu 26.04+ / Debian 13+), or `METIS_LAYER_SHELL_FROM_SOURCE=1 ./install.sh --deps-only` |
 | Shell hangs on startup | Rebuild compositor + shell (`./run-metis.sh --build --session`) |
-| Theme not applied | Delete `~/.config/metis/themes/*.json` and restart to regenerate |
+| Theme not applied | Delete `~/.config/metis/themes/*.json` and restart to regenerate stock tokens (resets custom accents). Login no longer overwrites existing theme files. |
 | Settings scroll freezes on Windows/Display (26.04 / hybrid GPU) | Rebuild/reinstall `metis-settings` (2026-09-19 Cairo GSK default). Test GPU GSK with `METIS_SETTINGS_GSK_RENDERER=gl` |
 | Settings closes but process stays (`pgrep metis-settings`) | Rebuild/reinstall `metis-settings` (2026-09-19 quit-on-close). Sheet **X** returns to Home; window close exits the app |
 | Gtk theme parser warnings on Settings open | Expected noise from the shared shell stylesheet (unsupported CSS props / `color-mix`). Harmless — ignore unless the UI looks wrong |

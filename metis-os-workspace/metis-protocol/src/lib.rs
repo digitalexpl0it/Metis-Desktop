@@ -580,6 +580,7 @@ pub const BAR_RUNTIME_VERBS: &[&str] = &[
     "optimize-gaming",
     "show-onboarding",
     "show-updater",
+    "reload-updates-snapshot",
     "settings",
     "window-switcher-next",
     "window-switcher-prev",
@@ -885,6 +886,7 @@ mod tests {
         assert!(parse_runtime_command("hw volume-up", BAR_RUNTIME_VERBS).is_ok());
         assert!(parse_runtime_command("show-onboarding", BAR_RUNTIME_VERBS).is_ok());
         assert!(parse_runtime_command("show-updater", BAR_RUNTIME_VERBS).is_ok());
+        assert!(parse_runtime_command("reload-updates-snapshot", BAR_RUNTIME_VERBS).is_ok());
         assert!(parse_runtime_command("rm -rf /", BAR_RUNTIME_VERBS).is_err());
         assert!(parse_runtime_command("EndSession", BAR_RUNTIME_VERBS).is_err());
         assert!(

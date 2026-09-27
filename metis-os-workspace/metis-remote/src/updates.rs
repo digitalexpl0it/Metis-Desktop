@@ -4,7 +4,7 @@
 //! `pkexec metis-remote pk-updates-*`. Flatpak/fwupd use their own polkit when needed.
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::SyncSender;
 use std::thread;
@@ -61,6 +61,40 @@ impl UpdateSnapshot {
     pub fn is_empty(&self) -> bool {
         self.total_count() == 0
     }
+}
+
+/// Shared pending-updates list for Settings, the edge-bar icon, and the updater.
+///
+/// Lives under `$XDG_CACHE_HOME/metis/updates-snapshot.json` (same path the
+/// shell has always used). Settings "Check now" must write here so the bar
+/// icon and updater see the same list.
+pub fn updates_snapshot_cache_path() -> PathBuf {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    base.join("metis").join("updates-snapshot.json")
+}
+
+pub fn load_updates_snapshot_cache() -> Option<UpdateSnapshot> {
+    let path = updates_snapshot_cache_path();
+    let text = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+pub fn save_updates_snapshot_cache(snap: &UpdateSnapshot) -> std::io::Result<()> {
+    let path = updates_snapshot_cache_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let json = serde_json::to_vec_pretty(snap).map_err(std::io::Error::other)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, &path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

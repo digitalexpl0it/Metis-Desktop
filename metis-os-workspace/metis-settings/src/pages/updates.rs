@@ -5,7 +5,10 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use metis_config::{UpdatesConfig, load_updates_config, save_updates_config};
 use metis_i18n::tr;
-use metis_remote::{UpdateSnapshot, updates_check_from_config};
+use metis_remote::{
+    UpdateSnapshot, load_updates_snapshot_cache, save_updates_snapshot_cache,
+    updates_check_from_config,
+};
 
 use crate::bg;
 use crate::runtime;
@@ -176,6 +179,11 @@ pub fn build() -> gtk::Widget {
                     saved.last_check = Some(chrono::Local::now());
                     saved.last_error = snap.error.clone();
                     let _ = save_updates_config(&saved);
+                    // Share the list with the shell edge-bar icon + updater.
+                    if let Err(err) = save_updates_snapshot_cache(&snap) {
+                        tracing::warn!(%err, "failed to cache updates snapshot");
+                    }
+                    runtime::send("reload-updates-snapshot");
                     apply_status(&sections_done, &saved, Some(&snap));
                 },
             );
@@ -207,7 +215,9 @@ fn apply_config(sections: &Sections, cfg: &UpdatesConfig) {
     sections.pk.set_active(cfg.sources.packagekit);
     sections.flatpak.set_active(cfg.sources.flatpak);
     sections.fwupd.set_active(cfg.sources.fwupd);
-    apply_status(sections, cfg, None);
+    // Prefer the shared cache so the page matches the bar / updater.
+    let snap = load_updates_snapshot_cache();
+    apply_status(sections, cfg, snap.as_ref());
 }
 
 fn apply_status(sections: &Sections, cfg: &UpdatesConfig, snap: Option<&UpdateSnapshot>) {
@@ -238,6 +248,10 @@ fn apply_status(sections: &Sections, cfg: &UpdatesConfig, snap: Option<&UpdateSn
                     .replace("%1", &n.to_string()),
             );
         }
+    } else {
+        sections
+            .status
+            .set_text(&tr("No recent check — tap Check now."));
     }
 }
 

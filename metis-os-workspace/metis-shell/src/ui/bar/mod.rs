@@ -723,7 +723,14 @@ fn watch_compositor_dismiss() {
                     }
                 }
                 "show-onboarding" => crate::ui::onboarding::show(),
-                "show-updater" => crate::ui::updater::show(),
+                "show-updater" => {
+                    // Prefer any snapshot Settings just wrote before painting.
+                    crate::services::updates_reload_snapshot_from_disk();
+                    crate::ui::updater::show();
+                }
+                "reload-updates-snapshot" => {
+                    crate::services::updates_reload_snapshot_from_disk();
+                }
                 "settings" => {
                     let program = if arg.trim().is_empty() {
                         "metis-settings".to_string()

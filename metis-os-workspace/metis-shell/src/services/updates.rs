@@ -7,7 +7,6 @@
 //! fwupd are only probed on manual checks (Settings "Check now").
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -16,7 +15,7 @@ use metis_config::{UpdatesConfig, load_updates_config, save_updates_config};
 use metis_remote::{
     ConfFileChoice, UpdateApplyScope, UpdateProgressEvent, UpdateSnapshot, updates_apply_scope,
     updates_check_background_from_config, updates_check_from_config,
-    updates_resolve_conffile_conflict,
+    load_updates_snapshot_cache, save_updates_snapshot_cache, updates_resolve_conffile_conflict,
 };
 
 thread_local! {
@@ -50,36 +49,13 @@ const FIRST_AUTO_CHECK_DELAY: Duration = Duration::from_secs(90);
 /// How often we look at `last_check` to decide whether a check is due.
 const AUTO_CHECK_POLL: Duration = Duration::from_secs(15 * 60);
 
-fn snapshot_cache_path() -> PathBuf {
-    glib::user_cache_dir()
-        .join("metis")
-        .join("updates-snapshot.json")
-}
-
 fn load_cached_snapshot() -> Option<UpdateSnapshot> {
-    let text = std::fs::read_to_string(snapshot_cache_path()).ok()?;
-    match serde_json::from_str(&text) {
-        Ok(snap) => Some(snap),
-        Err(err) => {
-            tracing::warn!(%err, "updates snapshot cache unreadable — ignoring");
-            None
-        }
-    }
+    load_updates_snapshot_cache()
 }
 
 fn save_cached_snapshot(snap: &UpdateSnapshot) {
-    let path = snapshot_cache_path();
-    let result = (|| -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let json = serde_json::to_vec(snap).map_err(std::io::Error::other)?;
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(tmp, &path)
-    })();
-    if let Err(err) = result {
-        tracing::warn!(%err, path = %path.display(), "could not cache updates snapshot");
+    if let Err(err) = save_updates_snapshot_cache(snap) {
+        tracing::warn!(%err, "could not cache updates snapshot");
     }
 }
 
@@ -123,6 +99,18 @@ fn set_snapshot(snap: UpdateSnapshot) {
     save_cached_snapshot(&snap);
     SNAPSHOT.with(|s| *s.borrow_mut() = snap);
     fire_refresh();
+}
+
+/// Apply a snapshot written by Settings "Check now" (or any other process).
+pub fn reload_snapshot_from_disk() {
+    if let Some(snap) = load_cached_snapshot() {
+        let count = snap.total_count();
+        SNAPSHOT.with(|s| *s.borrow_mut() = snap);
+        // Settings already stamped last_check; still refresh the icon / updater.
+        let cfg = load_updates_config();
+        maybe_notify(&cfg, count);
+        fire_refresh();
+    }
 }
 
 /// Call once from the bar init path. Restores the cached snapshot (no
@@ -234,6 +222,15 @@ fn run_check(manual: bool, force: bool) {
                     let prev = s.borrow();
                     snap.flatpaks = prev.flatpaks.clone();
                     snap.firmware = prev.firmware.clone();
+                    // Same for packages: a flaky soft pkcon must not wipe a
+                    // list Settings / a full check just wrote.
+                    if snap.packages.is_empty()
+                        && !prev.packages.is_empty()
+                        && snap.error.is_none()
+                    {
+                        snap.packages = prev.packages.clone();
+                        snap.reboot_required = snap.reboot_required || prev.reboot_required;
+                    }
                 });
             }
             let count = snap.total_count();

@@ -106,11 +106,13 @@ pub fn show() {
             *cell.borrow_mut() = Some(state);
         });
     }
-    // Defer the soft check so opening the window never races PackageKit I/O
-    // against the first pointer frame.
-    glib::timeout_add_local_once(std::time::Duration::from_secs(2), || {
-        services::updates_request_check(false);
-    });
+    // Soft re-check only when we have nothing pending — otherwise a PackageKit-only
+    // pass can blank a list Settings just found (Flatpak/fwupd or a flaky pkcon).
+    if services::updates_pending_count() == 0 {
+        glib::timeout_add_local_once(std::time::Duration::from_secs(2), || {
+            services::updates_request_check(true);
+        });
+    }
 }
 
 /// Settings → Appearance sends `reload-theme`; refresh the USER-priority opaque

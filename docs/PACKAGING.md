@@ -173,7 +173,7 @@ Nix: [`.github/workflows/nix-flake.yml`](../.github/workflows/nix-flake.yml).
 | `/usr/share/xdg-desktop-portal/…` | Portal backend |
 | `/usr/share/applications/metis-*.desktop` + icons | Settings / Viewer |
 | `/usr/share/metis/{wallpapers,widgets,locale}` | Assets / i18n |
-| `/usr/share/polkit-1/actions/org.metis.policy` | Polkit actions for `metis-remote` |
+| `/usr/share/polkit-1/actions/org.metis.policy` | Polkit actions for `metis-remote` (accounts, datetime, firewall, updates apply/configure, …) |
 | `/usr/bin/metis-polkit-agent` / `/usr/libexec/metis-polkit-agent` | Metis PolicyKit auth agent (session password dialogs) |
 | `/etc/pam.d/metis` | Lock-screen PAM |
 
