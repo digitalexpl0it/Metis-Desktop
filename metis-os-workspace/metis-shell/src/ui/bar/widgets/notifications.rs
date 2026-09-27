@@ -102,6 +102,7 @@ where
         button.connect_clicked(move |_| {
             crate::services::invoke_action(id, &key);
             crate::services::close_notification(id, 2);
+            crate::services::dismiss_notification_by_dbus_id(id);
             on_done();
         });
         row.append(&button);
@@ -115,8 +116,9 @@ where
         let id = notif.id;
         let on_done = on_done.clone();
         button.connect_clicked(move |_| {
-            launch_desktop_entry(&entry);
+            open_desktop_entry(&entry);
             crate::services::close_notification(id, 2);
+            crate::services::dismiss_notification_by_dbus_id(id);
             on_done();
         });
         row.append(&button);
@@ -126,7 +128,43 @@ where
     any.then_some(row)
 }
 
-pub(crate) fn launch_desktop_entry(entry: &str) {
+/// Focus a running window for `desktop_entry` when possible; otherwise launch.
+pub(crate) fn open_desktop_entry(entry: &str) {
+    use crate::services::applications::{self, entry_matches_app_id};
+    use crate::services::windows;
+
+    if let Some(app) = applications::resolve_entry_for_id(entry) {
+        let snap = windows::snapshot();
+        let mut matches: Vec<u32> = snap
+            .windows
+            .iter()
+            .filter(|w| {
+                w.app_id
+                    .as_deref()
+                    .is_some_and(|aid| entry_matches_app_id(&app, aid))
+            })
+            .map(|w| w.id)
+            .collect();
+        if !matches.is_empty() {
+            // Prefer the most recently focused matching window.
+            matches.sort_by_key(|id| {
+                snap.focus_mru
+                    .iter()
+                    .position(|m| m == id)
+                    .unwrap_or(usize::MAX)
+            });
+            let id = matches[0];
+            if let Err(err) = crate::compositor::activate_window(id) {
+                tracing::warn!(%err, id, "notify: failed to focus running app");
+            } else {
+                return;
+            }
+        }
+        applications::launch_id(&app.id);
+        return;
+    }
+
+    // Last resort: GIO launch (no window match without a resolved entry).
     use gio::prelude::*;
     let candidates = [entry.to_string(), format!("{entry}.desktop")];
     for id in candidates {
@@ -138,4 +176,51 @@ pub(crate) fn launch_desktop_entry(entry: &str) {
         }
     }
     tracing::warn!(desktop = %entry, "notify: no .desktop entry found to open");
+}
+
+/// Icon for toast / notification-center cards: prefer the app's icon, then the
+/// freedesktop `app_icon`, then a kind glyph. No circular glow — kind tint is
+/// a soft gradient on the card background.
+pub(crate) fn notif_icon_badge(note: &BarNotification) -> gtk::Box {
+    use crate::services::applications;
+
+    let wrap = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Start)
+        .build();
+    wrap.add_css_class("metis-notif-icon-wrap");
+
+    let image = gtk::Image::new();
+    image.set_pixel_size(28);
+    image.add_css_class("metis-notif-icon");
+
+    let mut used_app = false;
+    if let Some(de) = note.desktop_entry.as_deref()
+        && let Some(entry) = applications::resolve_entry_for_id(de)
+    {
+        applications::set_app_icon(&image, &entry, 28);
+        used_app = true;
+    } else if let Some(icon) = note.app_icon.as_deref() {
+        if icon.contains('/') {
+            image.set_from_file(Some(std::path::Path::new(icon)));
+            used_app = true;
+        } else {
+            image.set_icon_name(Some(icon));
+            used_app = !icon.contains("dialog-") && !icon.contains("emblem-");
+        }
+    } else if note.app_name != "Metis"
+        && let Some(entry) = applications::resolve_entry_for_id(&note.app_name)
+    {
+        applications::set_app_icon(&image, &entry, 28);
+        used_app = true;
+    } else {
+        image.set_icon_name(Some(note.kind.icon_name()));
+    }
+
+    if used_app {
+        image.add_css_class("metis-notif-icon-app");
+    }
+    wrap.append(&image);
+    wrap
 }

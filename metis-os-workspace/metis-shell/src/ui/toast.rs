@@ -48,6 +48,7 @@ fn overlay() -> Rc<RefCell<Toast>> {
 
         let window = gtk::Window::builder()
             .title(metis_i18n::tr("Metis Notifications"))
+            .decorated(false)
             .build();
         window.add_css_class("metis-toast-window");
         window.init_layer_shell();
@@ -191,10 +192,7 @@ where
     card.add_css_class(&format!("metis-notif-card-{}", note.kind.css_suffix()));
     card.set_width_request(360);
 
-    let icon = gtk::Image::from_icon_name(note.kind.icon_name());
-    icon.add_css_class("metis-notif-icon");
-    icon.set_valign(gtk::Align::Start);
-    card.append(&icon);
+    card.append(&crate::ui::bar::widgets::notif_icon_badge(note));
 
     let text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

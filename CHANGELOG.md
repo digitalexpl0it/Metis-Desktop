@@ -26,11 +26,24 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **dpkg conffile conflicts** — interactive install prompts **Keep my version** /
   **Use package version** (`pk-updates-configure`) instead of failing with
   “end of file on stdin at conffile prompt”.
+- **Toast / NC card black corner triangles** — removed `box-shadow` on
+  notification cards (GTK paints shadows as hard rectangles under
+  `border-radius` on transparent layer-shell); depth is a light border instead.
+- **Calendar add-event crashed the shell** — double/right-click no longer opens a
+  `GtkPopover` from the Notification Center layer surface (xdg_popup abort).
+  Add-event UI is an in-surface overlay next to the day cell.
 
 ### Changed
 
 - **Updater UI** — select-all / per-item Install, zebra rows, opaque theme-aware
   chrome; deferred open check is a full sources pass only when nothing is pending.
+- **Notification cards** — app icon (when resolvable) plus a soft left→fade kind
+  gradient; no circular icon glow.
+- **Notification Open** — focuses a running window for the desktop entry when
+  possible; otherwise launches the app.
+- **Notification Center calendar** — day dots for days with events; Events card
+  only when the selected day has events; double-click or right-click a day to
+  add an event.
 
 ## [2026-09-22]
 

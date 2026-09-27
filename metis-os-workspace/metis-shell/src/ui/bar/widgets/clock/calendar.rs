@@ -1,8 +1,10 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use chrono::{Datelike, Days, Local, Months, NaiveDate, NaiveTime};
+use gtk::gdk;
+use gtk::glib;
 use gtk::prelude::*;
 
 /// Display model the calendar renders. Decoupled from the backend `Event` so the
@@ -51,13 +53,21 @@ struct Inner {
     events_box: gtk::Box,
     events: RefCell<Vec<EventView>>,
     event_days: RefCell<HashSet<NaiveDate>>,
+    /// Day cell buttons for the current grid — used to place the create overlay.
+    day_buttons: RefCell<HashMap<NaiveDate, gtk::Button>>,
+    /// Calendar column overlay (same Wayland surface as the NC — never use a
+    /// `GtkPopover` here; popups from layer-shell crash the shell on Metis).
+    overlay: gtk::Overlay,
+    form_panel: gtk::Box,
+    form_heading: gtk::Label,
+    title_entry: gtk::Entry,
     cb: RefCell<Callbacks>,
 }
 
 pub struct CalendarPage {
     /// Month grid + navigation (calendar tools page body).
     pub widget: gtk::Widget,
-    /// Selected-day events list + add form (events card body).
+    /// Selected-day events list (events card body).
     pub events_widget: gtk::Widget,
     events_scroll: gtk::ScrolledWindow,
     inner: Rc<Inner>,
@@ -133,10 +143,14 @@ impl CalendarPage {
             .hexpand(true)
             .build();
         events_title.add_css_class("metis-bar-section-title");
+        let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
+        add_btn.add_css_class("metis-cal-event-action");
+        add_btn.set_tooltip_text(Some(&metis_i18n::tr("Add event")));
         let refresh_btn = gtk::Button::from_icon_name("view-refresh-symbolic");
         refresh_btn.add_css_class("metis-cal-event-action");
         refresh_btn.set_tooltip_text(Some(&metis_i18n::tr("Refresh")));
         events_header.append(&events_title);
+        events_header.append(&add_btn);
         events_header.append(&refresh_btn);
         right.append(&events_header);
 
@@ -157,23 +171,25 @@ impl CalendarPage {
         events_scroll.add_css_class("metis-cal-events-scroll");
         right.append(&events_scroll);
 
-        let add_btn = gtk::Button::builder()
-            .label(metis_i18n::tr("+ Add event"))
-            .build();
-        add_btn.add_css_class("metis-cal-add-btn");
-        add_btn.set_halign(gtk::Align::Start);
-        right.append(&add_btn);
-
-        // Inline add-event form (hidden until "+ Add event").
-        let form_revealer = gtk::Revealer::builder()
-            .transition_type(gtk::RevealerTransitionType::SlideDown)
-            .reveal_child(false)
-            .build();
+        // Add-event form — in-surface overlay (same layer-shell surface as NC).
+        // A GtkPopover would open a separate Wayland xdg_popup and abort the shell.
         let form = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
+            .spacing(8)
             .build();
         form.add_css_class("metis-cal-form");
+        form.add_css_class("metis-nc-create-form");
+        form.set_halign(gtk::Align::Start);
+        form.set_valign(gtk::Align::Start);
+        form.set_width_request(260);
+        form.set_visible(false);
+        let form_heading = gtk::Label::builder()
+            .label(metis_i18n::tr("New event"))
+            .halign(gtk::Align::Start)
+            .build();
+        form_heading.add_css_class("metis-nc-card-title");
+        form.append(&form_heading);
+        let form_heading_for_inner = form_heading.clone();
         let title_entry = gtk::Entry::builder()
             .placeholder_text(metis_i18n::tr("Event title"))
             .build();
@@ -203,8 +219,6 @@ impl CalendarPage {
         form_actions.append(&cancel_btn);
         form_actions.append(&save_btn);
         form.append(&form_actions);
-        form_revealer.set_child(Some(&form));
-        right.append(&form_revealer);
 
         {
             let all_day_check = all_day_check.clone();
@@ -223,6 +237,11 @@ impl CalendarPage {
         right.set_hexpand(true);
         right.set_width_request(-1);
 
+        let overlay = gtk::Overlay::new();
+        overlay.set_hexpand(true);
+        overlay.set_child(Some(&left));
+        overlay.add_overlay(&form);
+
         let inner = Rc::new(Inner {
             shown: RefCell::new(first_of_month),
             selected: RefCell::new(today),
@@ -234,6 +253,11 @@ impl CalendarPage {
             events_box,
             events: RefCell::new(Vec::new()),
             event_days: RefCell::new(HashSet::new()),
+            day_buttons: RefCell::new(HashMap::new()),
+            overlay: overlay.clone(),
+            form_panel: form.clone(),
+            form_heading: form_heading_for_inner,
+            title_entry: title_entry.clone(),
             cb: RefCell::new(Callbacks {
                 on_month_change: None,
                 on_create: None,
@@ -259,19 +283,18 @@ impl CalendarPage {
             });
         }
         {
-            let revealer = form_revealer.clone();
-            let title_entry = title_entry.clone();
+            let inner = inner.clone();
             add_btn.connect_clicked(move |_| {
-                let show = !revealer.reveals_child();
-                revealer.set_reveal_child(show);
-                if show {
-                    title_entry.grab_focus();
+                if inner.form_panel.is_visible() {
+                    inner.hide_create();
+                } else {
+                    inner.begin_create(None);
                 }
             });
         }
         {
-            let revealer = form_revealer.clone();
-            cancel_btn.connect_clicked(move |_| revealer.set_reveal_child(false));
+            let inner = inner.clone();
+            cancel_btn.connect_clicked(move |_| inner.hide_create());
         }
         {
             let inner = inner.clone();
@@ -283,7 +306,6 @@ impl CalendarPage {
         }
         {
             let inner = inner.clone();
-            let revealer = form_revealer.clone();
             let title_entry = title_entry.clone();
             let all_day_check = all_day_check.clone();
             let hour_spin = hour_spin.clone();
@@ -310,14 +332,14 @@ impl CalendarPage {
                     cb(req);
                 }
                 title_entry.set_text("");
-                revealer.set_reveal_child(false);
+                inner.hide_create();
             });
         }
 
         inner.rebuild();
 
         Self {
-            widget: left.upcast(),
+            widget: overlay.upcast(),
             events_widget: right.upcast(),
             events_scroll,
             inner,
@@ -327,6 +349,10 @@ impl CalendarPage {
     /// Cap the events list height so long days scroll instead of blowing the panel.
     pub fn set_events_list_max_height(&self, max_h: i32) {
         self.events_scroll.set_max_content_height(max_h.max(80));
+    }
+
+    pub fn hide_create(&self) {
+        self.inner.hide_create();
     }
     /// Combined two-column widget for legacy popover layouts.
     #[allow(dead_code)] // legacy calendar popover layout API
@@ -473,6 +499,8 @@ impl Inner {
     }
 
     fn rebuild_grid(self: &Rc<Self>) {
+        self.hide_create();
+        self.day_buttons.borrow_mut().clear();
         while let Some(child) = self.grid.first_child() {
             self.grid.remove(&child);
         }
@@ -536,7 +564,38 @@ impl Inner {
                 let inner = self.clone();
                 btn.connect_clicked(move |_| inner.select(date));
             }
+            {
+                // Defer create work: select() may rebuild the grid and would
+                // destroy this button while the gesture is still running.
+                let inner = self.clone();
+                let dbl = gtk::GestureClick::new();
+                dbl.set_button(gdk::BUTTON_PRIMARY);
+                dbl.connect_released(move |gesture, n_press, _, _| {
+                    if n_press >= 2 {
+                        gesture.set_state(gtk::EventSequenceState::Claimed);
+                        let inner = inner.clone();
+                        glib::idle_add_local_once(move || {
+                            inner.begin_create(Some(date));
+                        });
+                    }
+                });
+                btn.add_controller(dbl);
+            }
+            {
+                let inner = self.clone();
+                let right = gtk::GestureClick::new();
+                right.set_button(gdk::BUTTON_SECONDARY);
+                right.connect_released(move |gesture, _, _, _| {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    let inner = inner.clone();
+                    glib::idle_add_local_once(move || {
+                        inner.begin_create(Some(date));
+                    });
+                });
+                btn.add_controller(right);
+            }
 
+            self.day_buttons.borrow_mut().insert(date, btn.clone());
             self.grid.attach(&btn, col, row, 1, 1);
         }
     }
@@ -676,16 +735,85 @@ impl Inner {
     }
 
     fn select(self: &Rc<Self>, date: NaiveDate) {
-        *self.selected.borrow_mut() = date;
+        let already = *self.selected.borrow() == date;
         let anchor = *self.shown.borrow();
-        if date.month() != anchor.month() || date.year() != anchor.year() {
+        let month_change = date.month() != anchor.month() || date.year() != anchor.year();
+        *self.selected.borrow_mut() = date;
+        if month_change {
             *self.shown.borrow_mut() = date.with_day(1).unwrap_or(date);
             self.rebuild();
             self.notify_month_change();
+        } else if already {
+            // Same day — refresh the events pane only (no grid teardown).
+            self.rebuild_events();
         } else {
             self.rebuild();
         }
     }
+
+    fn begin_create(self: &Rc<Self>, date: Option<NaiveDate>) {
+        if let Some(date) = date {
+            self.select(date);
+        }
+        let date = *self.selected.borrow();
+        self.form_heading.set_label(&format!(
+            "{} — {}",
+            metis_i18n::tr("New event"),
+            date.format("%a, %b %-d")
+        ));
+
+        // Place after layout so day-cell bounds are valid post-rebuild.
+        let overlay = self.overlay.clone();
+        let form = self.form_panel.clone();
+        let btn = self.day_buttons.borrow().get(&date).cloned();
+        let entry = self.title_entry.clone();
+        glib::idle_add_local_once(move || {
+            let (ox, oy) = if let Some(btn) = btn.as_ref()
+                && let Some(bounds) = btn.compute_bounds(&overlay)
+            {
+                (
+                    bounds.x() as f64,
+                    (bounds.y() + bounds.height()) as f64,
+                )
+            } else {
+                (8.0, 8.0)
+            };
+            // Clear margins before show so measure isn't inflated by leftovers.
+            form.set_margin_start(0);
+            form.set_margin_top(0);
+            form.set_visible(true);
+            place_create_form(&form, &overlay, ox, oy);
+            entry.grab_focus();
+        });
+    }
+
+    fn hide_create(&self) {
+        self.form_panel.set_margin_start(0);
+        self.form_panel.set_margin_top(0);
+        self.form_panel.set_visible(false);
+    }
+}
+
+const CREATE_FORM_WIDTH: i32 = 260;
+
+fn place_create_form(form: &gtk::Box, overlay: &gtk::Overlay, ox: f64, oy: f64) {
+    let (_, nat_h, _, _) = form.measure(gtk::Orientation::Vertical, CREATE_FORM_WIDTH);
+    let panel_h = nat_h.max(80);
+    let ov_w = overlay.width().max(1);
+    let ov_h = overlay.height().max(1);
+    let gap = 4;
+    let mut mx = ox as i32;
+    let mut my = oy as i32 + gap;
+    if mx + CREATE_FORM_WIDTH > ov_w {
+        mx = (ov_w - CREATE_FORM_WIDTH).max(0);
+    }
+    if my + panel_h > ov_h {
+        my = (oy as i32 - gap - panel_h).max(0);
+    }
+    mx = mx.clamp(0, (ov_w - CREATE_FORM_WIDTH).max(0));
+    my = my.clamp(0, (ov_h - panel_h).max(0));
+    form.set_margin_start(mx);
+    form.set_margin_top(my);
 }
 
 /// Build a one-off CSS provider that paints a widget's background a given color.

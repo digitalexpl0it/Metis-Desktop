@@ -56,7 +56,7 @@ impl NotifyServer {
         &self,
         app_name: String,
         replaces_id: u32,
-        _app_icon: String,
+        app_icon: String,
         summary: String,
         body: String,
         actions: Vec<String>,
@@ -75,6 +75,10 @@ impl NotifyServer {
         } else {
             summary
         };
+        let app_icon = {
+            let trimmed = app_icon.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        };
         let note = BarNotification {
             id,
             app_name,
@@ -83,6 +87,7 @@ impl NotifyServer {
             message: body,
             actions: parse_actions(&actions),
             desktop_entry: hint_str(&hints, "desktop-entry"),
+            app_icon,
             suppress_sound: hint_bool(&hints, "suppress-sound"),
             sound_name: hint_str(&hints, "sound-name"),
             sound_file: hint_str(&hints, "sound-file"),

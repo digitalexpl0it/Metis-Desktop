@@ -318,6 +318,8 @@ pub struct BarNotification {
     /// `desktop-entry` hint — the `.desktop` id of the owning app, used to render
     /// a single "Open" button when no explicit actions are supplied.
     pub desktop_entry: Option<String>,
+    /// Freedesktop `app_icon` (icon name or absolute path). Empty when unset.
+    pub app_icon: Option<String>,
     /// `suppress-sound` hint: the sender asked that no sound be played.
     pub suppress_sound: bool,
     /// `sound-name` hint: a freedesktop sound theme id to play on arrival.
@@ -345,6 +347,7 @@ impl BarNotification {
             message: message.into(),
             actions: Vec::new(),
             desktop_entry: None,
+            app_icon: None,
             suppress_sound: false,
             sound_name: None,
             sound_file: None,

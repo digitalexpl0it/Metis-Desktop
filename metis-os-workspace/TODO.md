@@ -1248,12 +1248,16 @@ frosted panel with collapsible cards and closable top-right toasts.
 ### Core
 
 - [x] **Toast polish** — close (X) on each banner; shift right margin while the
-      panel is open; token-driven light/dark card styles.
+      panel is open; token-driven light/dark card styles; app icon + kind
+      gradient (no box-shadow on cards — avoids corner triangles on layer-shell).
 - [x] **Notification Center shell** — `metis-notification-center` layer-shell
       Overlay; slide from right; Esc / `close-popovers` / clock toggle dismiss;
       park window when closed.
-- [x] **Notifications card** — DND, Clear all, grouped list; auto-collapse when empty.
-- [x] **Events + calendar/tools cards** — events auto-collapse when empty; calendar
+- [x] **Notifications card** — DND, Clear all, grouped list; auto-collapse when empty;
+      **Open** focuses a matching running window else launches.
+- [x] **Events + calendar/tools cards** — Events card only when the selected day
+      has events; day dots on the grid; double/right-click add-event via
+      in-surface overlay (never `GtkPopover` from the NC layer surface); calendar
       card icon rail switches Calendar / World / Stopwatch / Timer / Alarms.
 - [x] **Clock merge** — unread badge on clock; default `bar.json` drops
       `notifications`; migrate existing configs that still list both.

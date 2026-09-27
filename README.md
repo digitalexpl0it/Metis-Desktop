@@ -341,8 +341,9 @@ Full walkthrough in the **[User Guide](docs/USER_GUIDE.md)**. The essentials:
   portal stack (`metis-portal` + GTK portal), and Gaming → Optimize Flatpak for
   Steam / Lutris / Heroic. See [XDG integrations](#xdg-integrations-daily-driver).
 - **Notification Center** — click the clock for a right-side panel (notifications,
-  calendar events, world clocks / timer / alarms). Toasts appear top-right with a
-  close button.
+  calendar with day dots / add-event on double or right-click, world clocks /
+  timer / alarms). Toasts appear top-right with app icon + kind tint; **Open**
+  focuses a running app when possible.
 
 | Shortcut                         | Action                                                       |
 | -------------------------------- | ------------------------------------------------------------ |

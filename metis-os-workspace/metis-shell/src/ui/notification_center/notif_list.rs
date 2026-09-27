@@ -242,10 +242,7 @@ fn build_notification_card(entry: &NotificationEntry) -> gtk::Box {
     card.add_css_class("metis-notif-card");
     card.add_css_class(&format!("metis-notif-card-{}", notif.kind.css_suffix()));
 
-    let icon = gtk::Image::from_icon_name(notif.kind.icon_name());
-    icon.add_css_class("metis-notif-icon");
-    icon.set_valign(gtk::Align::Start);
-    card.append(&icon);
+    card.append(&crate::ui::bar::widgets::notif_icon_badge(notif));
 
     let text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

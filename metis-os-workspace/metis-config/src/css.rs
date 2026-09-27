@@ -78,10 +78,19 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
     } else {
         "0 -12px 32px rgba(0, 0, 0, 0.42)".to_string()
     };
+    // Toast / NC notification cards: never use box-shadow on these. GTK paints
+    // box-shadow as an opaque rectangle under the widget, which shows as sharp
+    // black triangles outside border-radius on transparent layer-shell windows.
     let screenshot_toolbar_bg = dash_panel_bg.clone();
     let nc_panel_bg = dash_panel_bg.clone();
     let nc_card_bg = dash_card_bg.clone();
-    let toast_card_bg = dash_card_bg.clone();
+    // Toasts sit alone over the wallpaper: more opaque than frosted NC cards,
+    // but still slightly translucent (not solid rgb).
+    let toast_card_bg = if is_light {
+        format!("rgba({raised_rgb}, 0.96)")
+    } else {
+        format!("rgba({raised_rgb}, 0.94)")
+    };
     // Desktop widget fill/border come from per-card chrome (desktop-widgets.json),
     // not the theme stylesheet.
     // Notification rows inside the NC / legacy popover — follow raised surface,
@@ -1137,15 +1146,25 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
 
     .metis-notif-card {{
         background-color: {notif_card_bg};
-        border-radius: {rm}px;
+        border-radius: 16px;
         border: 1px solid {border};
-        padding: 12px 14px;
+        padding: 14px 16px;
         color: {text};
+        box-shadow: none;
+    }}
+
+    .metis-notif-icon-wrap {{
+        min-width: 28px;
+        padding: 0;
+        background: transparent;
+        box-shadow: none;
     }}
 
     .metis-notif-icon {{
-        -gtk-icon-size: 20px;
-        margin-top: 1px;
+        -gtk-icon-size: 28px;
+        color: {text};
+    }}
+    .metis-notif-icon-app {{
         color: {text};
     }}
 
@@ -1241,20 +1260,31 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
     }}
 
     /* ---- Toast banners (transient overlay, top-right) ---- */
-    window.metis-toast-window {{
+    window.metis-toast-window,
+    window.metis-toast-window > * {{
         background-color: transparent;
+        background-image: none;
+        box-shadow: none;
+    }}
+    .metis-toast-stack,
+    .metis-toast-stack > revealer,
+    .metis-toast-stack > revealer > * {{
+        background-color: transparent;
+        background-image: none;
+        box-shadow: none;
     }}
     .metis-toast-stack {{
         margin: 0;
     }}
     .metis-toast-card {{
         background-color: {toast_card_bg};
-        border-radius: 12px;
+        border-radius: 16px;
         border: 1px solid {border};
         padding: 14px 16px;
-        box-shadow: {dash_shadow};
+        box-shadow: none;
         color: {text};
     }}
+    /* Kind tint: left→fade gradient on the card (toast + NC share kind classes). */
     button.metis-toast-close {{
         background: transparent;
         background-image: none;
@@ -1320,73 +1350,84 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         background-color: {muted};
     }}
 
-    .metis-notif-card-error {{
-        box-shadow: 0 0 18px rgba({c_error_rgb}, 0.18);
-        border-color: rgba({c_error_rgb}, 0.40);
+    /* Kind tint: left→fade gradient only (no box-shadow — see toast note). */
+    .metis-notif-card-error,
+    .metis-toast-card.metis-notif-card-error {{
+        background-image: linear-gradient(
+            105deg,
+            rgba({c_error_rgb}, 0.52) 0%,
+            rgba({c_error_rgb}, 0.22) 32%,
+            transparent 78%
+        );
     }}
-
     .metis-notif-card-error .metis-notif-accent {{
         background-color: {c_error};
     }}
-
-    .metis-notif-card-error .metis-notif-title,
-    .metis-notif-card-error .metis-notif-icon {{
+    .metis-notif-card-error .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_error};
     }}
 
-    .metis-notif-card-notify {{
-        box-shadow: 0 0 18px rgba({c_warning_rgb}, 0.18);
-        border-color: rgba({c_warning_rgb}, 0.40);
+    .metis-notif-card-notify,
+    .metis-toast-card.metis-notif-card-notify {{
+        background-image: linear-gradient(
+            105deg,
+            rgba({c_warning_rgb}, 0.50) 0%,
+            rgba({c_warning_rgb}, 0.20) 34%,
+            transparent 78%
+        );
     }}
-
     .metis-notif-card-notify .metis-notif-accent {{
         background-color: {c_warning};
     }}
-
-    .metis-notif-card-notify .metis-notif-title,
-    .metis-notif-card-notify .metis-notif-icon {{
+    .metis-notif-card-notify .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_warning};
     }}
 
-    .metis-notif-card-success {{
-        box-shadow: 0 0 18px rgba({c_success_rgb}, 0.18);
-        border-color: rgba({c_success_rgb}, 0.40);
+    .metis-notif-card-success,
+    .metis-toast-card.metis-notif-card-success {{
+        background-image: linear-gradient(
+            105deg,
+            rgba({c_success_rgb}, 0.46) 0%,
+            rgba({c_success_rgb}, 0.18) 34%,
+            transparent 78%
+        );
     }}
-
     .metis-notif-card-success .metis-notif-accent {{
         background-color: {c_success};
     }}
-
-    .metis-notif-card-success .metis-notif-title,
-    .metis-notif-card-success .metis-notif-icon {{
+    .metis-notif-card-success .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_success};
     }}
 
-    .metis-notif-card-info {{
-        box-shadow: 0 0 18px rgba({c_info_rgb}, 0.18);
-        border-color: rgba({c_info_rgb}, 0.40);
+    .metis-notif-card-info,
+    .metis-toast-card.metis-notif-card-info {{
+        background-image: linear-gradient(
+            105deg,
+            rgba({c_info_rgb}, 0.44) 0%,
+            rgba({c_info_rgb}, 0.16) 34%,
+            transparent 78%
+        );
     }}
-
     .metis-notif-card-info .metis-notif-accent {{
         background-color: {c_info};
     }}
-
-    .metis-notif-card-info .metis-notif-title,
-    .metis-notif-card-info .metis-notif-icon {{
+    .metis-notif-card-info .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_info};
     }}
 
-    .metis-notif-card-payment {{
-        box-shadow: 0 0 18px rgba({c_payment_rgb}, 0.18);
-        border-color: rgba({c_payment_rgb}, 0.40);
+    .metis-notif-card-payment,
+    .metis-toast-card.metis-notif-card-payment {{
+        background-image: linear-gradient(
+            105deg,
+            rgba({c_payment_rgb}, 0.46) 0%,
+            rgba({c_payment_rgb}, 0.18) 34%,
+            transparent 78%
+        );
     }}
-
     .metis-notif-card-payment .metis-notif-accent {{
         background-color: {c_payment};
     }}
-
-    .metis-notif-card-payment .metis-notif-title,
-    .metis-notif-card-payment .metis-notif-icon {{
+    .metis-notif-card-payment .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_payment};
     }}
 
@@ -4155,20 +4196,55 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         font-weight: 600;
         color: {text};
     }}
+    button.metis-nc-section-btn {{
+        background: rgba({text_rgb}, 0.06);
+        background-image: none;
+        border: 1px solid {border};
+        border-radius: {rs}px;
+        padding: 8px 12px;
+        font-size: 14px;
+        font-weight: 600;
+        color: {text};
+        box-shadow: none;
+        outline: none;
+    }}
+    button.metis-nc-section-btn:hover {{
+        background: rgba({accent_rgb}, 0.12);
+        color: {text};
+    }}
+    button.metis-nc-section-btn:checked {{
+        background: rgba({accent_rgb}, 0.18);
+        border-color: rgba({accent_rgb}, 0.45);
+        color: {text};
+    }}
+    .metis-nc-create-revealer {{
+        margin: 0;
+    }}
+    .metis-nc-create-form {{
+        background-color: {nc_card_bg};
+        border-radius: {rm}px;
+        border: 1px solid {border};
+        padding: 12px 14px;
+        margin-bottom: 2px;
+        box-shadow: {dash_shadow};
+    }}
     .metis-nc-tool-rail {{
         background: transparent;
+        padding-top: 4px;
+        border-top: 1px solid rgba({text_rgb}, 0.10);
+        margin-top: 2px;
     }}
     button.metis-nc-tool-btn {{
         background: transparent;
         background-image: none;
         border: 1px solid transparent;
         border-radius: {rs}px;
-        padding: 6px;
+        padding: 8px;
         color: {muted};
         box-shadow: none;
         outline: none;
-        min-width: 32px;
-        min-height: 32px;
+        min-width: 36px;
+        min-height: 36px;
     }}
     button.metis-nc-tool-btn:hover {{
         background-color: rgba({accent_rgb}, 0.12);
@@ -4204,6 +4280,18 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         background: transparent;
         border-color: transparent;
         color: {muted};
+    }}
+    .metis-nc-panel button.metis-nc-section-btn,
+    .metis-nc-card button.metis-nc-section-btn {{
+        background: rgba({text_rgb}, 0.06);
+        border: 1px solid {border};
+        color: {text};
+    }}
+    .metis-nc-panel button.metis-nc-section-btn:checked,
+    .metis-nc-card button.metis-nc-section-btn:checked {{
+        background: rgba({accent_rgb}, 0.18);
+        border-color: rgba({accent_rgb}, 0.45);
+        color: {text};
     }}
     .metis-nc-panel button.metis-cal-today-btn,
     .metis-nc-card button.metis-cal-today-btn {{
@@ -4514,7 +4602,13 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         c_success = c_success,
         c_warning = c_warning,
         c_error = c_error,
+        c_info = c_info,
+        c_payment = c_payment,
         c_error_rgb = c_error_rgb,
+        c_warning_rgb = c_warning_rgb,
+        c_success_rgb = c_success_rgb,
+        c_info_rgb = c_info_rgb,
+        c_payment_rgb = c_payment_rgb,
         screenshot_toolbar_bg = screenshot_toolbar_bg,
         text_on_accent = text_on_accent,
         nc_panel_bg = nc_panel_bg,

@@ -6,8 +6,9 @@
 //!
 //! Opened from the clock (bell merged in). Layout top→bottom:
 //! 1. Notifications card (header always visible; list collapsible)
-//! 2. Events card (header always visible; body collapses when empty)
-//! 3. Calendar / tools card pinned to the bottom (icon rail)
+//! 2. Events card (only when the selected day has events)
+//! 3. Calendar / tools card pinned to the bottom (icon rail on its own row)
+//!    — double/right-click a day opens an add-event popover on that cell
 
 mod notif_list;
 
@@ -403,6 +404,7 @@ pub fn dismiss() {
             return;
         }
         center.open.set(false);
+        center.calendar.hide_create();
         crate::ui::toast::set_panel_open(false);
         SUPPRESS_SHOW_UNTIL_MS.with(|cell| cell.set(now_ms().saturating_add(350)));
 
@@ -478,27 +480,29 @@ fn build_center() -> Rc<Center> {
     let timer = TimerPage::new();
     let alarms = AlarmsPage::new(store.clone());
 
-    // Events card always visible; body collapses when the selected day is empty.
+    // Events card — only visible when the selected day has events (dots on the
+    // calendar mark those days; empty days keep the panel uncluttered).
+    // Add-event UI is a popover anchored to the day cell (double/right-click).
     let events_card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
         .build();
     events_card.add_css_class("metis-nc-card");
-    let events_header = gtk::Label::builder()
+    let events_title = gtk::Label::builder()
         .label(metis_i18n::tr("Events"))
         .halign(gtk::Align::Start)
         .build();
-    events_header.add_css_class("metis-nc-card-title");
-    events_card.append(&events_header);
+    events_title.add_css_class("metis-nc-card-title");
+    events_card.append(&events_title);
+    events_card.append(&calendar.events_widget);
 
     let events_body = gtk::Revealer::builder()
         .transition_type(gtk::RevealerTransitionType::SlideDown)
         .transition_duration(SLIDE_MS)
         .reveal_child(false)
-        .child(&calendar.events_widget)
+        .child(&events_card)
         .build();
-    events_card.append(&events_body);
-    top.append(&events_card);
+    top.append(&events_body);
 
     {
         let events_body = events_body.clone();
@@ -515,7 +519,7 @@ fn build_center() -> Rc<Center> {
     spacer.set_hexpand(true);
     panel.append(&spacer);
 
-    // Bottom: calendar / tools card (Win11-style).
+    // Bottom: calendar / tools card — date + page, then icon rail on its own row.
     let tools_card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
@@ -524,17 +528,13 @@ fn build_center() -> Rc<Center> {
     tools_card.set_valign(gtk::Align::End);
     tools_card.set_vexpand(false);
 
-    let tools_header = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
-        .build();
     let date_label = gtk::Label::builder()
         .label(Local::now().format("%A %-d %B").to_string())
         .halign(gtk::Align::Start)
         .hexpand(true)
         .build();
     date_label.add_css_class("metis-nc-card-title");
-    tools_header.append(&date_label);
+    tools_card.append(&date_label);
 
     let stack = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
@@ -550,6 +550,7 @@ fn build_center() -> Rc<Center> {
     stack.add_named(&stopwatch.widget, Some("stopwatch"));
     stack.add_named(&timer.widget, Some("timer"));
     stack.add_named(&alarms.widget, Some("alarms"));
+    tools_card.append(&stack);
 
     let rail = build_tool_rail(
         &stack,
@@ -577,9 +578,7 @@ fn build_center() -> Rc<Center> {
             ),
         ],
     );
-    tools_header.append(&rail);
-    tools_card.append(&tools_header);
-    tools_card.append(&stack);
+    tools_card.append(&rail);
     panel.append(&tools_card);
 
     let (cal_tx, cal_rx) = spawn_calendar_service();
@@ -696,8 +695,9 @@ fn build_center() -> Rc<Center> {
 fn build_tool_rail(stack: &gtk::Stack, tabs: &[(&str, &str, &str)]) -> gtk::Box {
     let rail = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(2)
-        .halign(gtk::Align::End)
+        .spacing(4)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
         .build();
     rail.add_css_class("metis-nc-tool-rail");
 
@@ -707,6 +707,8 @@ fn build_tool_rail(stack: &gtk::Stack, tabs: &[(&str, &str, &str)]) -> gtk::Box 
         btn.set_child(Some(&icons::image(icon)));
         btn.set_tooltip_text(Some(tip));
         btn.add_css_class("metis-nc-tool-btn");
+        btn.set_hexpand(true);
+        btn.set_halign(gtk::Align::Fill);
         if let Some(ref leader) = group {
             btn.set_group(Some(leader));
         } else {

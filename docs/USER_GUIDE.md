@@ -145,13 +145,18 @@ apply within about a second. Theme edits (`themes/*.json`) re-apply live too.
 
 Click the **clock** to slide open a frosted panel from the right edge:
 
-1. **Notifications** — grouped cards, Do Not Disturb, Clear all (hides when empty).
-2. **Events** — selected-day calendar events (hides when empty).
-3. **Calendar / tools** — month grid plus an icon rail for World clocks, Stopwatch,
-   Timer, and Alarms.
+1. **Notifications** — grouped cards with the app icon and a soft kind tint,
+   Do Not Disturb, Clear all (hides when empty). **Open** focuses a running
+   window for that app when one exists; otherwise it launches the app.
+2. **Events** — selected-day calendar events (card appears only when that day
+   has events).
+3. **Calendar / tools** — month grid (dots mark days with events) plus an icon
+   rail for World clocks, Stopwatch, Timer, and Alarms. **Double-click** or
+   **right-click** a day to add an event next to that cell.
 
-Transient **toasts** still appear top-right (with a close button) and shift left
-while the panel is open. Press **Esc** or click the clock again to dismiss.
+Transient **toasts** appear top-right (same card style, with a close button) and
+shift left while the panel is open. Press **Esc** or click the clock again to
+dismiss.
 
 ---
 

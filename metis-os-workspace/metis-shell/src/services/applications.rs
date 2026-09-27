@@ -506,6 +506,12 @@ fn matches_app_id(entry: &AppEntry, needle: &str) -> bool {
             .is_some_and(|f| f.to_lowercase() == needle)
 }
 
+/// Whether a Wayland `app_id` belongs to this desktop entry (taskbar / notify Open).
+pub fn entry_matches_app_id(entry: &AppEntry, app_id: &str) -> bool {
+    let needle = app_id.trim().to_lowercase();
+    !needle.is_empty() && matches_app_id(entry, &needle)
+}
+
 /// Desktop-file id variants to try with `DesktopAppInfo::new`.
 fn desktop_id_candidates(id: &str) -> Vec<String> {
     let raw = id.trim();
