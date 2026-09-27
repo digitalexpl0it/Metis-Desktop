@@ -35,9 +35,9 @@ depends=(
 )
 optdepends=(
   'gnome-keyring: Secret Service provider'
-  'xdg-desktop-portal-gtk: portal UI'
+  'xdg-desktop-portal-gtk: portal FileChooser / notifications'
   'nftables: Remote access LAN firewall'
-  'polkit-gnome: PolicyKit authentication agent'
+  'polkit: pkexec / PolicyKit (Metis ships metis-polkit-agent)'
   'gnome-remote-desktop: RDP session sharing host'
   'freerdp: Metis Viewer / FreeRDP client'
   'gamemode: gaming performance daemon'

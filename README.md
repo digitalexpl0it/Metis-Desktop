@@ -208,10 +208,47 @@ cd Metis
 ./install.sh --yes          # deps + release build → /usr/local + greeter session
 ```
 
-### Arch / NixOS
+### Arch & NixOS (early adopters)
 
-- Arch: `cd metis-os-workspace/packaging/arch && makepkg -si`
-- NixOS: flake + `programs.metis` — see [`nix/README.md`](nix/README.md)
+Arch and NixOS users are often the first to try experimental Rust/Wayland
+compositors — Metis ships **in-tree** packaging for both so discovery is
+`makepkg` / `nix` away (no mystery build steps).
+
+**Arch** — [`packaging/arch/PKGBUILD`](metis-os-workspace/packaging/arch/PKGBUILD)
+(`metis-desktop`). Build from a release tag (AUR-style) or a local clone:
+
+```bash
+cd metis-os-workspace/packaging/arch
+makepkg -si
+# or from a checkout of this repo:
+METIS_LOCAL_SRC=/path/to/Metis makepkg -si
+```
+
+Publishing to the [AUR](https://aur.archlinux.org/) is a maintainer step (same
+PKGBUILD); keep `pkgver` aligned with GitHub tags. Until it is on the AUR, the
+repo PKGBUILD is the install path.
+
+**NixOS** — flake + `programs.metis` module
+([`flake.nix`](flake.nix), [`nix/README.md`](nix/README.md)):
+
+```nix
+# flake.nix
+inputs.metis.url = "github:digitalexpl0it/Metis";
+
+# configuration
+programs.metis.enable = true;
+programs.metis.package = inputs.metis.packages.${pkgs.system}.metis-desktop;
+```
+
+```bash
+nix build github:digitalexpl0it/Metis#metis-desktop   # one-shot package
+nix develop github:digitalexpl0it/Metis               # Rust/dev shell
+```
+
+Rebuild, log out, pick **Metis** at the greeter. First-time Nix builds may need
+a refreshed smithay `cargoLock.outputHashes` entry — see `nix/README.md`.
+
+Full notes: [`docs/PACKAGING.md`](docs/PACKAGING.md).
 
 ### Build from source (dev)
 

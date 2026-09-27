@@ -8,10 +8,14 @@ the desktop).
 | Audience | Path |
 |----------|------|
 | Ubuntu / Debian users | `.deb` from [GitHub Releases](https://github.com/digitalexpl0it/Metis/releases) |
-| Arch users | [`packaging/arch/PKGBUILD`](../metis-os-workspace/packaging/arch/PKGBUILD) (`makepkg -si`) |
-| NixOS | [flake + module](../nix/README.md) |
+| **Arch / AUR-minded users** | In-tree [`packaging/arch/PKGBUILD`](../metis-os-workspace/packaging/arch/PKGBUILD) (`makepkg -si`) — same recipe used for AUR |
+| **NixOS / flake users** | [`flake.nix`](../flake.nix) + [`nix/README.md`](../nix/README.md) (`programs.metis`) |
 | From source (any supported distro) | [`./install.sh`](../install.sh) at the repo root |
+| Try without leaving your DE | Nested winit session — [User Guide §1](USER_GUIDE.md#1-launching-metis) |
 
+Arch and NixOS users are historically early adopters of experimental Rust/Wayland
+compositors; keeping PKGBUILD + flake in-tree is intentional so discovery is
+one command, not a forum paste.
 ## Install from a `.deb`
 
 Pick the artifact that matches your OS:
@@ -89,22 +93,36 @@ old) and runs `rustup update` when an older toolchain is found. With
 This installs to **`/usr/local`** via `run-metis.sh --install-session`. Prefer the
 `.deb` for production machines.
 
-## Arch (`makepkg`)
+## Arch (`makepkg` / AUR)
+
+Package name: **`metis-desktop`**. The PKGBUILD is written for AUR-style tag
+sources and local checkouts:
 
 ```bash
 cd metis-os-workspace/packaging/arch
-# From a release tag (default):
+# From a release tag (default source=):
 makepkg -si
 # Or from a local clone of this repo:
 METIS_LOCAL_SRC=/path/to/Metis makepkg -si
 ```
 
-Publishing to the AUR is manual (out of tree). Keep `pkgver` in sync with tags.
+Publishing to the [AUR](https://aur.archlinux.org/) is a maintainer step (upload
+this PKGBUILD / `.SRCINFO`). Keep `pkgver` in sync with GitHub tags. Until a
+package is listed on the AUR, point Arch users at this path in the README.
 
-## NixOS
+## NixOS (flake)
 
 See [`nix/README.md`](../nix/README.md). Enable `programs.metis` and set
-`programs.metis.package` to the flake package.
+`programs.metis.package` to the flake package:
+
+```nix
+inputs.metis.url = "github:digitalexpl0it/Metis";
+# …
+programs.metis.enable = true;
+programs.metis.package = inputs.metis.packages.${pkgs.system}.metis-desktop;
+```
+
+One-shot: `nix build github:digitalexpl0it/Metis#metis-desktop`.
 
 ## Build a `.deb` locally
 
