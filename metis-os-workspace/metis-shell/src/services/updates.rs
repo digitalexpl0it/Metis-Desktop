@@ -33,12 +33,16 @@ thread_local! {
     static LAST_CHECK_AT: Cell<Option<Instant>> = const { Cell::new(None) };
     /// A forced re-check arrived while another check was running.
     static RECHECK_QUEUED: Cell<bool> = const { Cell::new(false) };
+    /// When a re-check is queued, prefer a full (Flatpak/fwupd) pass if any
+    /// waiter asked for one — soft checks must not resurrect a stale list.
+    static RECHECK_QUEUED_FULL: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Run the queued forced re-check once the in-flight check has finished.
 fn drain_recheck_queue() {
     if RECHECK_QUEUED.replace(false) {
-        run_check(false, true);
+        let full = RECHECK_QUEUED_FULL.replace(false);
+        run_check(full, true);
     }
 }
 
@@ -179,6 +183,9 @@ fn run_check(manual: bool, force: bool) {
     if CHECK_IN_FLIGHT.get() {
         if force {
             RECHECK_QUEUED.set(true);
+            if manual {
+                RECHECK_QUEUED_FULL.set(true);
+            }
         }
         return;
     }
@@ -351,6 +358,49 @@ fn schedule_snooze_expiry_refresh(cfg: &UpdatesConfig) {
     glib::timeout_add_seconds_local_once(secs, fire_refresh);
 }
 
+/// Drop applied ids from the live snapshot so the updater / bar icon update
+/// immediately. Soft post-apply checks preserve Flatpak/fwupd from this
+/// snapshot, so leaving them in place made "Updates installed" keep showing
+/// the same rows (the Update-all button uses `Selected`, not `All`).
+fn prune_snapshot_after_apply(scope: &UpdateApplyScope) {
+    SNAPSHOT.with(|s| {
+        let mut snap = s.borrow_mut();
+        match scope {
+            UpdateApplyScope::All => {
+                snap.flatpaks.clear();
+                snap.firmware.clear();
+                // Packages are re-listed by the soft check below.
+            }
+            UpdateApplyScope::Selected {
+                packages,
+                flatpaks,
+                firmware,
+            } => {
+                let pkgs: std::collections::HashSet<&str> =
+                    packages.iter().map(String::as_str).collect();
+                let fps: std::collections::HashSet<&str> =
+                    flatpaks.iter().map(String::as_str).collect();
+                let fws: std::collections::HashSet<&str> =
+                    firmware.iter().map(String::as_str).collect();
+                snap.packages.retain(|i| !pkgs.contains(i.id.as_str()));
+                snap.flatpaks.retain(|i| !fps.contains(i.id.as_str()));
+                snap.firmware.retain(|i| !fws.contains(i.id.as_str()));
+            }
+        }
+        save_cached_snapshot(&snap);
+    });
+    fire_refresh();
+}
+
+fn scope_needs_full_recheck(scope: &UpdateApplyScope, sources: &metis_config::UpdateSources) -> bool {
+    match scope {
+        UpdateApplyScope::All => sources.flatpak || sources.fwupd,
+        UpdateApplyScope::Selected {
+            flatpaks, firmware, ..
+        } => !flatpaks.is_empty() || !firmware.is_empty(),
+    }
+}
+
 /// Apply pending updates (`scope` chooses all vs a subset).
 pub fn start_apply_scope(
     scope: UpdateApplyScope,
@@ -359,7 +409,8 @@ pub fn start_apply_scope(
     let cfg = load_updates_config();
     let sources = cfg.sources.clone();
     let (tx, rx) = mpsc::sync_channel::<UpdateProgressEvent>(64);
-    let clear_all = matches!(scope, UpdateApplyScope::All);
+    let full_recheck = scope_needs_full_recheck(&scope, &sources);
+    let scope_for_prune = scope.clone();
     std::thread::spawn(move || {
         let _ = updates_apply_scope(&sources, &scope, Some(tx));
     });
@@ -376,25 +427,21 @@ pub fn start_apply_scope(
                 Ok(ev) => {
                     processed += 1;
                     let done = matches!(ev, UpdateProgressEvent::Finished { .. });
-                    if matches!(ev, UpdateProgressEvent::Finished { ok: true, .. }) && clear_all {
-                        // Apply covered every enabled source; the soft re-check
-                        // below cannot see Flatpak / fwupd, so clear them here.
-                        SNAPSHOT.with(|s| {
-                            let mut snap = s.borrow_mut();
-                            snap.flatpaks.clear();
-                            snap.firmware.clear();
-                        });
+                    if matches!(ev, UpdateProgressEvent::Finished { ok: true, .. }) {
+                        prune_snapshot_after_apply(&scope_for_prune);
                     }
                     on_event(ev);
                     if done {
-                        // Soft list only after apply — never kick Flatpak/fwupd here.
-                        run_check(false, true);
+                        // Flatpak/fwupd were just applied (or cleared). A soft
+                        // PackageKit-only check would clone the pre-apply list
+                        // back in — use a full check when those sources ran.
+                        run_check(full_recheck, true);
                         return glib::ControlFlow::Break;
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    run_check(false, true);
+                    run_check(full_recheck, true);
                     return glib::ControlFlow::Break;
                 }
             }

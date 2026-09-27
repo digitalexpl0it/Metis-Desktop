@@ -674,9 +674,21 @@ fn begin_apply(
     handles.progress.set_show_text(true);
     handles.progress.set_text(Some(&metis_i18n::tr("Waiting…")));
     handles.status.set_visible(true);
-    handles
-        .status
-        .set_text(&metis_i18n::tr("Waiting for authentication…"));
+    // Flatpak-only installs usually need no polkit; don't imply a password
+    // prompt that will never appear.
+    let needs_auth_hint = match &scope {
+        UpdateApplyScope::All => true,
+        UpdateApplyScope::Selected {
+            packages,
+            flatpaks,
+            firmware,
+        } => !packages.is_empty() || !firmware.is_empty() || flatpaks.is_empty(),
+    };
+    handles.status.set_text(&if needs_auth_hint {
+        metis_i18n::tr("Waiting for authentication…")
+    } else {
+        metis_i18n::tr("Updating Flatpak apps…")
+    });
     handles.log_buffer.set_text("");
     // Keep log collapsed — TextView inserts during install thrash the
     // main loop and make the pointer unusable.

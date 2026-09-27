@@ -527,6 +527,8 @@ fn check_flatpak() -> Result<Vec<UpdateItem>, UpdatesError> {
             return Ok(Vec::new());
         }
     }
+    // User + system installs of the same app both appear; one row per id.
+    let mut seen = std::collections::HashSet::<String>::new();
     let mut items = Vec::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let cols: Vec<&str> = line.split('\t').collect();
@@ -535,6 +537,9 @@ fn check_flatpak() -> Result<Vec<UpdateItem>, UpdatesError> {
         }
         let id = cols[0].trim();
         if id.is_empty() || id == "Application" {
+            continue;
+        }
+        if !seen.insert(id.to_string()) {
             continue;
         }
         let name = cols.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
@@ -803,18 +808,31 @@ pub fn apply_scope(
                 },
             },
         );
-        let mut args = vec![
-            "update".to_string(),
-            "-y".to_string(),
-            "--noninteractive".to_string(),
-        ];
-        if let Some(ids) = flatpak_ids {
-            args.extend(ids.iter().cloned());
-        }
-        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-        if let Err(e) = run_streaming("flatpak", &argv, &progress) {
-            ok = false;
-            last_err = Some(e.to_string());
+        // User and system installs are separate; a bare `flatpak update ID`
+        // can succeed on one while the other stays pending (and our list used
+        // to show the same app twice). Update each installation explicitly.
+        for install in ["--user", "--system"] {
+            let mut args = vec![
+                "update".to_string(),
+                install.to_string(),
+                "-y".to_string(),
+                "--noninteractive".to_string(),
+            ];
+            if let Some(ids) = flatpak_ids {
+                args.extend(ids.iter().cloned());
+            }
+            let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+            if let Err(e) = run_streaming("flatpak", &argv, &progress) {
+                let msg = e.to_string();
+                // Missing user/system install for a selected id is fine.
+                let soft = msg.to_ascii_lowercase().contains("not installed")
+                    || msg.to_ascii_lowercase().contains("no such")
+                    || msg.to_ascii_lowercase().contains("nothing to do");
+                if !soft {
+                    ok = false;
+                    last_err = Some(msg);
+                }
+            }
         }
     }
 
