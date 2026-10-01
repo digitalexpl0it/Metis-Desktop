@@ -212,16 +212,25 @@ impl Wallpaper {
     ///
     /// Keeps the previous GPU texture on screen until the new compose uploads —
     /// clearing it here caused a visible black flash on every HDMI plug.
+    ///
+    /// Also keeps `cpu_pixels`: Task View capture may `invalidate_gpu_cache()`
+    /// (multi-GPU) and must be able to re-upload without waiting on a full
+    /// re-decode. Empty-workspace thumbs were charcoal/missing when CPU pixels
+    /// were cleared here and the GL buffer was then dropped.
     pub fn set_layout(&mut self, full_size: Size<i32, Physical>, regions: Vec<OutputRegion>) {
         if self.full_size == full_size && self.regions == regions {
             return;
         }
+        let size_changed = self.full_size != full_size;
         self.full_size = full_size;
         self.regions = regions;
-        // Soft invalidate: drop CPU pixels so a new decode is scheduled, but
-        // leave `buffer` / `texture` so the last frame keeps painting.
         self.decode_generation = self.decode_generation.wrapping_add(1);
-        self.cpu_pixels = None;
+        // Keep CPU pixels across region-only updates so Task View can re-upload
+        // after `invalidate_gpu_cache`. Drop them when the framebuffer size
+        // changes — the old buffer no longer matches `full_size`.
+        if size_changed {
+            self.cpu_pixels = None;
+        }
         let at = Instant::now() + Duration::from_millis(120);
         self.redecode_at = Some(self.redecode_at.map_or(at, |prev| prev.min(at)));
     }
@@ -278,10 +287,12 @@ impl Wallpaper {
     /// per output, blitted into the shared framebuffer) so init/resize stay
     /// responsive.
     pub fn start_async_decode(&mut self) {
-        if !self.enabled() || self.cpu_pixels.is_some() {
+        if !self.enabled() {
             self.redecode_at = None;
             return;
         }
+        // Do not bail when `cpu_pixels` is already set — layout changes keep the
+        // previous CPU frame for thumb re-upload while a newer compose runs.
         if let Some(handle) = self.decode_thread.as_ref()
             && !handle.is_finished()
         {
@@ -391,9 +402,6 @@ impl Wallpaper {
 
     /// Pull the composed framebuffer from the worker thread when ready.
     pub fn poll_decode(&mut self) {
-        if self.cpu_pixels.is_some() {
-            return;
-        }
         if let Ok(mut guard) = self.decode_slot.lock()
             && guard.0 == self.decode_generation
             && let Some(out) = guard.1.take()
@@ -450,6 +458,11 @@ impl Wallpaper {
 
         let w = self.full_size.w;
         let h = self.full_size.h;
+        let expected = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+        if rgba.len() != expected {
+            // Stale CPU frame from a prior layout — wait for the matching compose.
+            return;
+        }
 
         // Import the texture explicitly (rather than letting TextureBuffer own it)
         // so we can also hand the GlesTexture to the bar backdrop-blur element.
@@ -473,10 +486,47 @@ impl Wallpaper {
         }
     }
 
+    /// Schedule a background compose when the GL buffer is missing and no CPU
+    /// pixels are available yet (e.g. after soft layout invalidate + GPU cache
+    /// drop). Used by Task View workspace thumbs so empty desktops wait for the
+    /// wallpaper instead of writing a charcoal placeholder PNG.
+    pub fn request_decode_if_needed(&mut self) {
+        if !self.enabled() || self.buffer.is_some() || self.cpu_pixels.is_some() {
+            return;
+        }
+        if self.redecode_at.is_none() {
+            self.redecode_at = Some(Instant::now());
+        }
+        self.start_async_decode();
+    }
+
+    /// True while wallpaper is enabled but not yet uploadable, and work is in
+    /// flight (or just scheduled). Task View requeues thumbs only in this case.
+    pub fn upload_pending(&self) -> bool {
+        if !self.enabled() || self.buffer.is_some() {
+            return false;
+        }
+        self.cpu_pixels.is_some()
+            || self.redecode_at.is_some()
+            || self
+                .decode_thread
+                .as_ref()
+                .is_some_and(|h| !h.is_finished())
+    }
+
     /// The wallpaper texture and its size, for sampling behind the bar (blur).
     pub fn texture(&self) -> Option<(GlesTexture, Size<i32, smithay::utils::Buffer>)> {
         let texture = self.texture.as_ref()?;
         Some((texture.clone(), texture.size()))
+    }
+
+    /// Borrow composed CPU wallpaper pixels (full virtual desktop, Abgr8888).
+    pub fn cpu_pixels_ref(&self) -> Option<&[u8]> {
+        self.cpu_pixels.as_deref()
+    }
+
+    pub fn full_size(&self) -> Size<i32, Physical> {
+        self.full_size
     }
 
     /// Borrow the uploaded wallpaper buffer (Task View workspace thumbs).

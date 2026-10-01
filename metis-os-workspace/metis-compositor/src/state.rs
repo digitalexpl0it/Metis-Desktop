@@ -496,6 +496,10 @@ pub struct MetisState {
         std::collections::HashMap<String, smithay::reexports::wayland_server::backend::GlobalId>,
     /// Screen capture protocol state (ext-image-copy-capture).
     pub image_capture: crate::image_capture::ImageCaptureRuntime,
+    /// Phase 1 RUDP host capture: dmabuf frame export hub (no PipeWire).
+    pub stream_export: std::sync::Arc<crate::stream_export::StreamExportHub>,
+    /// Phase 2 Quinn / RUDP host skeleton (owns export arm/disarm). DRM-only.
+    pub rudp_host: Option<crate::rudp_host::RudpHostSystem>,
     pub(crate) color_mgmt: crate::color_management::ColorManagementRuntime,
     /// Idle detection + screen-blank (DPMS) + inhibitor bookkeeping.
     pub(crate) idle: crate::idle::IdleManager,
@@ -1154,6 +1158,8 @@ impl MetisState {
             winit_outputs: Vec::new(),
             output_globals: std::collections::HashMap::new(),
             image_capture: crate::image_capture::ImageCaptureRuntime::new(&dh),
+            stream_export: std::sync::Arc::new(crate::stream_export::StreamExportHub::new()),
+            rudp_host: None,
             color_mgmt: crate::color_management::ColorManagementRuntime::new(&dh),
             idle,
             lock: crate::lock::LockState::new(),
@@ -4948,6 +4954,61 @@ impl MetisState {
         );
     }
 
+    /// Apply `rudp.json` / `METIS_RUDP_HOST` — start, stop, or rebind the host.
+    /// No-op under nested winit (no DRM export path).
+    pub(crate) fn reload_rudp_host(&mut self) {
+        if self.udev.is_none() {
+            tracing::debug!("reload-rudp ignored (no DRM session)");
+            return;
+        }
+        let render_path = self
+            .udev
+            .as_ref()
+            .map(|u| crate::rudp_host::render_node_device_path(&u.render_node))
+            .unwrap_or_else(|| std::path::PathBuf::from("/dev/dri/renderD128"));
+        match crate::rudp_host::desired_host() {
+            None => {
+                if self.rudp_host.take().is_some() {
+                    tracing::info!("rudp host stopped (disabled in rudp.json)");
+                }
+            }
+            Some((config, users, lan_only, prefs)) => {
+                if let Some(host) = self.rudp_host.as_mut()
+                    && host.bind == config.bind
+                    && host.encode_prefs == prefs
+                    && host.render_node_path == render_path
+                {
+                    host.allowed_users = users.clone();
+                    host.lan_only = lan_only;
+                    if let Ok(mut guard) = host.allowed_users_live.write() {
+                        *guard = users;
+                    }
+                    tracing::info!(
+                        bind = %host.bind,
+                        allowed = ?host.allowed_users,
+                        "rudp host allowlist refreshed (same bind/encode)"
+                    );
+                    return;
+                }
+                self.rudp_host = None;
+                match crate::rudp_host::RudpHostSystem::spawn(
+                    config,
+                    std::sync::Arc::clone(&self.stream_export),
+                    users,
+                    lan_only,
+                    prefs,
+                    render_path,
+                ) {
+                    Ok(host) => {
+                        tracing::info!(bind = %host.bind, "rudp host (re)started");
+                        self.rudp_host = Some(host);
+                    }
+                    Err(err) => tracing::error!(%err, "rudp host reload failed"),
+                }
+            }
+        }
+    }
+
     fn tick_outputs_reload(&mut self) {
         let Some(due) = self.outputs_reload_due else {
             return;
@@ -8678,6 +8739,10 @@ impl MetisState {
                 );
                 CompositorEvent::Pong
             }
+            CompositorCommand::ReloadRudp => {
+                self.reload_rudp_host();
+                CompositorEvent::Pong
+            }
             CompositorCommand::LockSession => {
                 self.lock_session();
                 CompositorEvent::Pong
@@ -8818,7 +8883,11 @@ impl MetisState {
         self.maybe_place_remote_viewer_window(id);
     }
 
-    /// Move FreeRDP client windows onto a dedicated workspace and switch to it.
+    /// Place FreeRDP client windows per Metis Viewer preference.
+    ///
+    /// Viewer stamps `$XDG_RUNTIME_DIR/metis/viewer-pending-placement` before
+    /// spawn. **Dedicated desktop** (default) moves the client onto its own
+    /// workspace; **window** mode leaves it on the current desk.
     pub(crate) fn maybe_place_remote_viewer_window(&mut self, id: u32) {
         if self.remote_viewer_placed.contains(&id) {
             return;
@@ -8832,10 +8901,20 @@ impl MetisState {
         if !crate::decoration_policy::id_looks_freerdp_client(app_id) {
             return;
         }
+        // Consume even for Window so a preference cannot leak to the next session.
+        let placement = metis_config::take_viewer_pending_placement();
+        self.remote_viewer_placed.insert(id);
+        if placement == metis_config::ViewerPlacement::Window {
+            tracing::info!(
+                id,
+                app_id,
+                "remote viewer: window mode — leaving FreeRDP on current desktop"
+            );
+            return;
+        }
         let key = self.desk_key_for_window(id);
         let target = self.pick_remote_viewer_workspace(&key, id);
         self.remote_viewer_workspace.insert(key.clone(), target);
-        self.remote_viewer_placed.insert(id);
         tracing::info!(
             id,
             %key,

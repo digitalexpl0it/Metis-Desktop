@@ -79,7 +79,7 @@ pub fn load_workspace_thumbs(output: &str, workspaces: &[u32]) -> Option<Workspa
         workspaces: workspaces.to_vec(),
     });
 
-    wait_for_files(&paths, Duration::from_millis(500));
+    wait_for_files(&paths, Duration::from_millis(900));
 
     if paths.iter().any(|p| !p.is_file())
         && let Ok(CompositorEvent::WorkspaceThumbs { .. }) =
@@ -88,7 +88,8 @@ pub fn load_workspace_thumbs(output: &str, workspaces: &[u32]) -> Option<Workspa
                 workspaces: workspaces.to_vec(),
             })
     {
-        wait_for_files(&paths, Duration::from_millis(300));
+        // Wallpaper may still be decoding — give the requeued capture another beat.
+        wait_for_files(&paths, Duration::from_millis(700));
     }
 
     let mut textures = HashMap::new();

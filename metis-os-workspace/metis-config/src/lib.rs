@@ -27,6 +27,7 @@ pub mod outputs;
 pub mod power;
 pub mod remote;
 pub mod reset;
+pub mod rudp;
 pub mod sanitize;
 pub mod screenshot;
 pub mod startup;
@@ -509,6 +510,14 @@ pub use remote::{
     RemoteBackend, RemoteConfig, load_remote_config, remote_config_path, save_remote_config,
 };
 pub use reset::{ResetOptions, ResetResult, reset_metis_config, reset_metis_config_at};
+pub use rudp::{
+    DEFAULT_RUDP_BITRATE_KBPS, DEFAULT_RUDP_PORT, RudpConfig, RudpEncoderBackend, RudpIdentityMeta,
+    RudpVideoCodec, ensure_rudp_dir, fingerprint_cert_der, host_cert_exists, known_hosts_lookup,
+    known_hosts_pin, known_hosts_remove, load_rudp_config, load_rudp_identity_meta,
+    normalize_fingerprint, read_rudp_host_fingerprint, rudp_config_path, rudp_dir,
+    rudp_host_cert_path, rudp_host_key_path, rudp_identity_meta_path, rudp_known_hosts_path,
+    save_rudp_config, save_rudp_identity_meta,
+};
 pub use sanitize::{is_safe_nm_token, validate_nm_id, validate_ssid, validate_vpn_data_fragment};
 pub use screenshot::{
     AfterCaptureAction, ScreenshotConfig, ScreenshotMode, expand_save_dir, load_screenshot_config,
@@ -524,7 +533,9 @@ pub use updates::{
     save_updates_config, updates_config_path,
 };
 pub use viewer::{
-    ViewerConfig, ViewerHost, load_viewer_config, remember_host, remove_recent, save_viewer_config,
+    ViewerCertPolicy, ViewerColorDepth, ViewerConfig, ViewerDisplayMode, ViewerHost, ViewerNetwork,
+    ViewerPlacement, ViewerRdpOptions, load_viewer_config, remember_host, remove_recent,
+    save_viewer_config, set_viewer_pending_placement, take_viewer_pending_placement,
     viewer_config_path,
 };
 pub use wallpaper::{

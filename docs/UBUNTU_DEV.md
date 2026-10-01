@@ -41,6 +41,25 @@ sudo apt install -y \
 `liblcms2-dev` is required to build Stage 2 colour (ICC → GLES 3D-LUT).
 If your image lacks `libgtk4-layer-shell-dev`, run `METIS_LAYER_SHELL_FROM_SOURCE=1 ./install.sh --deps-only` to build [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) into `/usr/local`.
 
+### Metis Remote (RUDP) encode — FFmpeg
+
+Hardware encode for Metis Remote (`metis-encode`) links against system FFmpeg
+(`libavcodec` / `libavutil`) and imports compositor dmabufs via DRM-PRIME
+(VAAPI on Intel/AMD, NVENC on NVIDIA). Install the -dev packages to build:
+
+```bash
+sudo apt install -y \
+  ffmpeg \
+  libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+  libva-dev
+```
+
+Runtime: keep `ffmpeg` installed. Intel/AMD also need a VAAPI driver
+(`intel-media-va-driver-non-free` / `mesa-va-drivers` as appropriate). NVIDIA
+needs the proprietary driver with encode support and an FFmpeg build that
+ships `hevc_nvenc` / `h264_nvenc`. There is no silent software x264/x265
+fallback — if the chosen backend cannot open, Settings/status reports the error.
+
 ### Lock screen biometrics (optional)
 
 Password unlock works with stock `/etc/pam.d/metis`. For fingerprint or YubiKey
@@ -132,8 +151,8 @@ off by default (`xwayland_abstract_socket: false`).
 | Tool | Status | Capture / input | Notes |
 |------|--------|-----------------|-------|
 | **gnome-remote-desktop (RDP)** | **Supported (v1)** | Portal / PipeWire via `metis-portal`; EIS remote input | Settings toggle; text+image clipboard; LAN-only defaults; multi-monitor `RecordMonitor` selects by connector name |
-| **Metis native (FreeRDP shadow)** | **Experimental** | FreeRDP `freerdp-shadow-cli` (`freerdp-shadow-x11`) | `metis-remote native enable`; X11-oriented capture — may not mirror pure Wayland Metis; GRD remains default |
-| **Metis Viewer (`metis-viewer`)** | **Supported (v1 client)** | FreeRDP → GRD or Metis native RDP | GTK connect UI; saved-host card grid in `viewer.json` (no passwords); FreeRDP windows get a dedicated workspace |
+| **Metis native (FreeRDP shadow)** | **Experimental** | FreeRDP `freerdp-shadow-cli` (`freerdp-shadow-x11`) | Settings **Install FreeRDP shadow** / `metis-remote native enable`; X11-oriented capture — may not mirror pure Wayland Metis; GRD remains default |
+| **Metis Viewer (`metis-viewer`)** | **Supported (v1 client)** | FreeRDP → GRD or Metis native RDP | GTK connect UI; Remmina-style Advanced Desktop Settings; saved-host card grid in `viewer.json` (no passwords); FreeRDP placement dedicated workspace or window |
 | **RustDesk** | **Settings preset (detect/open)** | Prefer portal/PipeWire on Wayland; own capture may fail | Settings → Remote access card; not in `metis-remote` — see below |
 | **wayvnc** | **Spike / unsupported** | Needs compositor screencopy or portal consumer | No Metis integration; Smithay capture path TBD |
 | **TigerVNC / x11vnc** | **Not applicable** | X11 | Metis is Wayland-first; do not expect these to attach to the DRM session |

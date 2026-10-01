@@ -1,6 +1,7 @@
 //! Metis Viewer — GTK4 RDP client over FreeRDP (hosts-first UI).
 
 mod freerdp;
+mod options;
 mod theme;
 
 use std::cell::RefCell;
@@ -9,8 +10,9 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gtk::prelude::*;
-use metis_config::{ViewerHost, remember_host, remove_recent};
+use metis_config::{ViewerHost, remember_host, remove_recent, set_viewer_pending_placement};
 use metis_i18n::tr;
+use options::OptionsUi;
 
 #[derive(Debug, Clone, Default)]
 struct CliPrefill {
@@ -324,23 +326,12 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     pass_hint.add_css_class("metis-viewer-hint");
     panel.append(&pass_hint);
 
-    let status = gtk::Label::new(None);
-    status.set_xalign(0.0);
-    status.set_wrap(true);
-    status.add_css_class("metis-viewer-status");
-    if freerdp_ok {
-        if let Some(bin) = freerdp::resolve_freerdp() {
-            status.set_text(&format!("{} {}", tr("Ready —"), bin.display()));
-            status.add_css_class("metis-viewer-ready");
-        }
-    } else {
-        set_status(
-            &status,
-            &tr("Connect disabled — install FreeRDP first."),
-            StatusKind::Error,
-        );
-    }
-    panel.append(&status);
+    let options_ui = Rc::new(OptionsUi::build());
+    let options_header = gtk::Label::new(Some(&tr("Advanced Desktop Settings")));
+    options_header.set_xalign(0.0);
+    options_header.add_css_class("metis-viewer-card-title");
+    panel.append(&options_header);
+    panel.append(&options_ui.root);
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.add_css_class("metis-viewer-actions");
@@ -360,6 +351,21 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     revealer.set_reveal_child(false);
     revealer.set_child(Some(&panel));
     page.append(&revealer);
+
+    // Always visible — card connects close the panel, so status must live outside it.
+    let status = gtk::Label::new(None);
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    status.add_css_class("metis-viewer-status");
+    status.set_visible(false);
+    if !freerdp_ok {
+        set_status(
+            &status,
+            &tr("Connect disabled — install FreeRDP first."),
+            StatusKind::Error,
+        );
+    }
+    page.append(&status);
 
     let hosts_scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -462,6 +468,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let label_entry = label_entry.clone();
         let connect_slot = connect_slot.clone();
         let open_panel = open_panel.clone();
+        let options_ui = options_ui.clone();
         Rc::new(move || {
             let on_connect = connect_slot.borrow().clone();
             refill_hosts_grid(
@@ -471,6 +478,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 &port_entry,
                 &user_entry,
                 &label_entry,
+                options_ui.clone(),
                 on_connect,
                 Some(open_panel.clone()),
             );
@@ -489,6 +497,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let watched_child = watched_child.clone();
         let refresh_hosts = refresh_hosts.clone();
         let close_panel = close_panel.clone();
+        let open_panel = open_panel.clone();
+        let options_ui = options_ui.clone();
 
         move || {
             if *connect_busy.borrow() {
@@ -500,6 +510,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     &freerdp::freerdp_install_hint_full(),
                     StatusKind::Error,
                 );
+                open_panel();
                 return;
             }
             *connect_busy.borrow_mut() = true;
@@ -510,6 +521,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             let username = user_entry.text().to_string();
             let label = label_entry.text().to_string();
             let password = pass_entry.text().to_string();
+            let options = options_ui.collect();
 
             let port: u16 = match port_text.trim().parse() {
                 Ok(0) | Err(_) => {
@@ -518,6 +530,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                         &tr("Enter a valid port (1–65535)."),
                         StatusKind::Error,
                     );
+                    open_panel();
                     *connect_busy.borrow_mut() = false;
                     connect_btn.set_sensitive(true);
                     return;
@@ -530,11 +543,13 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     &tr("Enter a host name or IP address."),
                     StatusKind::Error,
                 );
+                open_panel();
                 *connect_busy.borrow_mut() = false;
                 connect_btn.set_sensitive(true);
                 return;
             }
 
+            set_viewer_pending_placement(options.placement);
             let req = freerdp::ConnectRequest {
                 host: host.clone(),
                 port,
@@ -544,6 +559,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 } else {
                     Some(password)
                 },
+                options: options.clone(),
             };
 
             match freerdp::spawn_freerdp(req) {
@@ -558,6 +574,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                         port,
                         username: username.trim().to_string(),
                         label: label.trim().to_string(),
+                        options,
                     };
                     if let Err(e) = remember_host(entry) {
                         tracing::warn!("viewer.json save failed: {e}");
@@ -571,6 +588,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     let status_watch = status.clone();
                     let busy = connect_busy.clone();
                     let btn = connect_btn.clone();
+                    let reopen = open_panel.clone();
                     glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
                         let mut slot = watched.borrow_mut();
                         let Some(child) = slot.as_mut() else {
@@ -582,6 +600,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                             freerdp::EarlyWatch::Running => glib::ControlFlow::Continue,
                             freerdp::EarlyWatch::Done => {
                                 *slot = None;
+                                status_watch.set_visible(false);
                                 *busy.borrow_mut() = false;
                                 btn.set_sensitive(freerdp::resolve_freerdp().is_some());
                                 glib::ControlFlow::Break
@@ -589,6 +608,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                             freerdp::EarlyWatch::Failed(msg) => {
                                 *slot = None;
                                 set_status(&status_watch, &msg, StatusKind::Error);
+                                notify_desktop(&tr("Connection failed"), &msg, "critical");
+                                reopen();
                                 *busy.borrow_mut() = false;
                                 btn.set_sensitive(freerdp::resolve_freerdp().is_some());
                                 glib::ControlFlow::Break
@@ -598,6 +619,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 }
                 Err(e) => {
                     set_status(&status, &e, StatusKind::Error);
+                    notify_desktop(&tr("Connection failed"), &e, "critical");
+                    open_panel();
                     *connect_busy.borrow_mut() = false;
                     connect_btn.set_sensitive(freerdp::resolve_freerdp().is_some());
                 }
@@ -619,6 +642,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let status = status.clone();
         let refresh_hosts = refresh_hosts.clone();
         let close_panel = close_panel.clone();
+        let options_ui = options_ui.clone();
         save_btn.connect_clicked(move |_| {
             let host = host_entry.text();
             let port_text = port_entry.text();
@@ -648,6 +672,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 port,
                 username: username.trim().to_string(),
                 label: label.trim().to_string(),
+                options: options_ui.collect(),
             };
             match remember_host(entry) {
                 Ok(()) => {
@@ -825,6 +850,7 @@ enum StatusKind {
 
 fn set_status(label: &gtk::Label, text: &str, kind: StatusKind) {
     label.set_text(text);
+    label.set_visible(true);
     label.remove_css_class("error");
     label.remove_css_class("ok");
     label.remove_css_class("metis-viewer-ready");
@@ -834,6 +860,41 @@ fn set_status(label: &gtk::Label, text: &str, kind: StatusKind) {
     }
 }
 
+/// Desktop notification via `notify-send` so Metis Notification Center picks it up.
+fn notify_desktop(title: &str, body: &str, urgency: &str) {
+    use std::process::{Command, Stdio};
+    let sent = Command::new("notify-send")
+        .args([
+            "-a",
+            "Metis Viewer",
+            "-u",
+            urgency,
+            "--hint=string:desktop-entry:metis-viewer",
+            "--icon=computer",
+            title,
+            body,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if sent {
+        return;
+    }
+    let app = gtk::Application::default();
+    let note = gio::Notification::new(title);
+    note.set_body(Some(body));
+    note.set_priority(if urgency == "critical" {
+        gio::NotificationPriority::Urgent
+    } else {
+        gio::NotificationPriority::Normal
+    });
+    app.send_notification(Some("metis-viewer-status"), &note);
+}
+
+#[allow(clippy::too_many_arguments)]
 fn refill_hosts_grid(
     grid: &gtk::FlowBox,
     empty: &gtk::Box,
@@ -841,6 +902,7 @@ fn refill_hosts_grid(
     port_entry: &gtk::Entry,
     user_entry: &gtk::Entry,
     label_entry: &gtk::Entry,
+    options_ui: Rc<OptionsUi>,
     on_connect: Option<ConnectFn>,
     open_panel: Option<Rc<dyn Fn()>>,
 ) {
@@ -918,6 +980,7 @@ fn refill_hosts_grid(
             let p = port_entry.clone();
             let u = user_entry.clone();
             let l = label_entry.clone();
+            let opts = options_ui.clone();
             let e = entry.clone();
             let connect = on_connect.clone();
             btn.connect_clicked(move |_| {
@@ -925,6 +988,7 @@ fn refill_hosts_grid(
                 p.set_text(&e.port.to_string());
                 u.set_text(&e.username);
                 l.set_text(&e.label);
+                opts.apply_host(&e);
                 if let Some(f) = &connect {
                     f();
                 }
@@ -943,6 +1007,7 @@ fn refill_hosts_grid(
             let p = port_entry.clone();
             let u = user_entry.clone();
             let l = label_entry.clone();
+            let opts = options_ui.clone();
             let e = entry.clone();
             let open = open_panel.clone();
             edit.connect_clicked(move |_| {
@@ -950,6 +1015,7 @@ fn refill_hosts_grid(
                 p.set_text(&e.port.to_string());
                 u.set_text(&e.username);
                 l.set_text(&e.label);
+                opts.apply_host(&e);
                 if let Some(f) = &open {
                     f();
                 }
@@ -970,6 +1036,7 @@ fn refill_hosts_grid(
             let port_entry = port_entry.clone();
             let user_entry = user_entry.clone();
             let label_entry = label_entry.clone();
+            let options_ui = options_ui.clone();
             let e = entry.clone();
             let connect = on_connect.clone();
             let open = open_panel.clone();
@@ -984,6 +1051,7 @@ fn refill_hosts_grid(
                     &port_entry,
                     &user_entry,
                     &label_entry,
+                    options_ui.clone(),
                     connect.clone(),
                     open.clone(),
                 );

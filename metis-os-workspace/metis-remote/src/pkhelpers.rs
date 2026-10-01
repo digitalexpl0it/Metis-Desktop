@@ -12,6 +12,7 @@ use zeroize::Zeroize;
 /// Packages Metis may install via Polkit (onboarding + gaming health fixes).
 pub const APT_ALLOWLIST: &[&str] = &[
     "gnome-remote-desktop",
+    "freerdp-shadow-x11",
     "flatpak",
     "gamemode",
     "bluez",
@@ -458,6 +459,7 @@ mod tests {
         assert!(APT_ALLOWLIST.contains(&"mesa-vulkan-drivers"));
         assert!(APT_ALLOWLIST.contains(&"mesa-vulkan-drivers:i386"));
         assert!(APT_ALLOWLIST.contains(&"steam-devices"));
+        assert!(APT_ALLOWLIST.contains(&"freerdp-shadow-x11"));
     }
 
     #[test]

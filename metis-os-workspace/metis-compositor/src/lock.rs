@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::os::raw::{c_char, c_int, c_void};
 use std::time::Duration;
 
 use fontdue::Font;
@@ -34,6 +33,7 @@ use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size, Transfor
 use crate::focus::KeyboardFocusTarget;
 use crate::lock_auth_cues::{AuthCues, detect_auth_cues};
 use crate::night_light::{RenderTargetInfo, premultiply};
+use crate::pam_auth::{self, pam_check, pam_service};
 use crate::render::OutputStack;
 use crate::state::MetisState;
 
@@ -366,7 +366,7 @@ impl MetisState {
         if self.lock.auth_in_flight {
             return;
         }
-        let username = current_username().unwrap_or_default();
+        let username = pam_auth::current_username().unwrap_or_default();
         if username.is_empty() {
             self.lock.status = Some("Cannot determine user".to_string());
             self.lock.clear_password();
@@ -1040,200 +1040,11 @@ impl MetisState {
     }
 }
 
-/// PAM service to authenticate against. Prefers the Metis-specific service when
-/// installed (`/etc/pam.d/metis`); otherwise falls back to a common login stack
-/// so a not-yet-installed dev session can still unlock.
-fn pam_service() -> String {
-    for name in ["metis", "system-login", "login"] {
-        if std::path::Path::new("/etc/pam.d").join(name).exists() {
-            return name.to_string();
-        }
-    }
-    "login".to_string()
-}
-
+/// Hash a text line's content + style into a stable cache key.
 fn lock_cue_status(cues: AuthCues) -> Option<String> {
     cues.status_ftl_id().map(metis_i18n::tr_ftl)
 }
 
-// --- Minimal libpam FFI ------------------------------------------------------
-//
-// We link `libpam` directly rather than pulling in the `pam` crate, whose
-// `pam-sys` dependency runs `bindgen` at build time (requiring libclang). A
-// hand-written binding keeps the build dependency-light and portable. Only the
-// tiny subset needed for a login-style password check is declared here.
-
-const PAM_SUCCESS: c_int = 0;
-const PAM_PROMPT_ECHO_OFF: c_int = 1;
-const PAM_PROMPT_ECHO_ON: c_int = 2;
-const PAM_ERROR_MSG: c_int = 3;
-const PAM_TEXT_INFO: c_int = 4;
-const PAM_BUF_ERR: c_int = 5;
-const PAM_CONV_ERR: c_int = 19;
-
-#[repr(C)]
-struct PamMessage {
-    msg_style: c_int,
-    msg: *const c_char,
-}
-
-#[repr(C)]
-struct PamResponse {
-    resp: *mut c_char,
-    resp_retcode: c_int,
-}
-
-#[repr(C)]
-struct PamConv {
-    conv: Option<
-        unsafe extern "C" fn(
-            num_msg: c_int,
-            msg: *mut *const PamMessage,
-            resp: *mut *mut PamResponse,
-            appdata_ptr: *mut c_void,
-        ) -> c_int,
-    >,
-    appdata_ptr: *mut c_void,
-}
-
-/// Opaque PAM handle.
-enum PamHandle {}
-
-#[link(name = "pam")]
-unsafe extern "C" {
-    fn pam_start(
-        service: *const c_char,
-        user: *const c_char,
-        conv: *const PamConv,
-        handle: *mut *mut PamHandle,
-    ) -> c_int;
-    fn pam_authenticate(handle: *mut PamHandle, flags: c_int) -> c_int;
-    fn pam_acct_mgmt(handle: *mut PamHandle, flags: c_int) -> c_int;
-    fn pam_end(handle: *mut PamHandle, status: c_int) -> c_int;
-}
-
-/// Credentials handed to the PAM conversation callback.
-struct ConvData {
-    user: std::ffi::CString,
-    password: std::ffi::CString,
-}
-
-/// PAM conversation: answer the password prompt (echo off) with the typed
-/// password and any echoed prompt (echo on) with the username. Info / error
-/// messages from pam_fprintd / pam_u2f are acknowledged with an empty response.
-/// Responses are allocated with libc so PAM can `free()` them.
-unsafe extern "C" fn converse(
-    num_msg: c_int,
-    msg: *mut *const PamMessage,
-    resp: *mut *mut PamResponse,
-    appdata_ptr: *mut c_void,
-) -> c_int {
-    unsafe {
-        if num_msg <= 0 || msg.is_null() || resp.is_null() || appdata_ptr.is_null() {
-            return PAM_CONV_ERR;
-        }
-        let data = &*(appdata_ptr as *const ConvData);
-        let n = num_msg as usize;
-        let responses = libc::calloc(n, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
-        if responses.is_null() {
-            return PAM_BUF_ERR;
-        }
-        for i in 0..n {
-            let message = *msg.add(i);
-            let out = responses.add(i);
-            (*out).resp = std::ptr::null_mut();
-            (*out).resp_retcode = 0;
-            if message.is_null() {
-                continue;
-            }
-            match (*message).msg_style {
-                PAM_PROMPT_ECHO_OFF => {
-                    (*out).resp = libc::strdup(data.password.as_ptr());
-                }
-                PAM_PROMPT_ECHO_ON => {
-                    (*out).resp = libc::strdup(data.user.as_ptr());
-                }
-                PAM_TEXT_INFO | PAM_ERROR_MSG => {
-                    // Acknowledge; modules may free(resp). Empty string is safe.
-                    (*out).resp = libc::strdup(c"".as_ptr());
-                }
-                _ => {}
-            }
-        }
-        *resp = responses;
-        PAM_SUCCESS
-    }
-}
-
-/// Authenticate `user`/`password` against the given PAM `service`. Returns true
-/// only when both authentication and account management succeed. Never logs the
-/// password.
-fn pam_check(service: &str, user: &str, password: &str) -> bool {
-    use std::ffi::CString;
-    let (Ok(c_service), Ok(c_user_start)) = (CString::new(service), CString::new(user)) else {
-        return false;
-    };
-    let (Ok(conv_user), Ok(conv_pass)) = (CString::new(user), CString::new(password)) else {
-        return false;
-    };
-    let mut data = ConvData {
-        user: conv_user,
-        password: conv_pass,
-    };
-    let conv = PamConv {
-        conv: Some(converse),
-        appdata_ptr: &mut data as *mut ConvData as *mut c_void,
-    };
-    let mut handle: *mut PamHandle = std::ptr::null_mut();
-    unsafe {
-        let start = pam_start(
-            c_service.as_ptr(),
-            c_user_start.as_ptr(),
-            &conv,
-            &mut handle,
-        );
-        if start != PAM_SUCCESS || handle.is_null() {
-            tracing::warn!(service, "lock: pam_start failed");
-            return false;
-        }
-        let auth = pam_authenticate(handle, 0);
-        let acct = if auth == PAM_SUCCESS {
-            pam_acct_mgmt(handle, 0)
-        } else {
-            auth
-        };
-        pam_end(handle, auth);
-        auth == PAM_SUCCESS && acct == PAM_SUCCESS
-    }
-}
-
-/// Resolve the current user's login name (env first, then the passwd database).
-fn current_username() -> Option<String> {
-    for var in ["USER", "LOGNAME"] {
-        if let Ok(v) = std::env::var(var)
-            && !v.is_empty()
-        {
-            return Some(v);
-        }
-    }
-    // Safe libc fallback: getpwuid(getuid()) then copy the name out.
-    unsafe {
-        let uid = libc::getuid();
-        let pw = libc::getpwuid(uid);
-        if !pw.is_null() {
-            let name = (*pw).pw_name;
-            if !name.is_null()
-                && let Ok(s) = std::ffi::CStr::from_ptr(name).to_str()
-                && !s.is_empty()
-            {
-                return Some(s.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Hash a text line's content + style into a stable cache key.
 fn text_key(text: &str, px: f32, color: [f32; 4]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut h);
@@ -1463,7 +1274,7 @@ fn current_display_name() -> Option<String> {
             }
         }
     }
-    current_username()
+    pam_auth::current_username()
 }
 
 /// Namespace + hash a sprite tag and integer parameters into a cache key

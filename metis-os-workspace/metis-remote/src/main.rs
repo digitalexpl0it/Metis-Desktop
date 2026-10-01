@@ -5,14 +5,16 @@ use std::io::Read;
 use metis_remote::{
     ConfFileChoice, accounts_list_as_root, add_input_group, add_user_as_root, apt_install,
     autostart_from_config, datetime_status_as_root, disable, enable, firewall_apply,
-    firewall_apply_as_root, firewall_clear, firewall_clear_as_root, firewall_rustdesk_apply,
-    firewall_rustdesk_apply_as_root, firewall_rustdesk_clear, firewall_rustdesk_clear_as_root,
-    firewall_rustdesk_status, firewall_status, native_disable, native_enable, native_status, pause,
-    privileged_exe, remove_user_as_root, resume, rustdesk_disable, rustdesk_enable,
-    rustdesk_status, set_account_password_as_root, set_admin_as_root, set_display_name_as_root,
-    set_lan_only, set_ntp_as_root, set_password, set_time_as_root, set_timezone_as_root,
-    set_user_icon_as_root, status, ubuntu_drivers_install, updates_apply_as_root,
-    updates_configure_pending_as_root, updates_refresh_as_root,
+    firewall_apply_as_root, firewall_clear, firewall_clear_as_root, firewall_rudp_apply,
+    firewall_rudp_apply_as_root, firewall_rudp_clear, firewall_rudp_clear_as_root,
+    firewall_rudp_status, firewall_rustdesk_apply, firewall_rustdesk_apply_as_root,
+    firewall_rustdesk_clear, firewall_rustdesk_clear_as_root, firewall_rustdesk_status,
+    firewall_status, native_disable, native_enable, native_status, pause, privileged_exe,
+    remove_user_as_root, resume, rustdesk_disable, rustdesk_enable, rustdesk_status,
+    set_account_password_as_root, set_admin_as_root, set_display_name_as_root, set_lan_only,
+    set_ntp_as_root, set_password, set_time_as_root, set_timezone_as_root, set_user_icon_as_root,
+    status, ubuntu_drivers_install, updates_apply_as_root, updates_configure_pending_as_root,
+    updates_refresh_as_root,
 };
 use zeroize::Zeroize;
 
@@ -132,9 +134,30 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let snap = firewall_rustdesk_clear_as_root()?;
                 print_firewall(&snap)
             }
+            Some("rudp-apply") => {
+                let snap = firewall_rudp_apply()?;
+                print_firewall(&snap)
+            }
+            Some("rudp-clear") => {
+                let snap = firewall_rudp_clear()?;
+                print_firewall(&snap)
+            }
+            Some("rudp-status") => {
+                let snap = firewall_rudp_status();
+                print_firewall(&snap)
+            }
+            Some("rudp-apply-as-root") => {
+                let snap = firewall_rudp_apply_as_root()?;
+                print_firewall(&snap)
+            }
+            Some("rudp-clear-as-root") => {
+                let snap = firewall_rudp_clear_as_root()?;
+                print_firewall(&snap)
+            }
             _ => Err(
                 "usage: metis-remote firewall {apply|clear|status|apply-as-root|clear-as-root|\
-                 rustdesk-apply|rustdesk-clear|rustdesk-status|rustdesk-apply-as-root|rustdesk-clear-as-root}"
+                 rustdesk-apply|rustdesk-clear|rustdesk-status|rustdesk-apply-as-root|rustdesk-clear-as-root|\
+                 rudp-apply|rudp-clear|rudp-status|rudp-apply-as-root|rudp-clear-as-root}"
                     .into(),
             ),
         },

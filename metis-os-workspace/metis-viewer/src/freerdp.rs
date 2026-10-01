@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use metis_config::ViewerRdpOptions;
 use zeroize::Zeroize;
 
 /// Preferred FreeRDP clients under `/usr/bin` only (no `PATH`, no `sh -c`).
@@ -52,6 +53,7 @@ pub struct ConnectRequest {
     ///
     /// Note: argv passwords are briefly visible in `/proc/<pid>/cmdline`.
     pub password: Option<String>,
+    pub options: ViewerRdpOptions,
 }
 
 pub struct SpawnedFreerdp {
@@ -73,18 +75,9 @@ pub fn spawn_freerdp(mut req: ConnectRequest) -> Result<SpawnedFreerdp, String> 
     let mut args: Vec<String> = vec![
         format!("/v:{host}:{}", req.port),
         format!("/u:{}", req.username.trim()),
-        // GRD (and most LAN RDP hosts) use a self-signed cert. Our spawn has no
-        // interactive cert prompt (stdin null). `/cert:ignore` is required for
-        // FreeRDP 3 + GRD: without it the client exits on BIO/cert errors before
-        // a window opens. Metis Remote defaults to LAN-only sharing.
-        "/cert:ignore".into(),
-        "/dynamic-resolution".into(),
-        "/network:auto".into(),
-        // FreeRDP + gnome-remote-desktop can abort the whole session with
-        // `cliprdr_packet_format_list_new failed!` (format-list / image mime
-        // negotiation). Prefer a working desktop over clipboard for v1.
-        "-clipboard".into(),
     ];
+    args.extend(req.options.freerdp_args());
+
     if let Some(pw) = req.password.as_mut() {
         if !pw.is_empty() {
             args.push(format!("/p:{pw}"));
@@ -97,6 +90,7 @@ pub fn spawn_freerdp(mut req: ConnectRequest) -> Result<SpawnedFreerdp, String> 
         host = %host,
         port = req.port,
         user = %req.username.trim(),
+        placement = ?req.options.placement,
         "spawning FreeRDP"
     );
 

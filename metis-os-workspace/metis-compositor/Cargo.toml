@@ -13,6 +13,7 @@ path = "src/main.rs"
 bitflags = "2.6"
 libc = "0.2"
 metis-config = { workspace = true }
+metis-encode = { workspace = true }
 metis-grid = { workspace = true }
 metis-protocol = { workspace = true }
 serde = { workspace = true }
@@ -33,6 +34,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Stage 2 colour: bake sRGB→display 3D LUTs from ICC profiles.
 lcms2 = "6"
 bytemuck = "1"
+# Phase 2 RUDP host skeleton (Quinn on an isolated Tokio runtime).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = "0.14"
 
 [dependencies.smithay]
 git = "https://github.com/Smithay/smithay"

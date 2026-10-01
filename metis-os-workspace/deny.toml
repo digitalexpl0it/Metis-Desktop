@@ -42,6 +42,8 @@ allow = [
     "0BSD",
     "Unlicense",
     "CDLA-Permissive-2.0",
+    # ffmpeg-next / ffmpeg-sys-next (system libav bindings for RUDP encode).
+    "WTFPL",
 ]
 
 # ical 0.11 publishes without a license field; upstream is MIT

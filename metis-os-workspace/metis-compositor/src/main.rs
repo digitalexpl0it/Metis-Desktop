@@ -35,11 +35,15 @@ mod output_hdr;
 mod output_modes;
 mod output_prefs;
 mod output_vrr;
+mod pam_auth;
 mod remote_input;
 mod render;
+mod rudp_host;
+mod rudp_identity;
 mod screenshot_overlay;
 mod session_lock;
 mod state;
+mod stream_export;
 mod text_layout;
 mod udev;
 mod wallpaper;
@@ -173,6 +177,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Backend::Drm => {
             udev::init_udev(&mut event_loop, &mut state)?;
+            // Phase 2 Quinn host: `rudp.json` / `METIS_RUDP_HOST`, else Phase 1 debug export.
+            state.rudp_host = rudp_host::maybe_start_for_session(
+                &state.stream_export,
+                state
+                    .udev
+                    .as_ref()
+                    .map(|u| rudp_host::render_node_device_path(&u.render_node))
+                    .unwrap_or_else(|| std::path::PathBuf::from("/dev/dri/renderD128")),
+            );
         }
     }
 
@@ -393,8 +406,9 @@ fn start_portal_watchdog(wayland_display: String) {
     std::thread::Builder::new()
         .name("metis-portal-watchdog".into())
         .spawn(move || {
+            let mut backoff = std::time::Duration::from_secs(8);
             loop {
-                std::thread::sleep(std::time::Duration::from_secs(8));
+                std::thread::sleep(backoff);
                 if std::env::var_os("METIS_NO_PORTAL").is_some() {
                     continue;
                 }
@@ -402,6 +416,7 @@ fn start_portal_watchdog(wayland_display: String) {
                     session_bus_name_active("org.freedesktop.impl.portal.desktop.metis");
                 let screencast_ok = session_bus_name_active("org.gnome.Mutter.ScreenCast");
                 if portal_ok && screencast_ok {
+                    backoff = std::time::Duration::from_secs(8);
                     continue;
                 }
                 tracing::warn!(
@@ -409,7 +424,15 @@ fn start_portal_watchdog(wayland_display: String) {
                     screencast_ok,
                     "metis-portal D-Bus services missing — respawning"
                 );
+                // Portal owns its name but never registered Mutter (e.g. hung in
+                // ashpd serve before the shim). Spawning another instance only
+                // yields NameTaken — terminate the stale owner first.
+                if portal_ok && !screencast_ok {
+                    terminate_session_bus_name_owner("org.freedesktop.impl.portal.desktop.metis");
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                }
                 spawn_metis_portal(&wayland_display);
+                backoff = (backoff * 2).min(std::time::Duration::from_secs(60));
             }
         })
         .expect("spawn portal watchdog thread");
@@ -499,6 +522,34 @@ fn session_bus_name_active(name: &str) -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// SIGTERM the process currently owning a session-bus well-known name (if any).
+fn terminate_session_bus_name_owner(name: &str) {
+    let Ok(output) = std::process::Command::new("busctl")
+        .args(["--user", "status", name])
+        .stdin(std::process::Stdio::null())
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let Some(pid) = text.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix("PID=")?.parse::<i32>().ok()
+    }) else {
+        return;
+    };
+    if pid <= 1 {
+        return;
+    }
+    tracing::info!(pid, %name, "terminating stale portal D-Bus owner");
+    let _ = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
 }
 
 fn wait_for_session_bus_name(name: &str, timeout: std::time::Duration) -> bool {

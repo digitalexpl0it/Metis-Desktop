@@ -319,11 +319,19 @@ pub const NAV: &[NavItem] = &[
         category: Some("system"),
     },
     NavItem {
+        page_id: Some("rudp"),
+        title: "Metis Remote",
+        icon: Some("network-workgroup-symbolic"),
+        hue: Some(NavHue::Blue),
+        subtitle: Some("Low-latency RUDP desktop streaming"),
+        category: Some("system"),
+    },
+    NavItem {
         page_id: Some("remote"),
         title: "Remote access",
         icon: Some("network-transmit-receive-symbolic"),
         hue: Some(NavHue::Blue),
-        subtitle: Some("Share your logged-in session over the network"),
+        subtitle: Some("Classic RDP, FreeRDP shadow, and third-party tools"),
         category: Some("system"),
     },
     NavItem {

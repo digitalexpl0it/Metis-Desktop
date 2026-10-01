@@ -43,6 +43,11 @@ METIS_APT_PACKAGES=(
   tesseract-ocr
   tesseract-ocr-eng
   ffmpeg
+  libavcodec-dev
+  libavformat-dev
+  libavutil-dev
+  libswscale-dev
+  libva-dev
   nftables
   pkexec
   polkitd

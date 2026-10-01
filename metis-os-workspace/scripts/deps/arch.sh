@@ -38,6 +38,7 @@ METIS_PACMAN_PACKAGES=(
   tesseract
   tesseract-data-eng
   ffmpeg
+  libva
   nftables
   polkit
 )

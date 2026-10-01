@@ -118,6 +118,15 @@ pub fn reload_power_async() {
     });
 }
 
+/// Re-read `rudp.json` and start/stop/rebind the Metis Remote host live.
+pub fn reload_rudp_async() {
+    std::thread::spawn(|| {
+        if let Err(err) = send_command(CompositorCommand::ReloadRudp) {
+            tracing::debug!(%err, "failed to reload rudp via compositor IPC");
+        }
+    });
+}
+
 /// Re-read `lock.json` and re-decode the lock-screen background live. Best-effort;
 /// runs off the GTK main thread so a slow/absent compositor never stalls the UI.
 pub fn reload_lock_async() {

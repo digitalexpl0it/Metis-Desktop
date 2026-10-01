@@ -1,0 +1,23 @@
+[package]
+name = "metis-rudp-smoke"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Metis Remote (RUDP) Phase 4 auth smoke client (TOFU + PAM)"
+
+[[bin]]
+name = "metis-rudp-smoke"
+path = "src/main.rs"
+
+[dependencies]
+metis-config = { workspace = true }
+metis-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+zeroize = "1"

@@ -1064,6 +1064,51 @@ While gaming, **Settings → Gaming → Auto performance profile** (via `metis-g
 can temporarily switch to **Performance** and restore your previous profile when the
 game session ends.
 
+### Metis Remote (RUDP)
+
+**Settings → System → Metis Remote** is the primary low-latency desktop stream
+(compositor capture + Quinn). It is separate from classic RDP.
+
+1. Open **Settings → Metis Remote**.
+2. Turn on **Allow Metis Remote connections**. Metis writes `~/.config/metis/rudp.json`
+   and asks the compositor to listen (default UDP **7843**).
+3. Set the **UDP port** if needed (1024–65535).
+4. Under **Hardware encode**, choose **Encoder** (`Auto` / `VAAPI` / `NVENC`),
+   preferred codec (HEVC first, with H.264 fallback), and target **Bitrate**.
+   Auto selects NVENC on NVIDIA render nodes and VAAPI on Intel/AMD. Encoding
+   uses system FFmpeg with DRM-PRIME import (no CPU mmap of the capture buffer).
+5. Under **Allowed accounts**, toggle which local system users may authenticate
+   (PAM). The first enable seeds your current account when the list is empty;
+   at least one account must stay allowed while the host is on.
+6. Leave **LAN only** on (default). Metis applies nftables (preferred) or ufw so
+   only private / loopback / link-local sources can reach the UDP port. A
+   PolicyKit dialog may appear; use **Retry firewall apply** if needed.
+7. Note the **Host fingerprint** (SHA-256). Clients pin it on first connect (TOFU);
+   a mismatch refuses the connection until you clear the pin.
+
+**Smoke-test auth** (DRM Metis session with the host enabled):
+
+```bash
+metis-rudp-smoke 192.168.1.10:7843 --user "$USER"
+# password on stdin, or: METIS_RUDP_PASSWORD=… metis-rudp-smoke …
+# after a cert rotation: --tofu-reset
+```
+
+Host identity files: `~/.config/metis/rudp/host.crt`, `host.key`, `identity.json`.
+Client pins: `~/.config/metis/rudp/known_hosts`.
+
+**Packages:** build with `libavcodec-dev` / `libavutil-dev` / `libavformat-dev`
+(and runtime `ffmpeg`). Intel/AMD need a working VAAPI stack (`intel-media-va-driver`
+/ Mesa VA); NVIDIA needs the proprietary driver with NVENC and an FFmpeg build
+that exposes `*_nvenc`. If the chosen backend cannot open, the host logs a clear
+error and does not fall back to software x264/x265.
+
+Video datagrams and the Viewer GUI are later milestones; PAM + TOFU auth works
+now over the Quinn control stream. Use a DRM Metis session (not nested winit).
+
+Classic **RDP** (GNOME Remote Desktop), FreeRDP shadow, and third-party tools
+remain under **Settings → Remote access**.
+
 ### Remote desktop (RDP)
 
 **Settings → System → Remote access** turns on headless RDP sharing for the
@@ -1107,7 +1152,9 @@ defaults to **Settings → Remote access** + `gnome-remote-desktop` / `metis-rem
 An experimental **Metis native** host (`metis-remote native enable`, FreeRDP
 shadow / `freerdp-shadow-x11`) is also RDP-compatible with this viewer; GRD
 remains the supported default (shadow is X11-oriented and may not capture a
-pure Wayland Metis session).
+pure Wayland Metis session). In **Settings → Remote access → Metis native
+(experimental)**, use **Install FreeRDP shadow** for one-click apt install via
+PolicyKit (or **Enable**, which installs first when the package is missing).
 
 1. Install a FreeRDP client on the machine that will connect (Ubuntu):
    `sudo apt install freerdp3-wayland`  
@@ -1115,20 +1162,24 @@ pure Wayland Metis session).
 2. Open **Metis Viewer** from the app launcher, `metis-cmd viewer`, or
    **Settings → Remote access → Connect with Metis Viewer…**.
 3. Enter host, port (default **3389**), username, optional display **label**,
-   and optionally password. Saved hosts are stored in
-   `~/.config/metis/viewer.json` (**no passwords**) and shown as a **card grid**.
-   Click a card to fill fields and connect; **Save** upserts without connecting;
-   use the trash control to remove an entry. If the password field is left empty,
-   FreeRDP prompts (GUI dialog); if filled, Metis passes `/p:` only on the
-   FreeRDP child argv (never logged, never written to config — briefly visible
-   in `/proc` while FreeRDP starts). Quick FreeRDP failures (auth/connect)
-   surface in the status line within a few seconds. Metis Viewer passes
-   `/cert:ignore` so GNOME Remote Desktop’s self-signed LAN certificates work
-   without an interactive prompt.
-4. Under Metis, FreeRDP session windows open on their **own workspace** so they
-   appear in Super+Tab Task View and Super+Alt+←/→ desktop cycling (bar workspace
-   dots work too). The Metis Viewer connect window itself stays on the current
-   desktop.
+   and optionally password. Under **Advanced Desktop Settings**, tune Display
+   (color depth, windowed/fullscreen/dynamic resolution, Metis placement,
+   multi-monitor), Local resources (clipboard off by default — GRD-safe; audio,
+   microphone, printers, smart cards), Experience (network preset + visual
+   toggles), and Advanced (server certificate policy). Saved hosts store these
+   options in `~/.config/metis/viewer.json` (**no passwords**) and show as a
+   **card grid**. Click a card to connect with that host’s saved options; the
+   pencil opens the panel for edits; **Save** upserts without connecting; trash
+   removes an entry. If the password field is left empty, FreeRDP prompts (GUI
+   dialog); if filled, Metis passes `/p:` only on the FreeRDP child argv (never
+   logged, never written to config — briefly visible in `/proc` while FreeRDP
+   starts). Quick FreeRDP failures (auth/connect) surface in the status line
+   within a few seconds. Default certificate policy is **Ignore** so GNOME
+   Remote Desktop’s self-signed LAN certificates work without a prompt.
+4. Under Metis, FreeRDP sessions default to their **own workspace** (Super+Tab
+   Task View / Super+Alt+←/→). Choose **Window on current desktop** in Display →
+   Metis placement to keep the session on the desk you connected from. The Metis
+   Viewer connect window itself always stays on the current desktop.
 
 **Other clients.** Windows: *Remote Desktop Connection* (`mstsc`). macOS:
 *Microsoft Remote Desktop* from the App Store. Linux CLI:
@@ -1325,7 +1376,8 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `startup.json` | Session startup apps: master enable + desktop ids (empty by default; Settings → Startup) |
 | `updates.json` | Software updates prefs: enabled, check interval, snooze, notify, auto-install security, PackageKit/Flatpak/fwupd sources, last check/error |
 | *(cache)* `~/.cache/metis/updates-snapshot.json` | Pending update list shared by Settings Check now, the edge-bar badge, and the updater |
-| `remote.json` | Desktop sharing: enabled, backend (`gnome_rdp` default / `rustdesk`), auto-start, LAN-only + firewall state |
+| `remote.json` | Classic RDP / third-party desktop sharing: enabled, backend (`gnome_rdp` default / `rustdesk` / `metis_native`), auto-start, LAN-only + firewall state |
+| `rudp.json` | Metis Remote (RUDP): enabled, UDP port (default 7843), LAN-only + firewall status, `allowed_users` (PAM), `encoder` / `codec` / `bitrate_kbps`; host TLS under `rudp/host.{crt,key}` + fingerprint |
 | `dashboard.json` | Control Center: enabled, widgets, height %, refresh, confirm-before-kill, process monitor |
 | `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, `extra_steam_paths`, Metis MangoHud/Gamescope toggles, per-appid `gamescope_profiles` |
 | `gaming-flatpak.json` | Record of applied Flatpak gaming overrides (managed by `metis-gaming`) |

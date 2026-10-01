@@ -16,7 +16,6 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 use background::MetisBackground;
-use futures_util::future::pending;
 use screencast::MetisScreencast;
 use screenshot::MetisScreenshot;
 use settings::MetisSettings;
@@ -97,17 +96,9 @@ async fn run_portal() -> ashpd::Result<()> {
         .await
         .map_err(|err| ashpd::PortalError::Failed(format!("session bus connection: {err}")))?;
 
-    ashpd::backend::Builder::new(DBUS_NAME)?
-        .settings(MetisSettings)
-        .screenshot(MetisScreenshot::new(Arc::clone(&capture)))
-        .screencast(MetisScreencast::new(
-            Arc::clone(&capture),
-            Arc::clone(&pipewire),
-        ))
-        .background(MetisBackground)
-        .build_with_connection(connection.clone())
-        .await?;
-
+    // ashpd::Builder::build_with_connection claims the portal name then awaits
+    // `connection.closed()` forever. Register Mutter / PowerProfile / screensaver
+    // *before* that so gnome-remote-desktop can see RemoteDesktop + ScreenCast.
     if let Err(err) = power_profile::serve(&connection).await {
         tracing::warn!(%err, "PowerProfileMonitor portal unavailable");
     }
@@ -131,6 +122,17 @@ async fn run_portal() -> ashpd::Result<()> {
         }
     };
 
-    pending::<()>().await;
+    tracing::info!("portal backends registered; entering ashpd serve loop");
+    ashpd::backend::Builder::new(DBUS_NAME)?
+        .settings(MetisSettings)
+        .screenshot(MetisScreenshot::new(Arc::clone(&capture)))
+        .screencast(MetisScreencast::new(
+            Arc::clone(&capture),
+            Arc::clone(&pipewire),
+        ))
+        .background(MetisBackground)
+        .build_with_connection(connection)
+        .await?;
+
     Ok(())
 }

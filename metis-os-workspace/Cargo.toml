@@ -6,6 +6,8 @@ members = [
     "metis-config",
     "metis-i18n",
     "metis-secrets",
+    "metis-encode",
+    "metis-rudp-smoke",
     "metis-compositor",
     "metis-shell",
     "metis-settings",
@@ -40,6 +42,7 @@ metis-i18n = { path = "metis-i18n" }
 metis-gaming = { path = "metis-gaming" }
 metis-remote = { path = "metis-remote" }
 metis-capture = { path = "metis-capture" }
+metis-encode = { path = "metis-encode" }
 metis-secrets = { path = "metis-secrets" }
 
 # Compile wallpaper/image deps optimized in dev — without this, `image` decodes

@@ -115,7 +115,11 @@ fn filter_by_output_workspace(
 }
 
 /// Best-effort output name for the switcher/overview: focused window's output,
-/// else any known window output, else empty (all outputs).
+/// else any known window output, else the compositor's primary output.
+///
+/// Empty-desktop Super+Tab used to get `None` here (no windows → no output),
+/// so Task View never requested workspace thumbs and the shelf stayed on the
+/// numbered grey fallback.
 pub fn focused_output_name() -> Option<String> {
     let snap = snapshot();
     if let Some(fid) = snap.focused
@@ -124,10 +128,24 @@ pub fn focused_output_name() -> Option<String> {
     {
         return Some(w.output.clone());
     }
-    snap.windows
+    if let Some(name) = snap
+        .windows
         .iter()
         .find(|w| !w.output.is_empty())
         .map(|w| w.output.clone())
+    {
+        return Some(name);
+    }
+    primary_output_name()
+}
+
+fn primary_output_name() -> Option<String> {
+    match metis_protocol::send_compositor_command(&metis_protocol::CompositorCommand::ListOutputs) {
+        Ok(metis_protocol::CompositorEvent::OutputList { outputs }) => {
+            outputs.into_iter().next().map(|o| o.name)
+        }
+        _ => None,
+    }
 }
 
 /// Replace the cache from an authoritative `ListWindows` response (initial seed

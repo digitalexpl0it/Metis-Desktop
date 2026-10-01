@@ -2,6 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 mod rate_limit;
+mod rudp_ctrl;
 
 pub use metis_grid::{GridLayout, GridMetrics, LayoutKind, MonitorRect, PixelRect};
 pub use rate_limit::{
@@ -9,6 +10,10 @@ pub use rate_limit::{
     IPC_REQUESTS_PER_SEC, RATE_WINDOW, RUNTIME_CMD_DISPATCH_PER_SEC, RUNTIME_CMD_WRITES_PER_SEC,
     SlidingWindow, try_admit_runtime_command_dispatch, try_admit_runtime_command_widgets_dispatch,
     try_admit_runtime_command_widgets_write, try_admit_runtime_command_write,
+};
+pub use rudp_ctrl::{
+    RUDP_MAX_FRAME, RUDP_PROTOCOL_VERSION, RudpControlMsg, RudpRejectReason, encode_rudp_frame,
+    try_decode_rudp_frame,
 };
 
 /// Commands sent from the Metis shell to the compositor.
@@ -150,6 +155,8 @@ pub enum CompositorCommand {
     /// Re-read `power.json` and apply idle preferences live (currently the screen
     /// blank timeout that drives the compositor's idle blanker).
     ReloadPower,
+    /// Re-read `rudp.json` and start/stop/rebind the Metis Remote (RUDP) host.
+    ReloadRudp,
     /// Lock the session now: the compositor enters its locked mode (renders the
     /// lock screen, captures all input, hides clients) until the user
     /// authenticates.

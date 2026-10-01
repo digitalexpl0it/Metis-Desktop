@@ -870,3 +870,302 @@ fn clear_ufw_rustdesk() -> Result<(), String> {
     }
     Ok(())
 }
+
+// --- Metis Remote (RUDP) UDP listen port ------------------------------------
+
+const NFT_TABLE_RUDP: &str = "metis_rudp";
+const UFW_COMMENT_RUDP: &str = "metis-rudp-lan-only";
+
+fn persist_rudp(applied: bool, backend: &str) {
+    let mut cfg = metis_config::load_rudp_config();
+    cfg.firewall_applied = applied;
+    cfg.firewall_backend = if applied {
+        backend.to_string()
+    } else {
+        String::new()
+    };
+    if applied {
+        cfg.firewall_last_error = None;
+    }
+    if let Err(err) = metis_config::save_rudp_config(&cfg) {
+        tracing::warn!(%err, "failed to persist rudp firewall_applied");
+    }
+}
+
+fn persist_rudp_error(err: &str) {
+    let mut cfg = metis_config::load_rudp_config();
+    cfg.firewall_applied = false;
+    cfg.firewall_backend.clear();
+    cfg.firewall_last_error = Some(err.to_string());
+    if let Err(e) = metis_config::save_rudp_config(&cfg) {
+        tracing::warn!(%e, "failed to persist rudp firewall_last_error");
+    }
+}
+
+fn nft_rudp_table_present() -> bool {
+    let Some(nft) = nft_bin() else {
+        return false;
+    };
+    run(&nft, &["list", "table", "inet", NFT_TABLE_RUDP])
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn ufw_rudp_rules_present() -> bool {
+    let Some(ufw) = ufw_bin() else {
+        return false;
+    };
+    let Ok(output) = run(&ufw, &["status", "numbered"]) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.contains(UFW_COMMENT_RUDP)
+}
+
+pub fn status_rudp() -> FirewallStatus {
+    let cfg = metis_config::load_rudp_config();
+    if nft_available() && nft_rudp_table_present() {
+        return FirewallStatus {
+            applied: true,
+            backend: "nft".into(),
+            detail: None,
+        };
+    }
+    if ufw_is_active() && ufw_rudp_rules_present() {
+        return FirewallStatus {
+            applied: true,
+            backend: "ufw".into(),
+            detail: None,
+        };
+    }
+    if cfg.firewall_applied {
+        return FirewallStatus {
+            applied: true,
+            backend: if cfg.firewall_backend.is_empty() {
+                "unknown".into()
+            } else {
+                cfg.firewall_backend
+            },
+            detail: None,
+        };
+    }
+    FirewallStatus {
+        applied: false,
+        backend: String::new(),
+        detail: cfg.firewall_last_error,
+    }
+}
+
+pub fn apply_rudp() -> Result<FirewallStatus, String> {
+    let current = status_rudp();
+    if current.applied {
+        let mut cfg = metis_config::load_rudp_config();
+        if cfg.firewall_last_error.take().is_some() {
+            let _ = metis_config::save_rudp_config(&cfg);
+        }
+        return Ok(current);
+    }
+    let _backend = enforceable_backend().inspect_err(|e| persist_rudp_error(e))?;
+    let result = if is_root() {
+        apply_rudp_as_root()?
+    } else {
+        escalate(&["firewall", "rudp-apply-as-root"]).map_err(|err| {
+            let msg = format!("{err}; or run: pkexec metis-remote firewall rudp-apply-as-root");
+            persist_rudp_error(&msg);
+            msg
+        })?;
+        status_rudp()
+    };
+    if result.applied {
+        persist_rudp(true, &result.backend);
+    }
+    Ok(result)
+}
+
+pub fn clear_rudp() -> Result<FirewallStatus, String> {
+    let current = status_rudp();
+    if !current.applied && !nft_rudp_table_present() && !ufw_rudp_rules_present() {
+        persist_rudp(false, "");
+        return Ok(FirewallStatus {
+            applied: false,
+            backend: String::new(),
+            detail: None,
+        });
+    }
+    if is_root() {
+        clear_rudp_as_root()?;
+    } else {
+        escalate(&["firewall", "rudp-clear-as-root"])?;
+    }
+    persist_rudp(false, "");
+    Ok(FirewallStatus {
+        applied: false,
+        backend: String::new(),
+        detail: None,
+    })
+}
+
+pub fn apply_rudp_as_root() -> Result<FirewallStatus, String> {
+    if !is_root() {
+        return Err("firewall rudp-apply-as-root requires root".into());
+    }
+    let backend = match enforceable_backend() {
+        Ok(b) => b,
+        Err(e) => {
+            persist_rudp_error(&e);
+            return Err(e);
+        }
+    };
+    match backend {
+        "nft" => apply_nft_rudp()?,
+        "ufw" => apply_ufw_rudp()?,
+        other => return Err(format!("unknown firewall backend {other}")),
+    }
+    persist_rudp(true, backend);
+    Ok(FirewallStatus {
+        applied: true,
+        backend: backend.into(),
+        detail: None,
+    })
+}
+
+pub fn clear_rudp_as_root() -> Result<FirewallStatus, String> {
+    if !is_root() {
+        return Err("firewall rudp-clear-as-root requires root".into());
+    }
+    let _ = clear_nft_rudp();
+    let _ = clear_ufw_rudp();
+    persist_rudp(false, "");
+    Ok(FirewallStatus {
+        applied: false,
+        backend: String::new(),
+        detail: None,
+    })
+}
+
+fn rudp_udp_port() -> u16 {
+    metis_config::load_rudp_config().port
+}
+
+fn apply_nft_rudp() -> Result<(), String> {
+    let nft = nft_bin().ok_or_else(|| "nft not found".to_string())?;
+    let port = rudp_udp_port();
+    let _ = run(&nft, &["delete", "table", "inet", NFT_TABLE_RUDP]);
+    let mut script = String::from("table inet metis_rudp {\n");
+    script.push_str("  chain input {\n");
+    script.push_str("    type filter hook input priority filter; policy accept;\n");
+    for cidr in LAN_V4 {
+        script.push_str(&format!("    udp dport {port} ip saddr {cidr} accept\n"));
+    }
+    for cidr in LAN_V6 {
+        script.push_str(&format!("    udp dport {port} ip6 saddr {cidr} accept\n"));
+    }
+    script.push_str(&format!("    udp dport {port} drop\n"));
+    script.push_str("  }\n}\n");
+    let status = Command::new(&nft)
+        .arg("-f")
+        .arg("-")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(script.as_bytes())?;
+            }
+            child.wait_with_output()
+        })
+        .map_err(|e| format!("nft rudp apply: {e}"))?;
+    if status.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "nft rudp apply failed: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
+        ))
+    }
+}
+
+fn clear_nft_rudp() -> Result<(), String> {
+    let nft = nft_bin().ok_or_else(|| "nft not found".to_string())?;
+    let out = run(&nft, &["delete", "table", "inet", NFT_TABLE_RUDP])?;
+    if out.status.success()
+        || String::from_utf8_lossy(&out.stderr).contains("No such file")
+        || String::from_utf8_lossy(&out.stderr).contains("does not exist")
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "nft rudp clear failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+fn apply_ufw_rudp() -> Result<(), String> {
+    let ufw = ufw_bin().ok_or_else(|| "ufw not found".to_string())?;
+    let _ = clear_ufw_rudp();
+    let port = rudp_udp_port().to_string();
+    for cidr in LAN_V4.iter().chain(LAN_V6.iter()) {
+        let out = run(
+            &ufw,
+            &[
+                "allow",
+                "from",
+                cidr,
+                "to",
+                "any",
+                "port",
+                &port,
+                "proto",
+                "udp",
+                "comment",
+                UFW_COMMENT_RUDP,
+            ],
+        )?;
+        if !out.status.success() {
+            return Err(format!(
+                "ufw rudp allow {cidr}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn clear_ufw_rudp() -> Result<(), String> {
+    let Some(ufw) = ufw_bin() else {
+        return Ok(());
+    };
+    for _ in 0..64 {
+        let Ok(output) = run(&ufw, &["status", "numbered"]) else {
+            break;
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let Some(num) = text.lines().find_map(|line| {
+            if !line.contains(UFW_COMMENT_RUDP) {
+                return None;
+            }
+            let trimmed = line.trim_start();
+            let start = trimmed.strip_prefix('[')?;
+            let (num, _) = start.split_once(']')?;
+            Some(num.trim().to_string())
+        }) else {
+            break;
+        };
+        let mut child = Command::new(&ufw)
+            .args(["delete", &num])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("ufw rudp delete spawn: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(b"y\n");
+        }
+        let _ = child.wait();
+    }
+    Ok(())
+}

@@ -84,6 +84,11 @@ pub fn build() -> gtk::Widget {
         gtk::DropDown::from_strings(&__dd_refs)
     };
     graphics_mode.set_selected(graphics_mode_to_index(cfg.graphics_mode));
+    // Long mode labels otherwise inflate the Stack natural width and grow the
+    // Settings window only on this page.
+    graphics_mode.set_size_request(240, -1);
+    graphics_mode.set_hexpand(false);
+    graphics_mode.set_halign(gtk::Align::End);
     mode_body.append(&ui::row(&tr("Graphics mode"), &graphics_mode));
 
     let on_battery = gtk::Switch::new();
@@ -163,6 +168,9 @@ pub fn build() -> gtk::Widget {
     )));
     reboot_text.set_xalign(0.0);
     reboot_text.set_wrap(true);
+    reboot_text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    reboot_text.set_width_chars(28);
+    reboot_text.set_max_width_chars(48);
     reboot_text.set_hexpand(true);
     reboot_banner.append(&reboot_icon);
     reboot_banner.append(&reboot_text);
@@ -178,6 +186,9 @@ pub fn build() -> gtk::Widget {
     status_text.set_xalign(0.0);
     status_text.set_hexpand(true);
     status_text.set_wrap(true);
+    status_text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    status_text.set_width_chars(28);
+    status_text.set_max_width_chars(48);
     status_text.add_css_class("metis-settings-gaming-status-text");
     status_box.append(&status_icon);
     status_box.append(&status_text);
@@ -1452,11 +1463,14 @@ fn apply_health_check(
         title.set_xalign(0.0);
         title.set_hexpand(true);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_max_width_chars(22);
         let detail = gtk::Label::new(Some(&item.detail));
         detail.set_xalign(0.0);
         detail.set_wrap(true);
+        detail.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        detail.set_max_width_chars(28);
+        detail.set_width_chars(18);
+        detail.set_max_width_chars(24);
         detail.add_css_class("metis-settings-hint");
         text.append(&title);
         text.append(&detail);

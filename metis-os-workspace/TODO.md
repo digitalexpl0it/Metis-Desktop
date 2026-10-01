@@ -60,13 +60,13 @@ Security items from the **2026-09-27 code review** sit above product stretch.
       (preserve highlight headroom), scroll-column crop+decode, fuller tone-map
       / mastering metadata, default-on `wp_color_management_v1`.
       → Phase 5 §B residual. *(decode path landed 2026-09-27)*
-- [ ] **3. Metis-native remote host** — **Partial (2026-09-27):** experimental
-      `RemoteBackend::MetisNative` via FreeRDP shadow (`metis-remote native`);
-      Metis Viewer saved-host grid + FreeRDP sessions auto-placed on a dedicated
-      workspace (Task View / Super+Alt+arrows). **Residual:** Wayland/portal
-      capture for shadow, credential UX parity, promote past experimental
-      (GRD remains default).
-      → Wave 4c, Phase 7, Phase 15 §F,
+- [ ] **3. Metis-native remote host** — **Partial (2026-09-27 / 2026-09-30):**
+      experimental FreeRDP shadow + Viewer host grid; **RUDP Phases 1–4** +
+      **Settings → Metis Remote** (`rudp.json`, encode, PAM/TOFU, UDP firewall).
+      **Residual:** RUDP Phases 5–8 (damage, datagram+FEC,
+      input, client); AV1 encode; Wayland/portal capture for shadow; promote past
+      experimental (GRD remains on **Remote access**).
+      → Wave 4c, Phase 7 §B RUDP-Stream, Phase 15 §F,
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 - [x] **4. Per-Steam-appid Gamescope profile UI** — Settings → Gaming editor for
       `gamescope_profiles`; Metis spawn wraps matching `-applaunch` /
@@ -114,7 +114,11 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
 - [ ] **Throttle DRM housekeeping** — `tick_housekeeping` / sysfs
       `on_battery()` should not run every 16 ms when undamaged; poll battery /
       config on a 1–5 s cadence (`udev.rs`, `state.rs`).
-- [ ] **Portal / polkit watchdogs** — add respawn backoff; avoid spawn-storms
+- [x] **Portal / polkit watchdogs** (2026-09-30) — portal watchdog backoff +
+      terminate stale owner when Mutter ScreenCast is missing (avoids NameTaken
+      spawn-storm). ashpd `build_with_connection` blocks on `connection.closed()`;
+      Mutter / PowerProfile / screensaver register *before* that await so GRD
+      sees capture APIs.
       when D-Bus name claim is slow (`metis-compositor` `main.rs`).
 - [ ] **Pause NC timers when closed** — 1 s date/world + 500 ms calendar
       `try_recv` only while the panel is open.
@@ -182,8 +186,9 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 - [x] **4b** Decision doc:
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md)
 - [ ] **4c** **Urgent residual:** Wayland/portal-backed FreeRDP host + GA
-      criteria — experimental FreeRDP shadow + Viewer polish landed 2026-09-27
-      (GRD stays default; see **Urgent priorities**)
+      criteria — experimental FreeRDP shadow + Viewer polish landed 2026-09-27;
+      RUDP Phases 1–4 (export + Quinn + encode + PAM/TOFU) landed 2026-09-30
+      (Phases 5–8 open under Phase 7 §B). GRD stays default; see **Urgent priorities**.
 
 ### Wave 5 — Session startup
 - [x] `startup.json` — global enable + ordered desktop ids + per-entry enable/delay
@@ -967,9 +972,65 @@ latency and clear setup docs.
       Settings **Connect with Metis Viewer…**; recent hosts in `viewer.json`
       (no passwords). Viewer polish: early FreeRDP failure feedback, recent
       one-click connect/remove, dedicated icon.
+- [x] **Viewer RDP session options** (2026-09-28) — Remmina-style **Advanced
+      Desktop Settings** notebook on the host profile (Display / Local resources /
+      Experience / Advanced). Per saved host in `viewer.json` (no passwords);
+      mapped to FreeRDP argv via `ViewerRdpOptions::freerdp_args`. Placement stamp
+      under `$XDG_RUNTIME_DIR/metis/` — dedicated workspace (default) vs window on
+      current desk. Defaults stay LAN-safe (clipboard off, `/cert:ignore`).
 - [x] **RustDesk Settings preset** (2026-07-26) — Settings → Remote access card:
       detect system/Flatpak, Open RustDesk, copy install instructions + ports/
       portal notes. Optional `metis-remote` RustDesk backend still TBD.
+- [x] **FreeRDP shadow one-click install** (2026-09-30) — `freerdp-shadow-x11` on
+      `APT_ALLOWLIST`; Settings **Install FreeRDP shadow** via
+      `pkexec metis-remote pk-apt-install`; Enable installs first when missing.
+- [x] **RUDP-Stream Phase 1 — compositor capture export** (2026-09-30) — DRM-only
+      second compose pass into a GBM dmabuf pool (`stream_export.rs`); publishes
+      `ExportedFrame` (owned plane FDs + optional sync fence FD) on a latest-wins
+      hub with RAII pool-slot release. Prefers tiled/`Modifier::Invalid` GBM
+      layouts (LINEAR last-resort only). **No** render-thread `sync.wait()`;
+      **no PipeWire / portal.** Arm with `METIS_STREAM_EXPORT=1` (debug consumer
+      logs FPS + synthetic 6 ms encode latency). Winit nested: no-op.
+- [x] **RUDP-Stream Phase 2 — Quinn host skeleton** (2026-09-30) — `rudp_host.rs`:
+      dedicated OS threads (Quinn/Tokio + frame pipeline); arms/disarms
+      `StreamExportHub` on spawn/Drop; drain via `take_latest` + `wait_ready` →
+      encode stub (no mmap). Env: `METIS_RUDP_HOST=1` or `IP:port` (default
+      `:7843`). Self-signed TLS for now (Phase 4 TOFU/mTLS).
+- [x] **RUDP Settings gate + allowlist** (2026-09-30) — `rudp.json` + Settings →
+      **Metis Remote** page (on/off, UDP port, LAN-only, per-local-user toggles;
+      seeds `$USER` on first enable). Compositor `ReloadRudp` starts/stops/rebinds
+      from config (env override kept). Classic RDP stays on **Remote access**.
+- [x] **RUDP-Stream Phase 3 — dual hardware encode** (2026-09-30) — `metis-encode`
+      crate: `HwEncoder` + FFmpeg DRM-PRIME import; VAAPI (`*_vaapi`) and NVENC
+      (`*_nvenc`); Auto → NVIDIA NVENC else VAAPI; codec ladder HEVC then H.264
+      (AV1 follow-up). Compositor frame worker `submit`/`drain` → latest-wins
+      `EncodedPacket` outbox (Phase 6 sends datagrams). Settings: encoder /
+      preferred codec / bitrate in `rudp.json`. No mmap / no software x264
+      silent fallback. Residual: AV1; damage-aware encode (Phase 5).
+- [x] **RUDP-Stream Phase 4 — auth + control plane** (2026-09-30) — persistent
+      host TLS (`~/.config/metis/rudp/host.{crt,key}`) + SHA-256 fingerprint in
+      Settings; Quinn bi-di control stream Hello → AuthChallenge → PAM
+      (`allowed_users`) → SessionOk; `metis-rudp-smoke` CLI with TOFU
+      `known_hosts`; LAN-only UDP firewall (`metis_rudp` nft/ufw) via
+      `metis-remote firewall rudp-*`. Residual: Viewer TOFU UI (Phase 8);
+      clipboard / input on control plane (Phase 7); video datagrams (Phase 6).
+- [ ] **RUDP-Stream Phase 5 — damage-aware encode** — plumb Smithay /
+      `OutputDamageTracker` rects into `ExportedFrame` (`damage_full: false` when
+      sparse); encode/send dirty regions for office/static desks; auto-switch to
+      full-frame CBR when damage covers a large fraction of the output (gaming /
+      CAD motion).
+- [ ] **RUDP-Stream Phase 6 — datagram video + FEC** — send encoded NAL/OBU
+      payloads on Quinn unreliable datagrams (no HOL blocking); chunk ~MTU-sized
+      shards; optional `reed-solomon-erasure` parity driven by loss stats. Keep
+      keyframes / config on reliable streams.
+- [ ] **RUDP-Stream Phase 7 — native input path** — client packs pointer/keyboard/
+      relative-pointer; host injects into compositor `InputState` / EIS (reuse
+      `remote_input.rs` patterns). Relative pointer + pointer lock for games/CAD.
+      Pause inject while session locked (same policy as RDP).
+- [ ] **RUDP-Stream Phase 8 — first-party client** — Metis Viewer (or dedicated
+      RUDP client) speaks the wire: connect `IP:port`, TOFU prompt, decode +
+      present, send input. Settings **Metis Remote** shows bind address /
+      fingerprint and opens the client. Keep GRD/RDP under **Remote access**.
 
 ### C. Security & session policy
 

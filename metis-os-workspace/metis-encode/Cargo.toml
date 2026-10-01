@@ -1,0 +1,18 @@
+[package]
+name = "metis-encode"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Metis RUDP hardware video encode (VAAPI + NVENC via FFmpeg)"
+
+[dependencies]
+libc = "0.2"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+# System FFmpeg (libavcodec) — DRM-PRIME import + VAAPI/NVENC encoders.
+ffmpeg-next = { version = "8", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

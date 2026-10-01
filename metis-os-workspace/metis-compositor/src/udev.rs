@@ -858,18 +858,23 @@ fn render_local_output_frame(
         }
     };
 
-    let surface = state
-        .udev
-        .as_mut()
-        .and_then(|udev| udev.surface_mut(id))
-        .ok_or_else(|| "surface gone during local render".to_string())?;
-    match surface
-        .drm_output
-        .render_frame(renderer, &frame_elements, clear, FrameFlags::DEFAULT)
-    {
+    let render_result = {
+        let surface = state
+            .udev
+            .as_mut()
+            .and_then(|udev| udev.surface_mut(id))
+            .ok_or_else(|| "surface gone during local render".to_string())?;
+        surface
+            .drm_output
+            .render_frame(renderer, &frame_elements, clear, FrameFlags::DEFAULT)
+    };
+    match render_result {
         Ok(res) => {
             let empty = res.is_empty;
             *frame_states = Some(res.states);
+            if !empty {
+                crate::stream_export::maybe_export_frame(state, renderer, render_node, output);
+            }
             Ok(!empty)
         }
         Err(err) => Err(format!("{err:?}")),

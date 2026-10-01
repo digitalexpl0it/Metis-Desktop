@@ -515,6 +515,7 @@ fn build_page_stack(window: &gtk::ApplicationWindow, launch: &PageLaunch) -> gtk
     stack.add_titled(&pages::users::build(), Some("users"), "Users");
     stack.add_titled(&pages::date_time::build(), Some("date_time"), "Date & Time");
     stack.add_titled(&pages::startup::build(), Some("startup"), "Startup");
+    stack.add_titled(&pages::rudp::build(), Some("rudp"), "Metis Remote");
     stack.add_titled(
         &pages::remote::build(window.upcast_ref()),
         Some("remote"),

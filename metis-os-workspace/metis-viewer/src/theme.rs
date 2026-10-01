@@ -349,10 +349,21 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
         .metis-viewer-status, .metis-viewer-ready, .metis-viewer-empty {{
             font-size: 12px;
             color: {muted};
-            padding: 0 16px 8px;
+            padding: 0 20px 8px;
         }}
-        .metis-viewer-status.error {{ color: {error}; font-weight: 500; }}
-        .metis-viewer-status.ok {{ color: {success}; }}
+        .metis-viewer-status.error {{
+            color: {error};
+            font-weight: 500;
+            background-color: {surface};
+            border: 1px solid {error};
+            border-radius: {rs}px;
+            padding: 10px 14px;
+            margin: 4px 20px 8px;
+        }}
+        .metis-viewer-status.ok {{
+            color: {success};
+            padding: 6px 20px 8px;
+        }}
 
         button.suggested-action {{
             min-height: 36px;
@@ -449,6 +460,54 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             color: {muted};
         }}
         .metis-viewer-host-card-remove:hover {{
+            color: {text};
+        }}
+
+        .metis-viewer-options {{
+            margin: 4px 16px 12px;
+            border: 1px solid {border};
+            border-radius: {rs}px;
+            background-color: {raised};
+        }}
+        .metis-viewer-options > header {{
+            background-color: {surface};
+            border-bottom: 1px solid {border};
+        }}
+        .metis-viewer-options tab {{
+            background-color: transparent;
+            color: {muted};
+            border: none;
+            padding: 8px 12px;
+        }}
+        .metis-viewer-options tab:checked,
+        .metis-viewer-options tab:hover {{
+            color: {text};
+            background-color: {raised};
+        }}
+        .metis-viewer-options-tab {{
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        .metis-viewer-options-page {{
+            background-color: {raised};
+        }}
+        .metis-viewer-options .metis-viewer-field {{
+            padding: 6px 12px;
+        }}
+        .metis-viewer-options .metis-viewer-hint {{
+            padding: 0 12px 8px;
+        }}
+        dropdown {{
+            min-height: 34px;
+            border-radius: {rs}px;
+            border: 1px solid {border};
+            background-color: {surface};
+            color: {text};
+        }}
+        checkbutton {{
+            color: {text};
+        }}
+        checkbutton label {{
             color: {text};
         }}
         "#

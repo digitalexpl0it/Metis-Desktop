@@ -84,8 +84,9 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
     let screenshot_toolbar_bg = dash_panel_bg.clone();
     let nc_panel_bg = dash_panel_bg.clone();
     let nc_card_bg = dash_card_bg.clone();
-    // Toasts sit alone over the wallpaper: more opaque than frosted NC cards,
-    // but still slightly translucent (not solid rgb).
+    // Toast / OSD / NC: dense but not brick-solid. Kind washes must fade into
+    // this same fill — fading to `transparent` punched the wallpaper through
+    // ARGB layer-shell windows.
     let toast_card_bg = if is_light {
         format!("rgba({raised_rgb}, 0.96)")
     } else {
@@ -93,9 +94,7 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
     };
     // Desktop widget fill/border come from per-card chrome (desktop-widgets.json),
     // not the theme stylesheet.
-    // Notification rows inside the NC / legacy popover — follow raised surface,
-    // never a hardcoded dark charcoal (that looked like dark-mode in light theme).
-    let notif_card_bg = dash_card_bg.clone();
+    let notif_card_bg = toast_card_bg.clone();
     let text_on_accent = theme.text_on_accent.clone();
 
     // Optional DE-wide font family/size; empty unless the user customized them.
@@ -1224,8 +1223,8 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
 
     .metis-notif-message {{
         font-size: 12px;
-        color: {muted};
-        line-height: 1.35;
+        color: rgba({text_rgb}, 0.78);
+        line-height: 1.4;
     }}
 
     .metis-notif-actions {{
@@ -1350,14 +1349,16 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         background-color: {muted};
     }}
 
-    /* Kind tint: left→fade gradient only (no box-shadow — see toast note). */
+    /* Kind tint: left wash that settles on the card fill — never `transparent`
+       (that opens a hole through the ARGB toast / NC surface onto the wallpaper). */
     .metis-notif-card-error,
     .metis-toast-card.metis-notif-card-error {{
+        background-color: {toast_card_bg};
         background-image: linear-gradient(
             105deg,
-            rgba({c_error_rgb}, 0.52) 0%,
-            rgba({c_error_rgb}, 0.22) 32%,
-            transparent 78%
+            rgba({c_error_rgb}, 0.28) 0%,
+            rgba({c_error_rgb}, 0.10) 30%,
+            {toast_card_bg} 62%
         );
     }}
     .metis-notif-card-error .metis-notif-accent {{
@@ -1369,11 +1370,12 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
 
     .metis-notif-card-notify,
     .metis-toast-card.metis-notif-card-notify {{
+        background-color: {toast_card_bg};
         background-image: linear-gradient(
             105deg,
-            rgba({c_warning_rgb}, 0.50) 0%,
-            rgba({c_warning_rgb}, 0.20) 34%,
-            transparent 78%
+            rgba({c_warning_rgb}, 0.26) 0%,
+            rgba({c_warning_rgb}, 0.09) 30%,
+            {toast_card_bg} 62%
         );
     }}
     .metis-notif-card-notify .metis-notif-accent {{
@@ -1385,11 +1387,12 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
 
     .metis-notif-card-success,
     .metis-toast-card.metis-notif-card-success {{
+        background-color: {toast_card_bg};
         background-image: linear-gradient(
             105deg,
-            rgba({c_success_rgb}, 0.46) 0%,
-            rgba({c_success_rgb}, 0.18) 34%,
-            transparent 78%
+            rgba({c_success_rgb}, 0.26) 0%,
+            rgba({c_success_rgb}, 0.09) 30%,
+            {toast_card_bg} 62%
         );
     }}
     .metis-notif-card-success .metis-notif-accent {{
@@ -1401,11 +1404,12 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
 
     .metis-notif-card-info,
     .metis-toast-card.metis-notif-card-info {{
+        background-color: {toast_card_bg};
         background-image: linear-gradient(
             105deg,
-            rgba({c_info_rgb}, 0.44) 0%,
-            rgba({c_info_rgb}, 0.16) 34%,
-            transparent 78%
+            rgba({c_info_rgb}, 0.24) 0%,
+            rgba({c_info_rgb}, 0.08) 30%,
+            {toast_card_bg} 62%
         );
     }}
     .metis-notif-card-info .metis-notif-accent {{
@@ -1417,11 +1421,12 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
 
     .metis-notif-card-payment,
     .metis-toast-card.metis-notif-card-payment {{
+        background-color: {toast_card_bg};
         background-image: linear-gradient(
             105deg,
-            rgba({c_payment_rgb}, 0.46) 0%,
-            rgba({c_payment_rgb}, 0.18) 34%,
-            transparent 78%
+            rgba({c_payment_rgb}, 0.26) 0%,
+            rgba({c_payment_rgb}, 0.09) 30%,
+            {toast_card_bg} 62%
         );
     }}
     .metis-notif-card-payment .metis-notif-accent {{

@@ -12,3 +12,4 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 directories = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+sha2 = "0.10"

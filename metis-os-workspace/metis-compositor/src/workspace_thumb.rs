@@ -8,8 +8,7 @@ use std::path::PathBuf;
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::texture::TextureRenderElement;
-use smithay::backend::renderer::element::{AsRenderElements, Kind};
+use smithay::backend::renderer::element::AsRenderElements;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Texture};
 use smithay::output::Output;
@@ -90,10 +89,25 @@ pub(crate) fn process_pending_workspace_thumbs(
         return;
     }
     let _ = std::fs::create_dir_all(thumb_dir());
+    let mut retry: Vec<(String, u32)> = Vec::new();
     for (output, workspace) in jobs {
-        if let Err(err) = render_workspace_thumb(state, renderer, &output, workspace) {
-            tracing::debug!(%output, workspace, %err, "workspace thumb capture failed");
+        match render_workspace_thumb(state, renderer, &output, workspace) {
+            Ok(()) => {}
+            Err(err) => {
+                tracing::debug!(%output, workspace, %err, "workspace thumb capture failed");
+                // Wallpaper still decoding/uploading — try again next frame
+                // instead of leaving a charcoal CLEAR_COLOR PNG on disk.
+                if err.contains("wallpaper not ready")
+                    && (state.wallpaper.upload_pending()
+                        || state.wallpaper.cpu_pixels_ref().is_some())
+                {
+                    retry.push((output, workspace));
+                }
+            }
         }
+    }
+    for (output, workspace) in retry {
+        state.queue_workspace_thumb(output, workspace);
     }
 }
 
@@ -125,8 +139,34 @@ fn render_workspace_thumb(
     let size_phys: Size<i32, Physical> = Size::from((thumb_w, thumb_h));
     let size_buf: Size<i32, smithay::utils::Buffer> = Size::from((thumb_w, thumb_h));
 
+    // Match the live desktop path: poll → ensure upload → place at the
+    // negative of this output's origin so the full-desktop texture crops.
     state.wallpaper.poll_decode();
-    state.wallpaper.ensure(renderer);
+    if state.wallpaper.enabled() {
+        if state.wallpaper.buffer_ref().is_none() {
+            state.wallpaper.ensure(renderer);
+        }
+        if state.wallpaper.buffer_ref().is_none() {
+            // Prefer a CPU crop over a missing PNG / charcoal clear — empty
+            // desktops must still show wallpaper in Task View.
+            if let Some(img) = cpu_wallpaper_thumb(
+                state,
+                out_geo.loc.x,
+                out_geo.loc.y,
+                out_w,
+                out_h,
+                thumb_w,
+                thumb_h,
+            ) {
+                let path = workspace_thumb_path(output_name, workspace);
+                img.save(&path)
+                    .map_err(|err| format!("png write {path:?}: {err}"))?;
+                return Ok(());
+            }
+            state.wallpaper.request_decode_if_needed();
+            return Err("wallpaper not ready".into());
+        }
+    }
 
     // Front-to-back: topmost window first (drawn on top), wallpaper last.
     // Stack order must match the live desktop (`space.elements`), not the
@@ -156,23 +196,16 @@ fn render_workspace_thumb(
         elems.extend(win_elems.into_iter().map(OutputStack::Surface));
     }
 
-    // Wallpaper texture is 1:1 with the virtual desktop (scale 1). Crop this
-    // output's region; OutputDamageTracker scale maps it into the thumb.
-    if let Some(buffer) = state.wallpaper.buffer_ref() {
-        let src = Rectangle::<f64, Logical>::new(
-            Point::from((out_geo.loc.x as f64, out_geo.loc.y as f64)),
-            Size::from((out_w as f64, out_h as f64)),
-        );
-        let dst = Size::<i32, Logical>::from((out_w, out_h));
-        let wp = TextureRenderElement::from_texture_buffer(
-            Point::from((0.0, 0.0)),
-            buffer,
-            None,
-            Some(src),
-            Some(dst),
-            Kind::Unspecified,
-        );
-        elems.push(OutputStack::Wallpaper(wp));
+    // Same placement as `render.rs` live output — empty workspaces still get
+    // wallpaper; never leave CLEAR_COLOR as the only layer when wallpaper is on.
+    if state.wallpaper.enabled() {
+        let wallpaper_origin: Point<f64, Physical> =
+            Point::from((-out_geo.loc.x as f64, -out_geo.loc.y as f64));
+        let wp = state.wallpaper.render_elements_at(wallpaper_origin);
+        if wp.is_empty() {
+            return Err("wallpaper not ready".into());
+        }
+        elems.extend(wp.into_iter().map(OutputStack::Wallpaper));
     }
 
     let mut offscreen =
@@ -222,4 +255,38 @@ fn render_workspace_thumb(
     img.save(&path)
         .map_err(|err| format!("png write {path:?}: {err}"))?;
     Ok(())
+}
+
+/// Crop this output's region from the CPU wallpaper and downscale to the thumb.
+/// Used when the GL buffer is missing (e.g. after multi-GPU cache invalidate)
+/// so empty workspaces still get a real desktop preview.
+fn cpu_wallpaper_thumb(
+    state: &MetisState,
+    origin_x: i32,
+    origin_y: i32,
+    out_w: i32,
+    out_h: i32,
+    thumb_w: i32,
+    thumb_h: i32,
+) -> Option<image::RgbaImage> {
+    let pixels = state.wallpaper.cpu_pixels_ref()?;
+    let full = state.wallpaper.full_size();
+    let fw = full.w.max(1) as u32;
+    let fh = full.h.max(1) as u32;
+    let expected = (fw as usize).saturating_mul(fh as usize).saturating_mul(4);
+    if pixels.len() != expected {
+        return None;
+    }
+    let full_img = image::RgbaImage::from_raw(fw, fh, pixels.to_vec())?;
+    let x = origin_x.clamp(0, full.w.saturating_sub(1)) as u32;
+    let y = origin_y.clamp(0, full.h.saturating_sub(1)) as u32;
+    let cw = (out_w as u32).min(fw.saturating_sub(x)).max(1);
+    let ch = (out_h as u32).min(fh.saturating_sub(y)).max(1);
+    let cropped = image::imageops::crop_imm(&full_img, x, y, cw, ch).to_image();
+    Some(image::imageops::resize(
+        &cropped,
+        thumb_w.max(1) as u32,
+        thumb_h.max(1) as u32,
+        image::imageops::FilterType::Triangle,
+    ))
 }

@@ -368,6 +368,26 @@ pub fn firewall_rustdesk_clear_as_root() -> Result<FirewallStatus, String> {
     firewall::clear_rustdesk_as_root()
 }
 
+pub fn firewall_rudp_apply() -> Result<FirewallStatus, String> {
+    firewall::apply_rudp()
+}
+
+pub fn firewall_rudp_clear() -> Result<FirewallStatus, String> {
+    firewall::clear_rudp()
+}
+
+pub fn firewall_rudp_status() -> FirewallStatus {
+    firewall::status_rudp()
+}
+
+pub fn firewall_rudp_apply_as_root() -> Result<FirewallStatus, String> {
+    firewall::apply_rudp_as_root()
+}
+
+pub fn firewall_rudp_clear_as_root() -> Result<FirewallStatus, String> {
+    firewall::clear_rudp_as_root()
+}
+
 /// Set RDP username/password via grdctl (headless store).
 pub fn set_password(username: &str, password: &str) -> Result<(), String> {
     if username.trim().is_empty() {
