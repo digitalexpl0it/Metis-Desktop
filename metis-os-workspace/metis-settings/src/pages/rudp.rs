@@ -55,6 +55,12 @@ pub fn build() -> gtk::Widget {
     )));
     host_body.append(&ui::row(&tr("LAN only (recommended)"), &lan));
 
+    let conn_addr = gtk::Label::new(None);
+    conn_addr.set_xalign(0.0);
+    conn_addr.set_selectable(true);
+    conn_addr.add_css_class("metis-settings-value");
+    host_body.append(&readout_row(&tr("Connection address"), &conn_addr));
+
     let fingerprint = gtk::Label::new(None);
     fingerprint.set_xalign(0.0);
     fingerprint.set_selectable(true);
@@ -65,6 +71,10 @@ pub fn build() -> gtk::Widget {
     let copy_fp = gtk::Button::with_label(&tr("Copy fingerprint"));
     copy_fp.set_halign(gtk::Align::End);
     host_body.append(&copy_fp);
+
+    let connect_viewer = gtk::Button::with_label(&tr("Connect with Metis Viewer…"));
+    connect_viewer.set_halign(gtk::Align::End);
+    host_body.append(&connect_viewer);
 
     let fw_status = gtk::Label::new(None);
     fw_status.set_xalign(0.0);
@@ -79,7 +89,8 @@ pub fn build() -> gtk::Widget {
 
     let tofu_hint = gtk::Label::new(Some(&tr(
         "Clients pin this fingerprint on first connect (TOFU). Authentication uses \
-         local PAM passwords for allowed accounts. Test with: metis-rudp-smoke HOST:PORT --user NAME",
+         local PAM passwords for allowed accounts. Use Metis Viewer (Metis Remote \
+         protocol) or: metis-rudp-smoke HOST:PORT --user NAME",
     )));
     tofu_hint.set_xalign(0.0);
     tofu_hint.set_wrap(true);
@@ -146,6 +157,7 @@ pub fn build() -> gtk::Widget {
         let status = status.clone();
         let encode_hint = encode_hint.clone();
         let fingerprint = fingerprint.clone();
+        let conn_addr = conn_addr.clone();
         let fw_status = fw_status.clone();
         let retry_fw = retry_fw.clone();
         let cfg = cfg.clone();
@@ -161,6 +173,7 @@ pub fn build() -> gtk::Widget {
                 status.set_text(&tr("Stopped"));
             }
             encode_hint.set_text(&encode_plan_text(&c));
+            conn_addr.set_text(&rudp_connection_address(c.port));
             match metis_config::read_rudp_host_fingerprint() {
                 Some(fp) => fingerprint.set_text(&fp),
                 None => fingerprint.set_text(&tr(
@@ -200,6 +213,23 @@ pub fn build() -> gtk::Widget {
             }
             if let Some(display) = gtk::gdk::Display::default() {
                 display.clipboard().set_text(&text);
+            }
+        });
+    }
+    {
+        let cfg = cfg.clone();
+        let status = status.clone();
+        connect_viewer.connect_clicked(move |_| {
+            let port = cfg.borrow().port;
+            let hint = rudp_connection_address(port);
+            let (host, port) = crate::remote::parse_connection_hint(&hint);
+            let user = std::env::var("USER").ok();
+            match crate::remote::open_viewer_rudp(Some(&host), Some(port), user.as_deref()) {
+                Ok(()) => status.set_text(&tr("Opening Metis Viewer (Metis Remote)…")),
+                Err(err) => {
+                    tracing::warn!(%err, "failed to open Metis Viewer for RUDP");
+                    status.set_text(&err);
+                }
             }
         });
     }
@@ -498,4 +528,19 @@ fn account_row(
     });
     row.append(&sw);
     row
+}
+
+/// Prefer a LAN IPv4 from the RDP remote snapshot helpers, else hostname.
+fn rudp_connection_address(port: u16) -> String {
+    let snap = crate::remote::load_snapshot();
+    let host = snap
+        .addresses
+        .iter()
+        .find(|a| {
+            let a = a.as_str();
+            !a.starts_with("127.") && !a.contains(':') && !a.is_empty()
+        })
+        .cloned()
+        .unwrap_or_else(|| snap.hostname.clone());
+    format!("{host}:{port}")
 }

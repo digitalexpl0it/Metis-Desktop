@@ -1,8 +1,9 @@
-//! Remote-desktop input injection (gnome-remote-desktop / libei → compositor seat).
+//! Remote-desktop input injection (gnome-remote-desktop / libei / RUDP → seat).
 
 use smithay::backend::input::{ButtonState, InputTime, KeyState};
-use smithay::input::pointer::{ButtonEvent, MotionEvent};
+use smithay::input::pointer::{ButtonEvent, MotionEvent, RelativeMotionEvent};
 use smithay::utils::SERIAL_COUNTER;
+use std::sync::atomic::Ordering;
 
 use crate::state::MetisState;
 
@@ -16,6 +17,26 @@ impl MetisState {
             return;
         };
         use smithay::utils::Point;
+
+        // When a Wayland pointer lock is active (games/CAD), emit relative
+        // motion only — same as local libinput under `PointerConstraint::Locked`.
+        if self.rudp_pointer_locked.load(Ordering::Relaxed) {
+            let current = pointer.current_location();
+            let under = self.pointer_target_at(current);
+            let delta = Point::from((dx, dy));
+            pointer.relative_motion(
+                self,
+                under,
+                &RelativeMotionEvent {
+                    delta,
+                    delta_unaccel: delta,
+                    time: InputTime::now(),
+                },
+            );
+            pointer.frame(self);
+            return;
+        }
+
         let current = pointer.current_location();
         let loc = self.clamp_to_desktop(current + Point::from((dx, dy)));
         self.inject_remote_pointer_at(loc);

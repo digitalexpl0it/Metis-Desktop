@@ -14,7 +14,7 @@ pub use detect::{detect_preferred_backend, resolve_backend};
 pub use ffmpeg_enc::FfmpegHwEncoder;
 pub use null::NullEncoder;
 pub use types::{
-    DEFAULT_BITRATE_KBPS, DEFAULT_FPS_HINT, EncodeError, EncodeInput, EncodedPacket,
+    DEFAULT_BITRATE_KBPS, DEFAULT_FPS_HINT, DamageRect, EncodeError, EncodeInput, EncodedPacket,
     EncoderBackend, EncoderConfig, EncoderInfo, RudpCodec,
 };
 
@@ -29,6 +29,8 @@ pub trait HwEncoder: Send {
     fn flush(&mut self) -> EncodeResult<Vec<EncodedPacket>> {
         self.drain()
     }
+    /// Request that the next submitted frame be encoded as a keyframe / IDR.
+    fn request_keyframe(&mut self) {}
 }
 
 /// Open a hardware encoder for `cfg` using `drm_render_node` (e.g. `/dev/dri/renderD128`).

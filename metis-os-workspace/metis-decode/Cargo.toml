@@ -1,0 +1,17 @@
+[package]
+name = "metis-decode"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Metis Remote (RUDP) software video decode (H.264/HEVC via FFmpeg)"
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+metis-encode = { workspace = true }
+# System FFmpeg — software decode + swscale to RGBA.
+ffmpeg-next = { version = "8", default-features = false, features = ["codec", "format", "software-scaling"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

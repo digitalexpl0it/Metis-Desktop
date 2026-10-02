@@ -26,7 +26,7 @@ use super::notifications::{BarNotification, NotificationKind, NotifyOutgoing};
 #[derive(Debug, Clone)]
 pub enum NotifyIncoming {
     /// A new (or replaced) notification to show.
-    Show(BarNotification),
+    Show(Box<BarNotification>),
     /// Sending app called `CloseNotification` — drop it from the in-bar store.
     Closed { id: u32 },
 }
@@ -94,7 +94,7 @@ impl NotifyServer {
             expire_ms: expire_timeout,
         };
         if let Ok(tx) = self.tx.lock() {
-            let _ = tx.send(NotifyIncoming::Show(note));
+            let _ = tx.send(NotifyIncoming::Show(Box::new(note)));
         }
         id
     }

@@ -1,25 +1,20 @@
-//! Metis Remote Phase 4 smoke client: QUIC + TOFU + PAM auth (no video).
+//! Metis Remote Phase 4–8 smoke client (thin CLI over `metis-rudp-client`).
 //!
 //! Usage:
 //!   metis-rudp-smoke <host:port> --user <name>
+//!   metis-rudp-smoke <host:port> --user <name> --video-secs 5
+//!   metis-rudp-smoke <host:port> --user <name> --input-smoke
 //!   Password on stdin (or METIS_RUDP_PASSWORD).
 //!   --tofu-reset clears the known_hosts pin for this host.
 
 use std::io::{Read, Write};
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use metis_config::{
-    fingerprint_cert_der, known_hosts_lookup, known_hosts_pin, known_hosts_remove,
-    normalize_fingerprint,
+use metis_protocol::RudpControlMsg;
+use metis_rudp_client::{
+    ClientError, RudpClientConfig, SessionEvent, TofuMode, clear_host_pin, connect,
 };
-use metis_protocol::{
-    RUDP_PROTOCOL_VERSION, RudpControlMsg, encode_rudp_frame, try_decode_rudp_frame,
-};
-use quinn::{ClientConfig, Endpoint};
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName};
 use zeroize::Zeroize;
 
 fn main() {
@@ -41,16 +36,11 @@ fn main() {
 }
 
 fn run(args: Vec<String>) -> Result<(), String> {
-    if rustls::crypto::ring::default_provider()
-        .install_default()
-        .is_err()
-    {
-        // already installed
-    }
-
     let mut host_port = None;
     let mut user = None;
     let mut tofu_reset = false;
+    let mut video_secs: Option<u64> = None;
+    let mut input_smoke = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -58,6 +48,17 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 i += 1;
                 user = args.get(i).cloned();
             }
+            "--video-secs" => {
+                i += 1;
+                let raw = args
+                    .get(i)
+                    .ok_or_else(|| "--video-secs needs a number".to_string())?;
+                let n: u64 = raw
+                    .parse()
+                    .map_err(|_| format!("invalid --video-secs '{raw}'"))?;
+                video_secs = Some(n.max(1));
+            }
+            "--input-smoke" => input_smoke = true,
             "--tofu-reset" => tofu_reset = true,
             "--help" | "-h" => {
                 print_help();
@@ -72,20 +73,20 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
 
     let host_port = host_port.ok_or_else(|| {
-        "usage: metis-rudp-smoke <host:port> --user <name> [--tofu-reset]".to_string()
+        "usage: metis-rudp-smoke <host:port> --user <name> [--video-secs N] [--input-smoke] [--tofu-reset]"
+            .to_string()
     })?;
     let user = user.ok_or_else(|| "--user <name> required".to_string())?;
 
     if tofu_reset {
-        let removed = known_hosts_remove(&host_port).map_err(|e| e.to_string())?;
+        let removed = clear_host_pin(&host_port).map_err(|e| e.to_string())?;
         eprintln!(
             "TOFU: {}",
             if removed {
-                "cleared pin for {host_port}"
+                format!("cleared pin for {host_port}")
             } else {
-                "no pin to clear"
+                "no pin to clear".into()
             }
-            .replace("{host_port}", &host_port)
         );
     }
 
@@ -105,195 +106,139 @@ fn run(args: Vec<String>) -> Result<(), String> {
         p.trim_end_matches(['\r', '\n']).to_string()
     };
 
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("tokio: {e}"))?;
 
-    let result = rt.block_on(async { smoke_session(addr, &host_port, &user, &password).await });
+    let result = rt.block_on(async {
+        smoke_session(addr, &host_port, &user, &password, video_secs, input_smoke).await
+    });
     password.zeroize();
-    result
+    result.map_err(|e| e.to_string())
 }
 
 async fn smoke_session(
     addr: SocketAddr,
-    host_port: &str,
+    host_key: &str,
     user: &str,
     password: &str,
-) -> Result<(), String> {
-    let verifier = Arc::new(TofuVerifier {
-        host_port: host_port.to_string(),
-    });
-    let mut crypto = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(verifier)
-        .with_no_client_auth();
-    crypto.alpn_protocols = vec![b"metis-rudp".to_vec()];
+    video_secs: Option<u64>,
+    input_smoke: bool,
+) -> Result<(), ClientError> {
+    let mut session = connect(RudpClientConfig {
+        addr,
+        host_key: host_key.to_string(),
+        username: user.to_string(),
+        password: password.to_string(),
+        tofu: TofuMode::Auto,
+    })
+    .await?;
+    println!("SessionOk {}", session.session_id());
 
-    // Quinn ignores ALPN mismatch if server doesn't set it — clear ALPN to match host.
-    crypto.alpn_protocols.clear();
+    // Drain any immediate PointerLock.
+    while let Ok(ev) = tokio::time::timeout(Duration::from_millis(80), session.recv_event()).await {
+        match ev {
+            Some(SessionEvent::PointerLock { locked }) => {
+                println!("PointerLock locked={locked}");
+            }
+            Some(SessionEvent::Disconnected) | None => break,
+            Some(_) => break,
+        }
+    }
 
-    let client_config = ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
-            .map_err(|e| format!("quic client config: {e}"))?,
-    ));
+    if input_smoke {
+        const BTN_LEFT: u32 = 0x110;
+        const KEY_A: u32 = 30;
+        session
+            .send_input(RudpControlMsg::PointerAbsolute { x: 100.0, y: 100.0 })
+            .await?;
+        session
+            .send_input(RudpControlMsg::PointerButton {
+                button: BTN_LEFT,
+                pressed: true,
+            })
+            .await?;
+        session
+            .send_input(RudpControlMsg::PointerButton {
+                button: BTN_LEFT,
+                pressed: false,
+            })
+            .await?;
+        session
+            .send_input(RudpControlMsg::Key {
+                keycode: KEY_A,
+                pressed: true,
+            })
+            .await?;
+        session
+            .send_input(RudpControlMsg::Key {
+                keycode: KEY_A,
+                pressed: false,
+            })
+            .await?;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        println!("input-smoke: sent absolute + button + key");
+    }
 
-    let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
-        .map_err(|e| format!("client endpoint: {e}"))?;
-    endpoint.set_default_client_config(client_config);
-
-    let server_name = match addr {
-        SocketAddr::V4(_) => "localhost",
-        SocketAddr::V6(_) => "localhost",
+    let Some(secs) = video_secs else {
+        return Ok(());
     };
-    let conn = endpoint
-        .connect(addr, server_name)
-        .map_err(|e| format!("connect: {e}"))?
+
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    let mut video_ready = false;
+    let mut aus = 0u64;
+    let mut bytes = 0u64;
+    let mut keyframes = 0u64;
+
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(
+            remaining.min(Duration::from_millis(200)),
+            session.recv_event(),
+        )
         .await
-        .map_err(|e| format!("handshake: {e}"))?;
-
-    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| format!("open_bi: {e}"))?;
-
-    write_msg(
-        &mut send,
-        &RudpControlMsg::Hello {
-            protocol: RUDP_PROTOCOL_VERSION,
-            username: user.to_string(),
-        },
-    )
-    .await?;
-
-    match read_msg(&mut recv).await? {
-        RudpControlMsg::AuthChallenge { .. } => {}
-        RudpControlMsg::Reject { reason, detail } => {
-            return Err(format!(
-                "rejected: {}{}",
-                reason.as_str(),
-                detail.map(|d| format!(" ({d})")).unwrap_or_default()
-            ));
+        {
+            Ok(Some(SessionEvent::VideoReady {
+                width,
+                height,
+                codec,
+            })) => {
+                println!("VideoReady {width}x{height} codec={codec}");
+                video_ready = true;
+            }
+            Ok(Some(SessionEvent::PointerLock { locked })) => {
+                println!("PointerLock locked={locked}");
+            }
+            Ok(Some(SessionEvent::AccessUnit(au))) => {
+                aus += 1;
+                bytes += au.data.len() as u64;
+                if au.keyframe {
+                    keyframes += 1;
+                }
+            }
+            Ok(Some(SessionEvent::Disconnected)) | Ok(None) => break,
+            Err(_) => {}
         }
-        other => return Err(format!("unexpected after hello: {other:?}")),
     }
 
-    write_msg(
-        &mut send,
-        &RudpControlMsg::AuthResponse {
-            password: password.to_string(),
-        },
-    )
-    .await?;
-
-    match read_msg(&mut recv).await? {
-        RudpControlMsg::SessionOk { session_id } => {
-            println!("SessionOk {session_id}");
-            Ok(())
-        }
-        RudpControlMsg::Reject { reason, detail } => Err(format!(
-            "rejected: {}{}",
-            reason.as_str(),
-            detail.map(|d| format!(" ({d})")).unwrap_or_default()
-        )),
-        other => Err(format!("unexpected after auth: {other:?}")),
+    println!("video: aus={aus} keyframes={keyframes} bytes={bytes} video_ready={video_ready}");
+    if aus == 0 {
+        return Err(ClientError::msg(
+            "no video access units received (is Metis Remote enabled with an active DRM session?)",
+        ));
     }
-}
-
-async fn write_msg(send: &mut quinn::SendStream, msg: &RudpControlMsg) -> Result<(), String> {
-    let bytes = encode_rudp_frame(msg)?;
-    send.write_all(&bytes)
-        .await
-        .map_err(|e| format!("write: {e}"))
-}
-
-async fn read_msg(recv: &mut quinn::RecvStream) -> Result<RudpControlMsg, String> {
-    let mut buf = Vec::new();
-    let mut tmp = [0u8; 2048];
-    loop {
-        if let Some((msg, n)) = try_decode_rudp_frame(&buf)? {
-            buf.drain(..n);
-            return Ok(msg);
-        }
-        let n = tokio::time::timeout(Duration::from_secs(30), recv.read(&mut tmp))
-            .await
-            .map_err(|_| "read timed out".to_string())?
-            .map_err(|e| format!("read: {e}"))?
-            .ok_or_else(|| "stream closed".to_string())?;
-        buf.extend_from_slice(&tmp[..n]);
-    }
+    Ok(())
 }
 
 fn print_help() {
     println!(
-        "metis-rudp-smoke — Metis Remote auth smoke test\n\n\
+        "metis-rudp-smoke — Metis Remote auth + video + input smoke test\n\n\
          Usage:\n  \
-         metis-rudp-smoke <host:port> --user <name> [--tofu-reset]\n\n\
+         metis-rudp-smoke <host:port> --user <name> [--video-secs N] [--input-smoke] [--tofu-reset]\n\n\
          Password: stdin or METIS_RUDP_PASSWORD.\n\
+         --video-secs N  receive/reassemble video for N seconds (requires host encode).\n\
+         --input-smoke   send a short pointer/keyboard sequence after SessionOk.\n\
          TOFU pins live in ~/.config/metis/rudp/known_hosts."
     );
-}
-
-#[derive(Debug)]
-struct TofuVerifier {
-    host_port: String,
-}
-
-impl ServerCertVerifier for TofuVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        let fp = fingerprint_cert_der(end_entity.as_ref());
-        match known_hosts_lookup(&self.host_port) {
-            Some(pinned) if pinned == normalize_fingerprint(&fp) => {
-                Ok(ServerCertVerified::assertion())
-            }
-            Some(pinned) => Err(rustls::Error::General(format!(
-                "TOFU mismatch for {}: got {fp}, pinned {pinned} (use --tofu-reset)",
-                self.host_port
-            ))),
-            None => {
-                known_hosts_pin(&self.host_port, &fp)
-                    .map_err(|e| rustls::Error::General(format!("TOFU pin write failed: {e}")))?;
-                eprintln!("TOFU: first connect — pinned {fp}");
-                Ok(ServerCertVerified::assertion())
-            }
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
 }

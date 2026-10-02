@@ -1,31 +1,39 @@
-//! Phase 2–3 RUDP host: Quinn listener + hardware encode on an isolated
+//! Phase 2–7 RUDP host: Quinn listener + hardware encode on an isolated
 //! Tokio / worker thread pair — **never** on the Smithay calloop thread.
 //!
 //! Arms [`crate::stream_export::StreamExportHub`] on start and disarms on
 //! [`Drop`]. Frame path: wake → `take_latest` → `wait_ready` → `metis-encode`
-//! (VAAPI/NVENC, no mmap) → latest-wins outbound packet slot (Phase 6 sends).
+//! (VAAPI/NVENC, no mmap) → latest-wins outbound packet slot. Phase 6 fans
+//! packets to authenticated sessions (keyframes on uni-stream, deltas as
+//! FEC'd datagrams). Phase 7 maps control-stream input onto calloop →
+//! [`crate::remote_input`] and advertises Wayland pointer lock.
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use metis_config::{RudpEncoderBackend, RudpVideoCodec};
 use metis_encode::{
     DEFAULT_BITRATE_KBPS, DEFAULT_FPS_HINT, EncodeInput, EncodedPacket, EncoderBackend,
     EncoderConfig, HwEncoder, NullEncoder, RudpCodec, open_encoder,
 };
 use metis_protocol::{
-    RUDP_PROTOCOL_VERSION, RudpControlMsg, RudpRejectReason, encode_rudp_frame,
+    RUDP_DEFAULT_DATAGRAM_BUDGET, RUDP_PROTOCOL_VERSION, ReliableAccessUnit, RudpControlMsg,
+    RudpDamageRect, RudpRejectReason, build_media_datagrams, codec_from_str, encode_rudp_frame,
     try_decode_rudp_frame,
 };
 use quinn::Endpoint;
+use smithay::reexports::calloop;
 use std::sync::RwLock as StdRwLock;
+use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::pam_auth::{pam_check, pam_service};
 use crate::rudp_identity;
@@ -33,6 +41,38 @@ use crate::stream_export::{ExportedFrame, StreamExportHub};
 
 /// Default QUIC listen port for Metis RUDP.
 pub const DEFAULT_RUDP_PORT: u16 = 7843;
+
+/// Input events from the Quinn control stream, marshaled onto calloop.
+#[derive(Debug, Clone, Copy)]
+pub enum RudpInputEvent {
+    PointerAbsolute { x: f64, y: f64 },
+    PointerRelative { dx: f64, dy: f64 },
+    PointerButton { button: u32, pressed: bool },
+    PointerScroll { dx: f64, dy: f64 },
+    Key { keycode: u32, pressed: bool },
+}
+
+impl RudpInputEvent {
+    fn from_control(msg: &RudpControlMsg) -> Option<Self> {
+        match *msg {
+            RudpControlMsg::PointerAbsolute { x, y } => Some(Self::PointerAbsolute { x, y }),
+            RudpControlMsg::PointerRelative { dx, dy } => Some(Self::PointerRelative { dx, dy }),
+            RudpControlMsg::PointerButton { button, pressed } => {
+                Some(Self::PointerButton { button, pressed })
+            }
+            RudpControlMsg::PointerScroll { dx, dy } => Some(Self::PointerScroll { dx, dy }),
+            RudpControlMsg::Key { keycode, pressed } => Some(Self::Key { keycode, pressed }),
+            _ => None,
+        }
+    }
+}
+
+/// Calloop inject sender + shared pointer-lock flag for the Quinn runtime.
+#[derive(Clone)]
+pub struct RudpCalloopBridge {
+    pub input_tx: calloop::channel::Sender<RudpInputEvent>,
+    pub pointer_locked: Arc<AtomicBool>,
+}
 
 /// Encode preferences mirrored from `rudp.json` (for restart comparison).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +165,8 @@ pub struct RudpHostSystem {
     pub fingerprint: String,
     pub encode_prefs: RudpEncodePrefs,
     pub render_node_path: PathBuf,
+    /// Shared with calloop: true when a Wayland pointer lock is active.
+    pub pointer_locked: Arc<AtomicBool>,
 }
 
 impl RudpHostSystem {
@@ -136,6 +178,7 @@ impl RudpHostSystem {
         lan_only: bool,
         encode_prefs: RudpEncodePrefs,
         render_node_path: PathBuf,
+        bridge: RudpCalloopBridge,
     ) -> Result<Self, String> {
         ensure_rustls_provider();
 
@@ -147,6 +190,17 @@ impl RudpHostSystem {
         let encode_status = Arc::new(Mutex::new(None));
         let wake = hub.arm();
 
+        let allowed_users_live = Arc::new(StdRwLock::new(allowed_users.clone()));
+        let video_width = Arc::new(AtomicU32::new(0));
+        let video_height = Arc::new(AtomicU32::new(0));
+        let quinn_stop = Arc::clone(&stop);
+        let quinn_allowed = Arc::clone(&allowed_users_live);
+        let quinn_packets = Arc::clone(&latest_packet);
+        let quinn_w = Arc::clone(&video_width);
+        let quinn_h = Arc::clone(&video_height);
+        let quinn_codec = encode_prefs.codec;
+        let quinn_bridge = bridge.clone();
+        let pointer_locked = Arc::clone(&bridge.pointer_locked);
         let frame_ctx = FramePipelineCtx {
             hub: Arc::clone(&hub),
             wake,
@@ -158,19 +212,27 @@ impl RudpHostSystem {
             encode_status: Arc::clone(&encode_status),
             prefs: encode_prefs.clone(),
             render_node_path: render_node_path.clone(),
+            video_width: Arc::clone(&video_width),
+            video_height: Arc::clone(&video_height),
         };
         let frame_join = std::thread::Builder::new()
             .name("metis-rudp-frames".into())
             .spawn(move || frame_pipeline_loop(frame_ctx))
             .map_err(|e| format!("spawn rudp frame thread: {e}"))?;
 
-        let allowed_users_live = Arc::new(StdRwLock::new(allowed_users.clone()));
-        let quinn_stop = Arc::clone(&stop);
-        let quinn_allowed = Arc::clone(&allowed_users_live);
         let quinn_join = std::thread::Builder::new()
             .name("metis-rudp-quinn".into())
             .spawn(move || {
-                if let Err(err) = run_quinn_runtime(config, quinn_stop, quinn_allowed) {
+                if let Err(err) = run_quinn_runtime(
+                    config,
+                    quinn_stop,
+                    quinn_allowed,
+                    quinn_packets,
+                    quinn_w,
+                    quinn_h,
+                    quinn_codec,
+                    quinn_bridge,
+                ) {
                     tracing::error!(%err, "rudp host: Quinn runtime exited with error");
                 }
             })
@@ -194,7 +256,7 @@ impl RudpHostSystem {
             bitrate_kbps = encode_prefs.bitrate_kbps,
             render_node = %render_node_path.display(),
             fingerprint = %fingerprint,
-            "rudp host: started (Quinn + hardware encode + PAM auth)"
+            "rudp host: started (Quinn + hardware encode + PAM auth + input)"
         );
 
         Ok(Self {
@@ -214,6 +276,7 @@ impl RudpHostSystem {
             fingerprint,
             encode_prefs,
             render_node_path,
+            pointer_locked,
         })
     }
 
@@ -245,10 +308,16 @@ fn ensure_rustls_provider() {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_quinn_runtime(
     config: RudpHostConfig,
     stop: Arc<AtomicBool>,
     allowed_users: Arc<StdRwLock<Vec<String>>>,
+    latest_packet: Arc<Mutex<Option<EncodedPacket>>>,
+    video_width: Arc<AtomicU32>,
+    video_height: Arc<AtomicU32>,
+    codec_pref: RudpVideoCodec,
+    bridge: RudpCalloopBridge,
 ) -> Result<(), String> {
     ensure_rustls_provider();
     let (server_config, fingerprint) = rudp_identity::load_or_create_server_config()?;
@@ -269,15 +338,47 @@ fn run_quinn_runtime(
             "rudp host: Quinn listening"
         );
 
-        connection_broker_loop(endpoint, stop, allowed_users).await;
+        let sessions: SessionRegistry = Arc::new(AsyncRwLock::new(HashMap::new()));
+        let pump_stop = Arc::clone(&stop);
+        let pump_sessions = Arc::clone(&sessions);
+        let pump_packets = Arc::clone(&latest_packet);
+        let pump_w = Arc::clone(&video_width);
+        let pump_h = Arc::clone(&video_height);
+        let pump_lock = Arc::clone(&bridge.pointer_locked);
+        tokio::spawn(async move {
+            video_pump_loop(
+                pump_stop,
+                pump_sessions,
+                pump_packets,
+                pump_w,
+                pump_h,
+                codec_pref,
+                pump_lock,
+            )
+            .await;
+        });
+
+        connection_broker_loop(endpoint, stop, allowed_users, sessions, bridge).await;
         Ok::<(), String>(())
     })
 }
+
+struct VideoSession {
+    conn: quinn::Connection,
+    control_send: tokio::sync::Mutex<quinn::SendStream>,
+    video_send: tokio::sync::Mutex<quinn::SendStream>,
+    video_ready_sent: AtomicBool,
+    warned_no_dgram: AtomicBool,
+}
+
+type SessionRegistry = Arc<AsyncRwLock<HashMap<String, Arc<VideoSession>>>>;
 
 async fn connection_broker_loop(
     endpoint: Endpoint,
     stop: Arc<AtomicBool>,
     allowed_users: Arc<StdRwLock<Vec<String>>>,
+    sessions: SessionRegistry,
+    bridge: RudpCalloopBridge,
 ) {
     while !stop.load(Ordering::Relaxed) {
         let incoming = tokio::select! {
@@ -294,17 +395,61 @@ async fn connection_broker_loop(
             break;
         };
         let allowed = Arc::clone(&allowed_users);
+        let sessions = Arc::clone(&sessions);
+        let bridge = bridge.clone();
         tokio::spawn(async move {
             match connecting.await {
                 Ok(conn) => {
                     let peer = conn.remote_address();
                     tracing::info!(%peer, "rudp host: TLS connected — starting auth");
                     match authenticate_connection(&conn, &allowed).await {
-                        Ok(session_id) => {
+                        Ok((session_id, mut control_send, mut control_recv)) => {
                             tracing::info!(%peer, %session_id, "rudp host: session authenticated");
-                            // Hold until peer closes; video/input arrive in later phases.
+                            // Advertise current pointer-lock so the client can pick
+                            // absolute vs relative before the next pump tick.
+                            let locked = bridge.pointer_locked.load(Ordering::Relaxed);
+                            let _ = write_control_msg(
+                                &mut control_send,
+                                &RudpControlMsg::PointerLock { locked },
+                            )
+                            .await;
+                            let video_send = match conn.open_uni().await {
+                                Ok(s) => s,
+                                Err(err) => {
+                                    tracing::warn!(%peer, %err, "rudp host: open_uni failed");
+                                    conn.close(0u32.into(), b"video stream failed");
+                                    return;
+                                }
+                            };
+                            let session = Arc::new(VideoSession {
+                                conn: conn.clone(),
+                                control_send: tokio::sync::Mutex::new(control_send),
+                                video_send: tokio::sync::Mutex::new(video_send),
+                                video_ready_sent: AtomicBool::new(false),
+                                warned_no_dgram: AtomicBool::new(false),
+                            });
+                            {
+                                let mut guard = sessions.write().await;
+                                guard.insert(session_id.clone(), Arc::clone(&session));
+                            }
+                            let input_tx = bridge.input_tx.clone();
+                            // Control reads: keepalives + Phase 7 input → calloop.
+                            tokio::spawn(async move {
+                                let mut buf = Vec::new();
+                                let mut tmp = [0u8; 2048];
+                                while let Ok(Some(n)) = control_recv.read(&mut tmp).await {
+                                    buf.extend_from_slice(&tmp[..n]);
+                                    while let Ok(Some((msg, n))) = try_decode_rudp_frame(&buf) {
+                                        buf.drain(..n);
+                                        if let Some(ev) = RudpInputEvent::from_control(&msg) {
+                                            let _ = input_tx.send(ev);
+                                        }
+                                    }
+                                }
+                            });
                             conn.closed().await;
-                            tracing::info!(%peer, "rudp host: client disconnected");
+                            sessions.write().await.remove(&session_id);
+                            tracing::info!(%peer, %session_id, "rudp host: client disconnected");
                         }
                         Err(err) => {
                             tracing::warn!(%peer, %err, "rudp host: auth failed");
@@ -321,10 +466,175 @@ async fn connection_broker_loop(
     endpoint.close(0u32.into(), b"rudp host shutdown");
 }
 
+async fn video_pump_loop(
+    stop: Arc<AtomicBool>,
+    sessions: SessionRegistry,
+    latest_packet: Arc<Mutex<Option<EncodedPacket>>>,
+    video_width: Arc<AtomicU32>,
+    video_height: Arc<AtomicU32>,
+    codec_pref: RudpVideoCodec,
+    pointer_locked: Arc<AtomicBool>,
+) {
+    tracing::info!("rudp host: video pump started");
+    let mut last_seq: Option<u64> = None;
+    let mut last_ready = (0u32, 0u32);
+    let mut last_pointer_lock: Option<bool> = None;
+    let default_codec = match codec_pref {
+        RudpVideoCodec::H264 => "h264",
+        RudpVideoCodec::Hevc => "hevc",
+    };
+
+    while !stop.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(4)).await;
+
+        let locked = pointer_locked.load(Ordering::Relaxed);
+        if last_pointer_lock != Some(locked) {
+            let snap: Vec<Arc<VideoSession>> = {
+                let guard = sessions.read().await;
+                guard.values().cloned().collect()
+            };
+            let msg = RudpControlMsg::PointerLock { locked };
+            for session in &snap {
+                let mut send = session.control_send.lock().await;
+                let _ = write_control_msg(&mut send, &msg).await;
+            }
+            last_pointer_lock = Some(locked);
+        }
+
+        let w = video_width.load(Ordering::Relaxed);
+        let h = video_height.load(Ordering::Relaxed);
+        if w > 0 && h > 0 && (w, h) != last_ready {
+            let snap: Vec<Arc<VideoSession>> = {
+                let guard = sessions.read().await;
+                guard.values().cloned().collect()
+            };
+            let msg = RudpControlMsg::VideoReady {
+                width: w,
+                height: h,
+                codec: default_codec.to_string(),
+            };
+            for session in &snap {
+                let mut send = session.control_send.lock().await;
+                if write_control_msg(&mut send, &msg).await.is_ok() {
+                    session.video_ready_sent.store(true, Ordering::Relaxed);
+                }
+            }
+            last_ready = (w, h);
+        }
+
+        let packet = {
+            let Ok(guard) = latest_packet.lock() else {
+                continue;
+            };
+            guard.clone()
+        };
+        let Some(pkt) = packet else {
+            continue;
+        };
+        if last_seq == Some(pkt.seq) {
+            continue;
+        }
+        last_seq = Some(pkt.seq);
+
+        let snap: Vec<Arc<VideoSession>> = {
+            let guard = sessions.read().await;
+            guard.values().cloned().collect()
+        };
+        if snap.is_empty() {
+            continue;
+        }
+
+        let codec = match pkt.codec {
+            RudpCodec::H264 => codec_from_str("h264"),
+            RudpCodec::Hevc => codec_from_str("hevc"),
+        };
+
+        if pkt.is_keyframe {
+            let au = ReliableAccessUnit {
+                frame_seq: pkt.seq,
+                pts_us: pkt.pts_us,
+                codec,
+                damage_full: pkt.damage_full,
+                width: w,
+                height: h,
+                damage: pkt
+                    .damage
+                    .iter()
+                    .map(|r| RudpDamageRect {
+                        x: r.x,
+                        y: r.y,
+                        w: r.w,
+                        h: r.h,
+                    })
+                    .collect(),
+                data: pkt.data.clone(),
+            };
+            let framed = au.encode_framed();
+            for session in &snap {
+                let mut send = session.video_send.lock().await;
+                if let Err(err) = send.write_all(&framed).await {
+                    tracing::debug!(%err, "rudp host: keyframe write failed");
+                }
+            }
+            continue;
+        }
+
+        for session in &snap {
+            let max_dg = session
+                .conn
+                .max_datagram_size()
+                .unwrap_or(RUDP_DEFAULT_DATAGRAM_BUDGET);
+            let stats = session.conn.stats();
+            let sent = stats.path.sent_packets.max(1);
+            let loss_ratio = stats.path.lost_packets as f64 / sent as f64;
+            let dgrams = match build_media_datagrams(
+                &pkt.data,
+                pkt.seq,
+                pkt.pts_us,
+                codec,
+                pkt.damage_full,
+                max_dg,
+                loss_ratio,
+            ) {
+                Ok(d) => d,
+                Err(err) => {
+                    tracing::warn!(%err, "rudp host: shard/FEC failed");
+                    continue;
+                }
+            };
+            for d in dgrams {
+                if session.conn.datagram_send_buffer_space() == 0 {
+                    break;
+                }
+                match session.conn.send_datagram(Bytes::from(d)) {
+                    Ok(()) => {}
+                    Err(quinn::SendDatagramError::UnsupportedByPeer) => {
+                        if !session.warned_no_dgram.swap(true, Ordering::Relaxed) {
+                            tracing::warn!(
+                                "rudp host: peer does not support datagrams — video deltas dropped"
+                            );
+                        }
+                        break;
+                    }
+                    Err(quinn::SendDatagramError::Disabled) => break,
+                    Err(quinn::SendDatagramError::TooLarge) => {
+                        tracing::debug!("rudp host: datagram too large — skip shard");
+                    }
+                    Err(err) => {
+                        tracing::debug!(%err, "rudp host: send_datagram failed");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    tracing::info!("rudp host: video pump stopped");
+}
+
 async fn authenticate_connection(
     conn: &quinn::Connection,
     allowed_users: &Arc<StdRwLock<Vec<String>>>,
-) -> Result<String, String> {
+) -> Result<(String, quinn::SendStream, quinn::RecvStream), String> {
     // Client opens the control bi-stream.
     let (mut send, mut recv) = tokio::time::timeout(Duration::from_secs(15), conn.accept_bi())
         .await
@@ -437,7 +747,7 @@ async fn authenticate_connection(
         },
     )
     .await?;
-    Ok(session_id)
+    Ok((session_id, send, recv))
 }
 
 async fn write_control_msg(
@@ -518,6 +828,8 @@ struct FramePipelineCtx {
     encode_status: Arc<Mutex<Option<String>>>,
     prefs: RudpEncodePrefs,
     render_node_path: PathBuf,
+    video_width: Arc<AtomicU32>,
+    video_height: Arc<AtomicU32>,
 }
 
 struct ActiveEncoder {
@@ -526,12 +838,20 @@ struct ActiveEncoder {
     height: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EncodeMode {
+    Sparse,
+    Full,
+}
+
 fn frame_pipeline_loop(ctx: FramePipelineCtx) {
     tracing::info!("rudp host: frame pipeline started");
     let mut last_log = Instant::now();
     let mut fps = 0u32;
     let mut last: Option<(u64, u32, u32, usize)> = None;
     let mut encoder: Option<ActiveEncoder> = None;
+    let mut encode_mode: Option<EncodeMode> = None;
+    let mut need_keyframe = true;
     let render_node = ctx.render_node_path.to_string_lossy().into_owned();
 
     while !ctx.stop.load(Ordering::Relaxed) {
@@ -543,23 +863,82 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                     }
                     // GPU fence on this worker thread — never on calloop / Quinn poll.
                     frame.wait_ready();
+                    let mode = if frame.damage_full {
+                        EncodeMode::Full
+                    } else {
+                        EncodeMode::Sparse
+                    };
+                    if encode_mode != Some(mode) {
+                        tracing::debug!(
+                            ?mode,
+                            damage_full = frame.damage_full,
+                            damage_rects = frame.damage.len(),
+                            seq = frame.seq,
+                            "rudp encode: mode"
+                        );
+                        if encode_mode == Some(EncodeMode::Sparse) && mode == EncodeMode::Full {
+                            need_keyframe = true;
+                        }
+                        encode_mode = Some(mode);
+                    }
                     match ensure_encoder(&mut encoder, &ctx, &render_node, &frame) {
-                        Ok(()) => {
-                            if let Err(err) = encode_frame(
-                                encoder.as_mut().map(|a| &mut a.enc),
-                                &frame,
-                                &ctx.latest_packet,
-                                &ctx.bytes_encoded,
-                            ) {
-                                tracing::warn!(%err, seq = frame.seq, "rudp encode submit/drain failed");
-                                if let Ok(mut slot) = ctx.encode_error.lock() {
-                                    *slot = Some(err);
+                        Ok(opened_new) => {
+                            if opened_new {
+                                need_keyframe = true;
+                            }
+                            if need_keyframe {
+                                if let Some(active) = encoder.as_mut() {
+                                    active.enc.request_keyframe();
                                 }
-                            } else {
-                                ctx.frames_encoded.fetch_add(1, Ordering::Relaxed);
-                                fps = fps.saturating_add(1);
-                                last =
-                                    Some((frame.seq, frame.width, frame.height, frame.fds.len()));
+                                need_keyframe = false;
+                            }
+                            let encode_result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    encode_frame(
+                                        encoder.as_mut().map(|a| &mut a.enc),
+                                        &frame,
+                                        &ctx.latest_packet,
+                                        &ctx.bytes_encoded,
+                                        &ctx.video_width,
+                                        &ctx.video_height,
+                                    )
+                                }));
+                            match encode_result {
+                                Ok(Ok(())) => {
+                                    ctx.frames_encoded.fetch_add(1, Ordering::Relaxed);
+                                    fps = fps.saturating_add(1);
+                                    last = Some((
+                                        frame.seq,
+                                        frame.width,
+                                        frame.height,
+                                        frame.fds.len(),
+                                    ));
+                                }
+                                Ok(Err(err)) => {
+                                    tracing::warn!(
+                                        %err,
+                                        seq = frame.seq,
+                                        "rudp encode submit/drain failed"
+                                    );
+                                    if let Ok(mut slot) = ctx.encode_error.lock() {
+                                        *slot = Some(err);
+                                    }
+                                }
+                                Err(panic) => {
+                                    tracing::error!(
+                                        ?panic,
+                                        seq = frame.seq,
+                                        "rudp encode panicked — disabling hardware encoder for this size"
+                                    );
+                                    if let Ok(mut slot) = ctx.encode_error.lock() {
+                                        *slot = Some("encoder panicked".into());
+                                    }
+                                    encoder = Some(ActiveEncoder {
+                                        enc: Box::new(NullEncoder::new(frame.width, frame.height)),
+                                        width: frame.width,
+                                        height: frame.height,
+                                    });
+                                }
                             }
                         }
                         Err(err) => {
@@ -587,6 +966,7 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                     height = h,
                     planes,
                     encoder = %active,
+                    ?encode_mode,
                     bytes = ctx.bytes_encoded.load(Ordering::Relaxed),
                     "rudp host: encode rate"
                 );
@@ -607,13 +987,13 @@ fn ensure_encoder(
     ctx: &FramePipelineCtx,
     render_node: &str,
     frame: &ExportedFrame,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let need_new = match encoder {
         None => true,
         Some(active) => active.width != frame.width || active.height != frame.height,
     };
     if !need_new {
-        return Ok(());
+        return Ok(false);
     }
     if let Some(mut old) = encoder.take() {
         let _ = old.enc.flush();
@@ -640,16 +1020,28 @@ fn ensure_encoder(
                 width: frame.width,
                 height: frame.height,
             });
-            Ok(())
+            Ok(true)
         }
         Err(err) => {
+            // Do not retry a broken FFmpeg open on every frame — that path has
+            // aborted the whole compositor process. Keep the host alive with a
+            // null encoder so Quinn/auth still work until the user fixes encode.
+            tracing::error!(
+                %err,
+                "rudp encode: hardware encoder unavailable — falling back to null (no video)"
+            );
             if let Ok(mut slot) = ctx.encode_error.lock() {
                 *slot = Some(err.clone());
             }
             if let Ok(mut slot) = ctx.encode_status.lock() {
-                *slot = None;
+                *slot = Some("null (encoder unavailable)".into());
             }
-            Err(err)
+            *encoder = Some(ActiveEncoder {
+                enc: Box::new(NullEncoder::new(frame.width, frame.height)),
+                width: frame.width,
+                height: frame.height,
+            });
+            Ok(true)
         }
     }
 }
@@ -659,6 +1051,8 @@ fn encode_frame(
     frame: &ExportedFrame,
     latest_packet: &Arc<Mutex<Option<EncodedPacket>>>,
     bytes_encoded: &Arc<AtomicU64>,
+    video_width: &Arc<AtomicU32>,
+    video_height: &Arc<AtomicU32>,
 ) -> Result<(), String> {
     let Some(enc) = encoder else {
         return Err("encoder not open".into());
@@ -674,9 +1068,13 @@ fn encode_frame(
         fds: &borrowed,
         offsets: &frame.offsets,
         strides: &frame.strides,
+        damage_full: frame.damage_full,
+        damage: &frame.damage,
     };
     enc.submit(&input).map_err(|e| e.to_string())?;
     let packets = enc.drain().map_err(|e| e.to_string())?;
+    video_width.store(frame.width, Ordering::Relaxed);
+    video_height.store(frame.height, Ordering::Relaxed);
     for pkt in packets {
         bytes_encoded.fetch_add(pkt.data.len() as u64, Ordering::Relaxed);
         if let Ok(mut slot) = latest_packet.lock() {
@@ -725,6 +1123,7 @@ pub fn render_node_device_path(node: &smithay::backend::drm::DrmNode) -> PathBuf
 pub fn maybe_start_for_session(
     hub: &Arc<StreamExportHub>,
     render_node_path: PathBuf,
+    bridge: RudpCalloopBridge,
 ) -> Option<RudpHostSystem> {
     match desired_host() {
         Some((config, users, lan_only, prefs)) => {
@@ -735,6 +1134,7 @@ pub fn maybe_start_for_session(
                 lan_only,
                 prefs,
                 render_node_path,
+                bridge,
             ) {
                 Ok(host) => Some(host),
                 Err(err) => {
@@ -787,6 +1187,13 @@ mod tests {
             true,
             RudpEncodePrefs::default(),
             PathBuf::from("/dev/dri/renderD128"),
+            RudpCalloopBridge {
+                input_tx: {
+                    let (tx, _rx) = calloop::channel::channel();
+                    tx
+                },
+                pointer_locked: Arc::new(AtomicBool::new(false)),
+            },
         )
         .expect("spawn host");
         assert!(hub.is_armed());

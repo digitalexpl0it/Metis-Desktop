@@ -1075,8 +1075,13 @@ game session ends.
 3. Set the **UDP port** if needed (1024–65535).
 4. Under **Hardware encode**, choose **Encoder** (`Auto` / `VAAPI` / `NVENC`),
    preferred codec (HEVC first, with H.264 fallback), and target **Bitrate**.
-   Auto selects NVENC on NVIDIA render nodes and VAAPI on Intel/AMD. Encoding
-   uses system FFmpeg with DRM-PRIME import (no CPU mmap of the capture buffer).
+   Auto selects NVENC on NVIDIA render nodes and VAAPI on Intel/AMD. Capture uses
+   a linear GBM pool; VAAPI imports DRM-PRIME into NV12 surfaces (with a Linear
+   mmap + swscale upload fallback when hwmap is unavailable). Encode failures
+   never take down the session — the host stays up and logs the error.
+   Unchanged frames are skipped; sparse vs full damage is tagged for the client.
+   Encoded video ships as Quinn datagrams with FEC (keyframes on a reliable
+   stream).
 5. Under **Allowed accounts**, toggle which local system users may authenticate
    (PAM). The first enable seeds your current account when the list is empty;
    at least one account must stay allowed while the host is on.
@@ -1086,25 +1091,41 @@ game session ends.
 7. Note the **Host fingerprint** (SHA-256). Clients pin it on first connect (TOFU);
    a mismatch refuses the connection until you clear the pin.
 
-**Smoke-test auth** (DRM Metis session with the host enabled):
+**Connect with Metis Viewer** (DRM Metis session with the host enabled):
+
+1. On the host: **Settings → Metis Remote → Connect with Metis Viewer…**, or run
+   `metis-viewer --rudp --host HOST --port 7843 --user "$USER"`.
+2. Choose protocol **Metis Remote** in the Viewer hosts UI (port defaults to **7843**).
+3. Enter the PAM password (never saved). Trust the host fingerprint on first connect (TOFU).
+
+Metis Remote accepts pointer and keyboard on the Quinn control stream (absolute /
+relative pointer, buttons, scroll, keys); inject pauses while the session is locked.
+When a game locks the pointer, the host advertises `PointerLock` so the Viewer
+sends relative motion.
+
+**Smoke-test / debug CLI:**
 
 ```bash
 metis-rudp-smoke 192.168.1.10:7843 --user "$USER"
 # password on stdin, or: METIS_RUDP_PASSWORD=… metis-rudp-smoke …
 # after a cert rotation: --tofu-reset
+# receive/reassemble video for 5s (host must be encoding):
+metis-rudp-smoke 192.168.1.10:7843 --user "$USER" --video-secs 5
+# send a short pointer/keyboard sequence on the control stream:
+metis-rudp-smoke 192.168.1.10:7843 --user "$USER" --input-smoke
 ```
 
 Host identity files: `~/.config/metis/rudp/host.crt`, `host.key`, `identity.json`.
 Client pins: `~/.config/metis/rudp/known_hosts`.
 
 **Packages:** build with `libavcodec-dev` / `libavutil-dev` / `libavformat-dev`
-(and runtime `ffmpeg`). Intel/AMD need a working VAAPI stack (`intel-media-va-driver`
-/ Mesa VA); NVIDIA needs the proprietary driver with NVENC and an FFmpeg build
-that exposes `*_nvenc`. If the chosen backend cannot open, the host logs a clear
-error and does not fall back to software x264/x265.
+/ `libswscale-dev` (and runtime `ffmpeg`). Intel/AMD need a working VAAPI stack
+(`intel-media-va-driver` / Mesa VA); NVIDIA needs the proprietary driver with NVENC
+and an FFmpeg build that exposes `*_nvenc`. If the chosen encode backend cannot
+open, the host logs a clear error and does not fall back to software x264/x265.
+Viewer decode uses FFmpeg software H.264/HEVC today.
 
-Video datagrams and the Viewer GUI are later milestones; PAM + TOFU auth works
-now over the Quinn control stream. Use a DRM Metis session (not nested winit).
+Use a DRM Metis session (not nested winit) for the host.
 
 Classic **RDP** (GNOME Remote Desktop), FreeRDP shadow, and third-party tools
 remain under **Settings → Remote access**.
@@ -1176,10 +1197,14 @@ PolicyKit (or **Enable**, which installs first when the package is missing).
    starts). Quick FreeRDP failures (auth/connect) surface in the status line
    within a few seconds. Default certificate policy is **Ignore** so GNOME
    Remote Desktop’s self-signed LAN certificates work without a prompt.
-4. Under Metis, FreeRDP sessions default to their **own workspace** (Super+Tab
-   Task View / Super+Alt+←/→). Choose **Window on current desktop** in Display →
-   Metis placement to keep the session on the desk you connected from. The Metis
-   Viewer connect window itself always stays on the current desktop.
+4. Under Metis, FreeRDP sessions default to their **own workspace** — an ephemeral
+   desk past your configured dots (e.g. a 5th when you have four). The edge bar
+   shows it as an **accent-colored** workspace dot while the session is active;
+   the dot disappears when FreeRDP closes (if you were on that desk, Metis
+   returns you to desktop 1). Cycle with Super+Alt+←/→ or open Task View with
+   Super+Tab. Choose **Window on current desktop** in Display → Metis placement
+   to keep the session on the desk you connected from (no extra accent dot).
+   The Metis Viewer connect window itself always stays on the current desktop.
 
 **Other clients.** Windows: *Remote Desktop Connection* (`mstsc`). macOS:
 *Microsoft Remote Desktop* from the App Store. Linux CLI:
@@ -1459,6 +1484,8 @@ changes live.
 | Update install stops on a config-file prompt | The updater should offer **Keep my version** / **Use package version**. If packages were left half-configured from an older build: `sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --fix-broken install` |
 | User list shows default icon instead of DE picture | Metis reads `~/.face`, `~/.face.icon`, then `/var/lib/AccountsService/icons/<username>`. Set a picture in Settings → Users or ensure the AccountsService icon exists and is world-readable |
 | RDP connects but screen is black | Confirm you are on a DRM session (not nested dev); unlock if the session is locked; check `metis-remote status` and PipeWire/portal stack |
+| Enabling Metis Remote blanks the session / kicks you out | Fixed 2026-10-01: VAAPI no longer feeds `DRM_PRIME` into `*_vaapi` (requires `VAAPI` NV12); export pool is linear-first (CCS GLES targets crashed Intel). Rebuild/reinstall compositor (`./run-metis.sh --install-session`), keep `rudp.json` `"enabled": false` until reinstalled, then re-enable. If it still fails, set `"enabled": false` from a TTY and check `~/.local/state/metis/logs/session-latest.log` for `hevc_vaapi` / `rudp encode` lines |
+| Login shows wallpaper for ~25s before the edge bar | Fixed 2026-10-01: leftover greeter/`xdg-desktop-portal` on the bus made `gtk::init()` wait the Settings portal timeout. Metis now replaces stale portal daemons at session start and spawns the shell with `GDK_DEBUG=no-portals`. Rebuild/reinstall and re-login. Check logs for `gtk::init() was slow` / `replacing leftover portal daemon` |
 | `metis-remote` not found | Package may be missing — `dpkg -l metis-desktop` and reinstall with `sudo apt install ./metis-desktop_*.deb`. Dev trees: `./run-metis.sh --install-session` |
 | Metis Viewer: `cliprdr_… failed` / instant disconnect | Update Viewer (clipboard channel disabled in spawn). **Do not RDP into the same session from itself** — connect from another machine (e.g. the KVM host → guest IP) |
 | `.deb` upgrade removed Metis / left nothing installed | Use `sudo apt install ./metis-desktop_….deb` from a terminal after logging out of Metis — not Ubuntu Software / App Center. Then `sudo apt-get install -f` if needed. See [`PACKAGING.md`](PACKAGING.md) |

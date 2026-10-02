@@ -203,9 +203,12 @@ impl PointerConstraintsHandler for MetisState {
         );
         self.trace_game_pointer(surface, pointer, "new pointer constraint", None);
         let mut activated = false;
+        let mut activated_locked = false;
         if pointer.current_focus().as_ref() == Some(surface) {
             with_pointer_constraint(surface, pointer, |constraint| {
                 if let Some(constraint) = constraint {
+                    use smithay::wayland::pointer_constraints::PointerConstraint;
+                    activated_locked = matches!(&*constraint, PointerConstraint::Locked(_));
                     constraint.activate();
                     self.pointer_constraint_phases
                         .insert(surface.id(), crate::state::PointerConstraintPhase::Active);
@@ -214,13 +217,14 @@ impl PointerConstraintsHandler for MetisState {
             });
         }
         if activated {
+            self.set_rudp_pointer_locked(activated_locked);
             self.trace_game_pointer_at(
                 surface,
                 "new constraint activated (surface already focused)",
                 None,
                 Some(crate::state::PointerConstraintPhase::Active),
                 true,
-                true,
+                activated_locked,
             );
         }
     }
@@ -241,11 +245,13 @@ impl PointerConstraintsHandler for MetisState {
                 "pointer constraint deactivated (leave)",
                 None,
             );
+            self.set_rudp_pointer_locked(false);
             return;
         }
         let surface_id = surface.id();
         self.trace_game_pointer(surface, pointer, "pointer constraint removed", None);
         self.pointer_constraint_phases.remove(&surface_id);
+        self.set_rudp_pointer_locked(false);
         if self.last_pointer_motion_surface.as_ref() == Some(&surface_id) {
             self.last_pointer_motion_surface = None;
         }

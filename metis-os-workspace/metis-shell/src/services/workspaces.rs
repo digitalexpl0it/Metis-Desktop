@@ -22,10 +22,45 @@ fn active_map() -> &'static Mutex<HashMap<String, u32>> {
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Ephemeral remote-session workspace id per output (`count + 1` while a
+/// dedicated FreeRDP client is active on that output).
+fn ephemeral_map() -> &'static Mutex<HashMap<String, u32>> {
+    static MAP: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 pub fn workspace_count() -> u32 {
     crate::config::load_bar_config()
         .workspace_count
         .clamp(1, 12)
+}
+
+/// Ephemeral remote desk id for an output, if the compositor currently advertises
+/// one. `None` for unbound bars falls back to any known ephemeral id.
+pub fn ephemeral_remote_for(output: Option<&str>) -> Option<u32> {
+    let map = ephemeral_map().lock().ok()?;
+    match output {
+        Some(o) if !o.is_empty() => map.get(o).copied(),
+        _ => map.values().next().copied(),
+    }
+}
+
+/// Record (or clear) the ephemeral remote workspace for an output.
+pub fn set_ephemeral_remote(output: &str, ephemeral: Option<u32>) {
+    if output.is_empty() {
+        return;
+    }
+    let Ok(mut map) = ephemeral_map().lock() else {
+        return;
+    };
+    match ephemeral {
+        Some(id) if id > 0 => {
+            map.insert(output.to_string(), id);
+        }
+        _ => {
+            map.remove(output);
+        }
+    }
 }
 
 /// The active workspace on a given output. `None` (a bar not bound to a specific
@@ -40,20 +75,29 @@ pub fn active_workspace_for(output: Option<&str>) -> u32 {
         Some(o) if !o.is_empty() => map.get(o).copied().unwrap_or(1),
         _ => map.values().next().copied().unwrap_or(1),
     };
+    if ephemeral_remote_for(output) == Some(id) {
+        return id;
+    }
     id.clamp(1, count)
 }
 
-/// Build a snapshot for an output. The dot list is the configured count; the
-/// active id is that output's current workspace.
+/// Build a snapshot for an output. Permanent desks are `1..=count`; when that
+/// output has an ephemeral remote session desk, it is appended after them.
 pub fn workspace_snapshot_for(output: Option<&str>) -> WorkspaceSnapshot {
     let count = workspace_count();
     let active_id = active_workspace_for(output);
-    let workspaces = (1..=count)
+    let mut workspaces: Vec<Workspace> = (1..=count)
         .map(|id| Workspace {
             id,
             name: format!("Desktop {id}"),
         })
         .collect();
+    if let Some(eid) = ephemeral_remote_for(output) {
+        workspaces.push(Workspace {
+            id: eid,
+            name: metis_i18n::tr("Remote session"),
+        });
+    }
     WorkspaceSnapshot {
         workspaces,
         active_id,
@@ -70,7 +114,8 @@ pub fn workspace_snapshot() -> WorkspaceSnapshot {
 /// name (`None` lets the compositor target the output under the pointer).
 pub fn dispatch_workspace(output: Option<String>, id: u32) {
     let count = workspace_count();
-    if !(1..=count).contains(&id) {
+    let allowed = (1..=count).contains(&id) || ephemeral_remote_for(output.as_deref()) == Some(id);
+    if !allowed {
         return;
     }
     // Optimistic local update for snappy dot feedback; the compositor's

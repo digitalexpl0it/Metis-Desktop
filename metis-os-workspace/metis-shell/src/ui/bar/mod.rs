@@ -1650,6 +1650,7 @@ fn attach_notification_channel(channels: crate::services::NotifyChannels) {
         while let Ok(event) = incoming.try_recv() {
             match event {
                 crate::services::NotifyIncoming::Show(note) => {
+                    let note = *note;
                     let dnd = widgets::do_not_disturb();
                     if !dnd {
                         if !note.suppress_sound {

@@ -3,6 +3,7 @@
 
 mod rate_limit;
 mod rudp_ctrl;
+mod rudp_video;
 
 pub use metis_grid::{GridLayout, GridMetrics, LayoutKind, MonitorRect, PixelRect};
 pub use rate_limit::{
@@ -14,6 +15,13 @@ pub use rate_limit::{
 pub use rudp_ctrl::{
     RUDP_MAX_FRAME, RUDP_PROTOCOL_VERSION, RudpControlMsg, RudpRejectReason, encode_rudp_frame,
     try_decode_rudp_frame,
+};
+pub use rudp_video::{
+    CODEC_H264, CODEC_HEVC, DatagramHeader, FLAG_DAMAGE_FULL, FLAG_FEC, FLAG_KEY,
+    RUDP_DATAGRAM_HEADER_LEN, RUDP_DEFAULT_DATAGRAM_BUDGET, RUDP_VIDEO_MAGIC, ReassembledFrame,
+    ReliableAccessUnit, RudpDamageRect, apply_fec, build_media_datagrams, codec_from_str,
+    codec_to_str, datagram_payload_budget, fec_parity_count, shard_payload, try_reassemble_media,
+    unwrap_au_payload, wrap_au_payload,
 };
 
 /// Commands sent from the Metis shell to the compositor.
@@ -318,12 +326,18 @@ pub enum CompositorEvent {
         rect: MonitorRect,
     },
     /// The active virtual workspace changed (1-based) on `output`, with the current
-    /// total count. Each output reports its own active workspace independently.
+    /// permanent desk count. Each output reports its own active workspace
+    /// independently. When a dedicated FreeRDP session owns an ephemeral desk on
+    /// this output, `ephemeral_remote` is `Some(count + 1)`; otherwise `None`.
     WorkspaceChanged {
         #[serde(default)]
         output: String,
         active: u32,
         count: u32,
+        /// Ephemeral remote-session workspace id (`count + 1`) while a dedicated
+        /// FreeRDP client is active on this output; absent otherwise.
+        #[serde(default)]
+        ephemeral_remote: Option<u32>,
     },
     Error {
         message: String,

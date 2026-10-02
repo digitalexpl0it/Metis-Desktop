@@ -30,6 +30,9 @@ pub fn load_or_create_server_config() -> Result<(ServerConfig, String), String> 
         .map_err(|e| format!("rudp idle timeout: {e}"))?;
     transport.max_idle_timeout(Some(idle));
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(2)));
+    // Phase 6: buffer bursty encoded frames as unreliable datagrams.
+    transport.datagram_send_buffer_size(4 * 1024 * 1024);
+    transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
     server_config.transport_config(Arc::new(transport));
 
     Ok((server_config, fingerprint))

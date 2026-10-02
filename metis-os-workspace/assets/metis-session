@@ -78,6 +78,8 @@ export CLAUDE_USE_WAYLAND="${CLAUDE_USE_WAYLAND:-1}"
 # Metis serves org.freedesktop.portal.Settings via metis-portal (started by the
 # compositor). The AT-SPI accessibility bus is still disabled — GTK connects to
 # org.a11y.Bus at startup and can hang when no bus exists in a bare session.
+# The compositor also spawns metis-shell with GDK_DEBUG=no-portals so the edge
+# bar never blocks ~25s on a leftover greeter portal during gtk::init.
 export GTK_A11Y="${GTK_A11Y:-none}"
 export NO_AT_BRIDGE="${NO_AT_BRIDGE:-1}"
 

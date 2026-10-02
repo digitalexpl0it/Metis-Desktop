@@ -1069,6 +1069,22 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
     }}
 
+    /* Ephemeral FreeRDP dedicated desk — accent so it stands out from 1..=N. */
+    .metis-bar-ws-dot-remote {{
+        border-color: rgba({accent_rgb}, 0.85);
+        background-color: rgba({accent_rgb}, 0.18);
+    }}
+
+    .metis-bar-ws-dot-remote:hover {{
+        background-color: rgba({accent_rgb}, 0.35);
+    }}
+
+    .metis-bar-ws-dot-remote.metis-bar-ws-dot-active {{
+        background-color: rgba({accent_rgb}, 0.95);
+        border-color: rgba({accent_rgb}, 1);
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+    }}
+
     .metis-notif-dnd-label {{
         font-size: 11px;
         color: {muted};

@@ -61,10 +61,10 @@ Security items from the **2026-09-27 code review** sit above product stretch.
       / mastering metadata, default-on `wp_color_management_v1`.
       → Phase 5 §B residual. *(decode path landed 2026-09-27)*
 - [ ] **3. Metis-native remote host** — **Partial (2026-09-27 / 2026-09-30):**
-      experimental FreeRDP shadow + Viewer host grid; **RUDP Phases 1–4** +
-      **Settings → Metis Remote** (`rudp.json`, encode, PAM/TOFU, UDP firewall).
-      **Residual:** RUDP Phases 5–8 (damage, datagram+FEC,
-      input, client); AV1 encode; Wayland/portal capture for shadow; promote past
+      experimental FreeRDP shadow + Viewer host grid; **RUDP Phases 1–7** +
+      **Settings → Metis Remote** (`rudp.json`, encode, PAM/TOFU, UDP firewall,
+      control-stream input, Viewer client). **Residual:** HW decode / clipboard;
+      AV1 encode; Wayland/portal capture for shadow; promote past
       experimental (GRD remains on **Remote access**).
       → Wave 4c, Phase 7 §B RUDP-Stream, Phase 15 §F,
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
@@ -187,8 +187,10 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md)
 - [ ] **4c** **Urgent residual:** Wayland/portal-backed FreeRDP host + GA
       criteria — experimental FreeRDP shadow + Viewer polish landed 2026-09-27;
-      RUDP Phases 1–4 (export + Quinn + encode + PAM/TOFU) landed 2026-09-30
-      (Phases 5–8 open under Phase 7 §B). GRD stays default; see **Urgent priorities**.
+      RUDP Phases 1–4 (export + Quinn + encode + PAM/TOFU) landed 2026-09-30;
+      Phase 5 damage-aware encode 2026-10-01; Phase 6 datagram+FEC 2026-10-01;
+      Phase 7 native input 2026-10-01; Phase 8 Viewer client 2026-10-01.
+      GRD stays default; see **Urgent priorities**.
 
 ### Wave 5 — Session startup
 - [x] `startup.json` — global enable + ordered desktop ids + per-entry enable/delay
@@ -977,7 +979,9 @@ latency and clear setup docs.
       Experience / Advanced). Per saved host in `viewer.json` (no passwords);
       mapped to FreeRDP argv via `ViewerRdpOptions::freerdp_args`. Placement stamp
       under `$XDG_RUNTIME_DIR/metis/` — dedicated workspace (default) vs window on
-      current desk. Defaults stay LAN-safe (clipboard off, `/cert:ignore`).
+      current desk. Dedicated mode uses ephemeral desk `count+1` with an
+      accent edge-bar dot while FreeRDP is active. Defaults stay LAN-safe
+      (clipboard off, `/cert:ignore`).
 - [x] **RustDesk Settings preset** (2026-07-26) — Settings → Remote access card:
       detect system/Flatpak, Open RustDesk, copy install instructions + ports/
       portal notes. Optional `metis-remote` RustDesk backend still TBD.
@@ -1005,32 +1009,39 @@ latency and clear setup docs.
       (`*_nvenc`); Auto → NVIDIA NVENC else VAAPI; codec ladder HEVC then H.264
       (AV1 follow-up). Compositor frame worker `submit`/`drain` → latest-wins
       `EncodedPacket` outbox (Phase 6 sends datagrams). Settings: encoder /
-      preferred codec / bitrate in `rudp.json`. No mmap / no software x264
-      silent fallback. Residual: AV1; damage-aware encode (Phase 5).
+      preferred codec / bitrate in `rudp.json`. **Stability fix 2026-10-01:**
+      VAAPI codec `pix_fmt` is `VAAPI` (NV12 hw frames) — never send raw
+      `DRM_PRIME` into `*_vaapi` (that aborted the DRM session); linear-first
+      export pool; open/submit failures fall back to null encoder instead of
+      crashing. Residual: AV1; true zero-copy RGB→NV12 when hwmap works.
 - [x] **RUDP-Stream Phase 4 — auth + control plane** (2026-09-30) — persistent
       host TLS (`~/.config/metis/rudp/host.{crt,key}`) + SHA-256 fingerprint in
       Settings; Quinn bi-di control stream Hello → AuthChallenge → PAM
       (`allowed_users`) → SessionOk; `metis-rudp-smoke` CLI with TOFU
       `known_hosts`; LAN-only UDP firewall (`metis_rudp` nft/ufw) via
       `metis-remote firewall rudp-*`. Residual: Viewer TOFU UI (Phase 8);
-      clipboard / input on control plane (Phase 7); video datagrams (Phase 6).
-- [ ] **RUDP-Stream Phase 5 — damage-aware encode** — plumb Smithay /
-      `OutputDamageTracker` rects into `ExportedFrame` (`damage_full: false` when
-      sparse); encode/send dirty regions for office/static desks; auto-switch to
-      full-frame CBR when damage covers a large fraction of the output (gaming /
-      CAD motion).
-- [ ] **RUDP-Stream Phase 6 — datagram video + FEC** — send encoded NAL/OBU
-      payloads on Quinn unreliable datagrams (no HOL blocking); chunk ~MTU-sized
-      shards; optional `reed-solomon-erasure` parity driven by loss stats. Keep
-      keyframes / config on reliable streams.
-- [ ] **RUDP-Stream Phase 7 — native input path** — client packs pointer/keyboard/
-      relative-pointer; host injects into compositor `InputState` / EIS (reuse
-      `remote_input.rs` patterns). Relative pointer + pointer lock for games/CAD.
-      Pause inject while session locked (same policy as RDP).
-- [ ] **RUDP-Stream Phase 8 — first-party client** — Metis Viewer (or dedicated
-      RUDP client) speaks the wire: connect `IP:port`, TOFU prompt, decode +
-      present, send input. Settings **Metis Remote** shows bind address /
-      fingerprint and opens the client. Keep GRD/RDP under **Remote access**.
+      clipboard / input on control plane (Phase 7).
+- [x] **RUDP-Stream Phase 5 — damage-aware encode** (2026-10-01) — persistent
+      `OutputDamageTracker` + `damage_output` classifies scene damage; skip
+      export when idle; `damage_full` when coverage ≥ 35% or rect cap exceeded;
+      full-frame compose into the rotating GBM pool (partial redraw unsafe);
+      `EncodedPacket` carries damage tags; force IDR on encoder open / sparse→full.
+      Residual: region bitstreams (future); Viewer (Phase 8).
+- [x] **RUDP-Stream Phase 6 — datagram video + FEC** (2026-10-01) — Quinn
+      unreliable datagrams for delta AUs (MTU shards + `reed-solomon-erasure`
+      adaptive parity); keyframes on host uni-stream; `VideoReady` control;
+      protocol v2; `metis-rudp-smoke --video-secs` reassembles. Residual:
+      input (Phase 7); Viewer decode (Phase 8).
+- [x] **RUDP-Stream Phase 7 — native input path** (2026-10-01) — control-stream
+      pointer/keyboard/relative → calloop → `remote_input` inject (session-lock
+      gated); host advertises `PointerLock`; `metis-rudp-smoke --input-smoke`.
+      Relative Wayland emission when locked landed with Phase 8.
+- [x] **RUDP-Stream Phase 8 — first-party client** (2026-10-01) — `metis-decode`
+      (FFmpeg software H.264/HEVC → RGBA); `metis-rudp-client` lib; Metis Viewer
+      Metis Remote mode (TOFU UI, video present, PointerLock input switching);
+      Settings bind address + **Connect with Metis Viewer…**; host relative
+      inject when locked. Residual: HW decode; clipboard; promote past
+      experimental (GRD remains default under **Remote access**).
 
 ### C. Security & session policy
 

@@ -1,7 +1,8 @@
-//! Metis Viewer — GTK4 RDP client over FreeRDP (hosts-first UI).
+//! Metis Viewer — GTK4 client for RDP (FreeRDP) and Metis Remote (RUDP).
 
 mod freerdp;
 mod options;
+mod rudp_session;
 mod theme;
 
 use std::cell::RefCell;
@@ -10,7 +11,9 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gtk::prelude::*;
-use metis_config::{ViewerHost, remember_host, remove_recent, set_viewer_pending_placement};
+use metis_config::{
+    ViewerHost, ViewerProtocol, remember_host, remove_recent, set_viewer_pending_placement,
+};
 use metis_i18n::tr;
 use options::OptionsUi;
 
@@ -19,6 +22,7 @@ struct CliPrefill {
     host: Option<String>,
     port: Option<u16>,
     user: Option<String>,
+    rudp: bool,
 }
 
 fn main() {
@@ -89,10 +93,11 @@ fn parse_cli() -> CliPrefill {
                 }
             }
             "--user" | "--username" => out.user = args.next(),
+            "--rudp" => out.rudp = true,
             "-h" | "--help" => {
                 eprintln!(
-                    "Usage: metis-viewer [--host HOST] [--port PORT] [--user USER]\n\
-                     Connect to an RDP host via FreeRDP (wlfreerdp3 / xfreerdp…)."
+                    "Usage: metis-viewer [--rudp] [--host HOST] [--port PORT] [--user USER]\n\
+                     RDP via FreeRDP (default) or Metis Remote with --rudp (UDP, default port 7843)."
                 );
                 std::process::exit(0);
             }
@@ -277,7 +282,40 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     port_entry.set_max_length(5);
     port_entry.set_width_chars(5);
     port_entry.set_max_width_chars(5);
-    port_entry.set_text(&prefill.port.unwrap_or(3389).to_string());
+    let initial_protocol = if prefill.rudp {
+        ViewerProtocol::Rudp
+    } else {
+        ViewerProtocol::Rdp
+    };
+    port_entry.set_text(
+        &prefill
+            .port
+            .unwrap_or_else(|| initial_protocol.default_port())
+            .to_string(),
+    );
+
+    let protocol_dropdown =
+        gtk::DropDown::from_strings(&[ViewerProtocol::Rdp.label(), ViewerProtocol::Rudp.label()]);
+    protocol_dropdown.set_selected(match initial_protocol {
+        ViewerProtocol::Rdp => 0,
+        ViewerProtocol::Rudp => 1,
+    });
+    {
+        let port_entry = port_entry.clone();
+        protocol_dropdown.connect_selected_notify(move |dd| {
+            let proto = if dd.selected() == 1 {
+                ViewerProtocol::Rudp
+            } else {
+                ViewerProtocol::Rdp
+            };
+            // Only rewrite port when it still looks like the other protocol's default.
+            let cur = port_entry.text();
+            if cur.is_empty() || cur.as_str() == "3389" || cur.as_str() == "7843" {
+                port_entry.set_text(&proto.default_port().to_string());
+            }
+        });
+    }
+    panel.append(&field_box(&tr("Protocol"), &protocol_dropdown));
 
     let host_port = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     host_port.add_css_class("metis-viewer-field");
@@ -466,6 +504,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let port_entry = port_entry.clone();
         let user_entry = user_entry.clone();
         let label_entry = label_entry.clone();
+        let protocol_dropdown = protocol_dropdown.clone();
         let connect_slot = connect_slot.clone();
         let open_panel = open_panel.clone();
         let options_ui = options_ui.clone();
@@ -478,6 +517,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 &port_entry,
                 &user_entry,
                 &label_entry,
+                &protocol_dropdown,
                 options_ui.clone(),
                 on_connect,
                 Some(open_panel.clone()),
@@ -499,12 +539,18 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let close_panel = close_panel.clone();
         let open_panel = open_panel.clone();
         let options_ui = options_ui.clone();
+        let protocol_dropdown = protocol_dropdown.clone();
 
         move || {
             if *connect_busy.borrow() {
                 return;
             }
-            if freerdp::resolve_freerdp().is_none() {
+            let protocol = if protocol_dropdown.selected() == 1 {
+                ViewerProtocol::Rudp
+            } else {
+                ViewerProtocol::Rdp
+            };
+            if protocol == ViewerProtocol::Rdp && freerdp::resolve_freerdp().is_none() {
                 set_status(
                     &status,
                     &freerdp::freerdp_install_hint_full(),
@@ -549,6 +595,46 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 return;
             }
 
+            let entry = ViewerHost {
+                host: host.trim().to_string(),
+                port,
+                username: username.trim().to_string(),
+                label: label.trim().to_string(),
+                protocol,
+                options: options.clone(),
+            };
+            if let Err(e) = remember_host(entry) {
+                tracing::warn!("viewer.json save failed: {e}");
+            }
+            refresh_hosts();
+
+            if protocol == ViewerProtocol::Rudp {
+                if let Some(parent) = host_entry.root().and_downcast::<gtk::Window>() {
+                    rudp_session::open_rudp_session(
+                        &parent,
+                        host.trim().to_string(),
+                        port,
+                        username.trim().to_string(),
+                        password,
+                    );
+                    set_status(
+                        &status,
+                        &tr("Opening Metis Remote session…"),
+                        StatusKind::Ok,
+                    );
+                    close_panel();
+                } else {
+                    set_status(
+                        &status,
+                        &tr("Could not open session window."),
+                        StatusKind::Error,
+                    );
+                }
+                *connect_busy.borrow_mut() = false;
+                connect_btn.set_sensitive(true);
+                return;
+            }
+
             set_viewer_pending_placement(options.placement);
             let req = freerdp::ConnectRequest {
                 host: host.clone(),
@@ -569,17 +655,6 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                         &format!("{} {}", tr("Connecting with"), spawned.binary.display()),
                         StatusKind::Ok,
                     );
-                    let entry = ViewerHost {
-                        host: host.trim().to_string(),
-                        port,
-                        username: username.trim().to_string(),
-                        label: label.trim().to_string(),
-                        options,
-                    };
-                    if let Err(e) = remember_host(entry) {
-                        tracing::warn!("viewer.json save failed: {e}");
-                    }
-                    refresh_hosts();
                     close_panel();
 
                     let started = Instant::now();
@@ -643,6 +718,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let refresh_hosts = refresh_hosts.clone();
         let close_panel = close_panel.clone();
         let options_ui = options_ui.clone();
+        let protocol_dropdown = protocol_dropdown.clone();
         save_btn.connect_clicked(move |_| {
             let host = host_entry.text();
             let port_text = port_entry.text();
@@ -672,6 +748,11 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 port,
                 username: username.trim().to_string(),
                 label: label.trim().to_string(),
+                protocol: if protocol_dropdown.selected() == 1 {
+                    ViewerProtocol::Rudp
+                } else {
+                    ViewerProtocol::Rdp
+                },
                 options: options_ui.collect(),
             };
             match remember_host(entry) {
@@ -902,6 +983,7 @@ fn refill_hosts_grid(
     port_entry: &gtk::Entry,
     user_entry: &gtk::Entry,
     label_entry: &gtk::Entry,
+    protocol_dropdown: &gtk::DropDown,
     options_ui: Rc<OptionsUi>,
     on_connect: Option<ConnectFn>,
     open_panel: Option<Rc<dyn Fn()>>,
@@ -952,19 +1034,22 @@ fn refill_hosts_grid(
         title_l.set_xalign(0.0);
         title_l.set_ellipsize(gtk::pango::EllipsizeMode::End);
         title_l.add_css_class("metis-viewer-host-card-title");
-        let endpoint = if entry.label.is_empty() {
-            if entry.username.is_empty() {
-                tr("No username").to_string()
+        let endpoint = {
+            let proto = entry.protocol.label();
+            if entry.label.is_empty() {
+                if entry.username.is_empty() {
+                    proto.to_string()
+                } else {
+                    format!("{proto} · {}", entry.username)
+                }
             } else {
-                entry.username.clone()
+                let user = if entry.username.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", entry.username)
+                };
+                format!("{proto} · {}:{}{user}", entry.host, entry.port)
             }
-        } else {
-            let user = if entry.username.is_empty() {
-                String::new()
-            } else {
-                format!(" · {}", entry.username)
-            };
-            format!("{}:{}{user}", entry.host, entry.port)
         };
         let meta_l = gtk::Label::new(Some(&endpoint));
         meta_l.set_xalign(0.0);
@@ -980,6 +1065,7 @@ fn refill_hosts_grid(
             let p = port_entry.clone();
             let u = user_entry.clone();
             let l = label_entry.clone();
+            let proto_dd = protocol_dropdown.clone();
             let opts = options_ui.clone();
             let e = entry.clone();
             let connect = on_connect.clone();
@@ -988,6 +1074,10 @@ fn refill_hosts_grid(
                 p.set_text(&e.port.to_string());
                 u.set_text(&e.username);
                 l.set_text(&e.label);
+                proto_dd.set_selected(match e.protocol {
+                    ViewerProtocol::Rdp => 0,
+                    ViewerProtocol::Rudp => 1,
+                });
                 opts.apply_host(&e);
                 if let Some(f) = &connect {
                     f();
@@ -1007,6 +1097,7 @@ fn refill_hosts_grid(
             let p = port_entry.clone();
             let u = user_entry.clone();
             let l = label_entry.clone();
+            let proto_dd = protocol_dropdown.clone();
             let opts = options_ui.clone();
             let e = entry.clone();
             let open = open_panel.clone();
@@ -1015,6 +1106,10 @@ fn refill_hosts_grid(
                 p.set_text(&e.port.to_string());
                 u.set_text(&e.username);
                 l.set_text(&e.label);
+                proto_dd.set_selected(match e.protocol {
+                    ViewerProtocol::Rdp => 0,
+                    ViewerProtocol::Rudp => 1,
+                });
                 opts.apply_host(&e);
                 if let Some(f) = &open {
                     f();
@@ -1036,6 +1131,7 @@ fn refill_hosts_grid(
             let port_entry = port_entry.clone();
             let user_entry = user_entry.clone();
             let label_entry = label_entry.clone();
+            let protocol_dropdown = protocol_dropdown.clone();
             let options_ui = options_ui.clone();
             let e = entry.clone();
             let connect = on_connect.clone();
@@ -1051,6 +1147,7 @@ fn refill_hosts_grid(
                     &port_entry,
                     &user_entry,
                     &label_entry,
+                    &protocol_dropdown,
                     options_ui.clone(),
                     connect.clone(),
                     open.clone(),

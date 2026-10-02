@@ -4,10 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const RUDP_PROTOCOL_VERSION: u32 = 1;
+pub const RUDP_PROTOCOL_VERSION: u32 = 2;
 pub const RUDP_MAX_FRAME: usize = 64 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RudpControlMsg {
     Hello {
@@ -29,6 +29,42 @@ pub enum RudpControlMsg {
         detail: Option<String>,
     },
     Keepalive,
+    /// Host advertises encode dimensions + codec after SessionOk (Phase 6).
+    VideoReady {
+        width: u32,
+        height: u32,
+        /// `"h264"` or `"hevc"`.
+        codec: String,
+    },
+    /// Client → host: absolute pointer in compositor logical desktop coords.
+    PointerAbsolute {
+        x: f64,
+        y: f64,
+    },
+    /// Client → host: relative pointer delta (logical pixels).
+    PointerRelative {
+        dx: f64,
+        dy: f64,
+    },
+    /// Client → host: pointer button (Linux evdev code, e.g. BTN_LEFT=0x110).
+    PointerButton {
+        button: u32,
+        pressed: bool,
+    },
+    /// Client → host: scroll delta in logical pixels.
+    PointerScroll {
+        dx: f64,
+        dy: f64,
+    },
+    /// Client → host: keyboard key (evdev keycode).
+    Key {
+        keycode: u32,
+        pressed: bool,
+    },
+    /// Host → client: Wayland pointer lock active (prefer relative mouse).
+    PointerLock {
+        locked: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,17 +121,44 @@ pub fn try_decode_rudp_frame(buf: &[u8]) -> Result<Option<(RudpControlMsg, usize
 mod tests {
     use super::*;
 
-    #[test]
-    fn frame_roundtrip() {
-        let msg = RudpControlMsg::Hello {
-            protocol: RUDP_PROTOCOL_VERSION,
-            username: "alice".into(),
-        };
+    fn roundtrip(msg: RudpControlMsg) {
         let bytes = encode_rudp_frame(&msg).expect("enc");
         let (decoded, n) = try_decode_rudp_frame(&bytes)
             .expect("dec")
             .expect("complete");
         assert_eq!(n, bytes.len());
         assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn frame_roundtrip() {
+        roundtrip(RudpControlMsg::Hello {
+            protocol: RUDP_PROTOCOL_VERSION,
+            username: "alice".into(),
+        });
+    }
+
+    #[test]
+    fn input_and_pointer_lock_roundtrip() {
+        roundtrip(RudpControlMsg::PointerAbsolute {
+            x: 100.5,
+            y: 200.25,
+        });
+        roundtrip(RudpControlMsg::PointerRelative { dx: -1.5, dy: 2.0 });
+        roundtrip(RudpControlMsg::PointerButton {
+            button: 0x110,
+            pressed: true,
+        });
+        roundtrip(RudpControlMsg::PointerScroll { dx: 0.0, dy: -30.0 });
+        roundtrip(RudpControlMsg::Key {
+            keycode: 30,
+            pressed: false,
+        });
+        roundtrip(RudpControlMsg::PointerLock { locked: true });
+        roundtrip(RudpControlMsg::VideoReady {
+            width: 1920,
+            height: 1080,
+            codec: "hevc".into(),
+        });
     }
 }

@@ -55,8 +55,10 @@ pub struct WidgetRefs {
 
 impl WidgetRefs {
     pub fn apply_snapshot(&self, snapshot: &BarSnapshot) {
+        // Workspace dots are per-output (including an ephemeral remote desk).
+        // Rebuild from that output's snapshot rather than the poller's global list.
         if let Some(w) = self.workspaces.borrow().as_ref() {
-            w.update(&snapshot.workspaces);
+            w.update(&crate::services::workspace_snapshot_for(w.output()));
         }
         if let Some(w) = self.battery.borrow().as_ref() {
             w.update(snapshot.battery_percent, snapshot.battery_charging);
@@ -116,7 +118,7 @@ impl WidgetRefs {
 
     pub fn refresh_workspaces(&self) {
         if let Some(w) = self.workspaces.borrow().as_ref() {
-            w.update(&crate::services::workspace_snapshot());
+            w.update(&crate::services::workspace_snapshot_for(w.output()));
         }
     }
 

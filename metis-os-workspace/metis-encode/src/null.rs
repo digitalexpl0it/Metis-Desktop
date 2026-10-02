@@ -8,6 +8,7 @@ use crate::types::{
 pub struct NullEncoder {
     info: EncoderInfo,
     pending: Vec<EncodedPacket>,
+    force_keyframe: bool,
 }
 
 impl NullEncoder {
@@ -21,6 +22,7 @@ impl NullEncoder {
                 height,
             },
             pending: Vec::new(),
+            force_keyframe: true,
         }
     }
 }
@@ -36,18 +38,26 @@ impl HwEncoder for NullEncoder {
                 "null encoder requires non-empty dmabuf planes".into(),
             ));
         }
+        let is_keyframe = self.force_keyframe;
+        self.force_keyframe = false;
         self.pending.push(EncodedPacket {
             seq: frame.seq,
             codec: self.info.codec,
-            is_keyframe: true,
+            is_keyframe,
             data: Vec::new(),
             pts_us: frame.seq as i64 * 16_666,
+            damage_full: frame.damage_full,
+            damage: frame.damage.to_vec(),
         });
         Ok(())
     }
 
     fn drain(&mut self) -> EncodeResult<Vec<EncodedPacket>> {
         Ok(std::mem::take(&mut self.pending))
+    }
+
+    fn request_keyframe(&mut self) {
+        self.force_keyframe = true;
     }
 }
 
@@ -76,6 +86,8 @@ mod tests {
             fds: &fds,
             offsets: &offsets,
             strides: &strides,
+            damage_full: true,
+            damage: &[],
         };
         enc.submit(&input).expect("submit");
         let pkts = enc.drain().expect("drain");

@@ -72,6 +72,21 @@ impl EncoderConfig {
     }
 }
 
+/// Physical-pixel dirty rectangle (export / encode metadata; no Smithay types).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DamageRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl DamageRect {
+    pub fn area(self) -> u64 {
+        (self.w.max(0) as u64).saturating_mul(self.h.max(0) as u64)
+    }
+}
+
 /// One composited frame ready for hardware encode (dmabuf planes, no mmap).
 pub struct EncodeInput<'a> {
     pub seq: u64,
@@ -83,6 +98,10 @@ pub struct EncodeInput<'a> {
     pub fds: &'a [BorrowedFd<'a>],
     pub offsets: &'a [u32],
     pub strides: &'a [u32],
+    /// True when damage covers most of the output (or was forced full).
+    pub damage_full: bool,
+    /// Sparse dirty rects when `!damage_full`; empty when full-frame.
+    pub damage: &'a [DamageRect],
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +111,8 @@ pub struct EncodedPacket {
     pub is_keyframe: bool,
     pub data: Vec<u8>,
     pub pts_us: i64,
+    pub damage_full: bool,
+    pub damage: Vec<DamageRect>,
 }
 
 #[derive(Debug, Clone)]

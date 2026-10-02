@@ -241,6 +241,24 @@ pub fn open_viewer(
     port: Option<u16>,
     username: Option<&str>,
 ) -> Result<(), String> {
+    open_viewer_with_flags(host, port, username, false)
+}
+
+/// Launch Metis Viewer in Metis Remote (RUDP) mode.
+pub fn open_viewer_rudp(
+    host: Option<&str>,
+    port: Option<u16>,
+    username: Option<&str>,
+) -> Result<(), String> {
+    open_viewer_with_flags(host, port, username, true)
+}
+
+fn open_viewer_with_flags(
+    host: Option<&str>,
+    port: Option<u16>,
+    username: Option<&str>,
+    rudp: bool,
+) -> Result<(), String> {
     let bin = metis_viewer_bin();
     let mut cmd = Command::new(&bin);
     // Match Appearance even if this Settings process still has a stale GTK_THEME
@@ -253,6 +271,9 @@ pub fn open_viewer(
         None => {
             cmd.env_remove("GTK_THEME");
         }
+    }
+    if rudp {
+        cmd.arg("--rudp");
     }
     if let Some(h) = host
         && !h.is_empty()

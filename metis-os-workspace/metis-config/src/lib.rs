@@ -534,8 +534,8 @@ pub use updates::{
 };
 pub use viewer::{
     ViewerCertPolicy, ViewerColorDepth, ViewerConfig, ViewerDisplayMode, ViewerHost, ViewerNetwork,
-    ViewerPlacement, ViewerRdpOptions, load_viewer_config, remember_host, remove_recent,
-    save_viewer_config, set_viewer_pending_placement, take_viewer_pending_placement,
+    ViewerPlacement, ViewerProtocol, ViewerRdpOptions, load_viewer_config, remember_host,
+    remove_recent, save_viewer_config, set_viewer_pending_placement, take_viewer_pending_placement,
     viewer_config_path,
 };
 pub use wallpaper::{

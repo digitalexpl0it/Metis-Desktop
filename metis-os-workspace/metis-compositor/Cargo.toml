@@ -34,6 +34,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Stage 2 colour: bake sRGB→display 3D LUTs from ICC profiles.
 lcms2 = "6"
 bytemuck = "1"
+bytes = "1"
 # Phase 2 RUDP host skeleton (Quinn on an isolated Tokio runtime).
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }

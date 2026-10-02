@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use metis_grid::{
@@ -500,6 +501,14 @@ pub struct MetisState {
     pub stream_export: std::sync::Arc<crate::stream_export::StreamExportHub>,
     /// Phase 2 Quinn / RUDP host skeleton (owns export arm/disarm). DRM-only.
     pub rudp_host: Option<crate::rudp_host::RudpHostSystem>,
+    /// Quinn → calloop: remote pointer/keyboard inject (Phase 7).
+    pub(crate) rudp_input_tx:
+        smithay::reexports::calloop::channel::Sender<crate::rudp_host::RudpInputEvent>,
+    /// Taken once at startup and registered with the event loop.
+    rudp_input_rx:
+        Option<smithay::reexports::calloop::channel::Channel<crate::rudp_host::RudpInputEvent>>,
+    /// Shared with Quinn: active Wayland pointer lock → advertise `PointerLock`.
+    pub(crate) rudp_pointer_locked: Arc<AtomicBool>,
     pub(crate) color_mgmt: crate::color_management::ColorManagementRuntime,
     /// Idle detection + screen-blank (DPMS) + inhibitor bookkeeping.
     pub(crate) idle: crate::idle::IdleManager,
@@ -885,6 +894,19 @@ fn apply_spawned_client_env(
             .or_else(|_| std::env::var("GSK_RENDERER"))
             .unwrap_or_else(|_| "cairo".into());
         cmd.env("GSK_RENDERER", renderer);
+        // Never let the edge bar / desktop-widgets block ~25s inside gtk::init
+        // waiting on org.freedesktop.portal.Settings. A leftover greeter or
+        // GNOME portal on the session bus causes exactly the "wallpaper then
+        // frozen shell" hang after login. Other apps still use the portal stack.
+        let gdk_debug = std::env::var("GDK_DEBUG").unwrap_or_default();
+        if gdk_debug.is_empty() {
+            cmd.env("GDK_DEBUG", "no-portals");
+        } else if !gdk_debug
+            .split(',')
+            .any(|p| p == "no-portals" || p == "portals")
+        {
+            cmd.env("GDK_DEBUG", format!("{gdk_debug},no-portals"));
+        }
     } else if program.contains("metis-settings") {
         if compat {
             cmd.env("GSK_RENDERER", "cairo");
@@ -1027,6 +1049,8 @@ impl MetisState {
         let mut grid_layout = grid_layout;
         metis_grid::sanitize_layout(&mut grid_layout);
         let (client_cursor_theme, client_cursor_size) = resolve_client_cursor_env();
+        let (rudp_input_tx, rudp_input_rx) =
+            smithay::reexports::calloop::channel::channel::<crate::rudp_host::RudpInputEvent>();
         tracing::info!(
             theme = %client_cursor_theme,
             size = %client_cursor_size,
@@ -1160,6 +1184,9 @@ impl MetisState {
             image_capture: crate::image_capture::ImageCaptureRuntime::new(&dh),
             stream_export: std::sync::Arc::new(crate::stream_export::StreamExportHub::new()),
             rudp_host: None,
+            rudp_input_tx,
+            rudp_input_rx: Some(rudp_input_rx),
+            rudp_pointer_locked: Arc::new(AtomicBool::new(false)),
             color_mgmt: crate::color_management::ColorManagementRuntime::new(&dh),
             idle,
             lock: crate::lock::LockState::new(),
@@ -4630,6 +4657,7 @@ impl MetisState {
         });
         if let Some((event, phase, is_active, is_locked)) = trace {
             self.trace_game_pointer_at(surface, event, None, Some(phase), is_active, is_locked);
+            self.set_rudp_pointer_locked(is_locked);
         }
     }
 
@@ -4654,6 +4682,7 @@ impl MetisState {
         self.last_pointer_motion_surface = Some(surface_id.clone());
 
         let mut armed = false;
+        let mut armed_locked = false;
         with_pointer_constraint(surface, pointer, |constraint| {
             let Some(constraint) = constraint else {
                 return;
@@ -4666,6 +4695,8 @@ impl MetisState {
                 .region()
                 .is_none_or(|region| region.contains(point))
             {
+                use smithay::wayland::pointer_constraints::PointerConstraint;
+                armed_locked = matches!(&*constraint, PointerConstraint::Locked(_));
                 constraint.activate();
                 self.pointer_constraint_phases
                     .insert(surface_id.clone(), PointerConstraintPhase::Active);
@@ -4674,13 +4705,14 @@ impl MetisState {
         });
         if armed {
             self.cursor_position_hint = None;
+            self.set_rudp_pointer_locked(armed_locked);
             self.trace_game_pointer_at(
                 surface,
                 "constraint re-armed while pointer over surface",
                 Some(location),
                 Some(PointerConstraintPhase::Active),
                 true,
-                true,
+                armed_locked,
             );
         }
     }
@@ -4998,6 +5030,10 @@ impl MetisState {
                     lan_only,
                     prefs,
                     render_path,
+                    crate::rudp_host::RudpCalloopBridge {
+                        input_tx: self.rudp_input_tx.clone(),
+                        pointer_locked: Arc::clone(&self.rudp_pointer_locked),
+                    },
                 ) {
                     Ok(host) => {
                         tracing::info!(bind = %host.bind, "rudp host (re)started");
@@ -5007,6 +5043,48 @@ impl MetisState {
                 }
             }
         }
+    }
+
+    /// Register Quinn → calloop input inject (once at startup).
+    pub fn register_rudp_input_channel(&mut self) {
+        use crate::rudp_host::RudpInputEvent;
+        use smithay::reexports::calloop::channel::Event;
+
+        let Some(rx) = self.rudp_input_rx.take() else {
+            return;
+        };
+        if let Err(err) = self
+            .loop_handle
+            .insert_source(rx, |event, _, state: &mut MetisState| {
+                let Event::Msg(ev) = event else {
+                    return;
+                };
+                match ev {
+                    RudpInputEvent::PointerAbsolute { x, y } => {
+                        state.inject_remote_pointer_absolute(x, y);
+                    }
+                    RudpInputEvent::PointerRelative { dx, dy } => {
+                        state.inject_remote_pointer_relative(dx, dy);
+                    }
+                    RudpInputEvent::PointerButton { button, pressed } => {
+                        state.inject_remote_pointer_button(button, pressed);
+                    }
+                    RudpInputEvent::PointerScroll { dx, dy } => {
+                        state.inject_remote_pointer_scroll(dx, dy);
+                    }
+                    RudpInputEvent::Key { keycode, pressed } => {
+                        state.inject_remote_key(keycode, pressed);
+                    }
+                }
+            })
+        {
+            tracing::warn!(?err, "rudp: failed to register input channel");
+        }
+    }
+
+    /// Advertise Wayland pointer-lock state to RUDP clients (Phase 7).
+    pub(crate) fn set_rudp_pointer_locked(&self, locked: bool) {
+        self.rudp_pointer_locked.store(locked, Ordering::Relaxed);
     }
 
     fn tick_outputs_reload(&mut self) {
@@ -7855,12 +7933,41 @@ impl MetisState {
             output: output_key.to_string(),
             active: self.active_workspace_for(output_key),
             count: self.workspace_count(),
+            ephemeral_remote: self.ephemeral_remote_workspace(output_key),
         });
     }
 
     /// Configured number of virtual workspaces (clamped to a sane 1..=12).
     pub fn workspace_count(&self) -> u32 {
         metis_config::load_bar_config().workspace_count.clamp(1, 12)
+    }
+
+    /// Ephemeral FreeRDP dedicated-desk id (`workspace_count() + 1`) while one is
+    /// reserved for `output_key`; otherwise `None`.
+    pub(crate) fn ephemeral_remote_workspace(&self, output_key: &str) -> Option<u32> {
+        self.remote_viewer_workspace.get(output_key).copied()
+    }
+
+    /// Highest reachable workspace id on this output (permanent count, or the
+    /// ephemeral remote desk when one is active).
+    fn workspace_span_for(&self, output_key: &str) -> u32 {
+        let count = self.workspace_count().max(1);
+        self.ephemeral_remote_workspace(output_key)
+            .unwrap_or(count)
+            .max(count)
+    }
+
+    /// Clamp a workspace id to permanent desks, or allow the registered ephemeral
+    /// remote id for this output.
+    fn clamp_workspace_for(&self, output_key: &str, target: u32) -> u32 {
+        let count = self.workspace_count().max(1);
+        if (1..=count).contains(&target) {
+            return target;
+        }
+        if self.ephemeral_remote_workspace(output_key) == Some(target) {
+            return target;
+        }
+        target.clamp(1, count)
     }
 
     /// Configured multi-monitor workspace behavior (independent vs. linked).
@@ -7871,7 +7978,13 @@ impl MetisState {
     /// Switch workspace honoring the configured multi-monitor mode. In `Separate`
     /// only `requested_output` changes; in `Linked` every output switches to the
     /// same workspace at once (each emits its own `WorkspaceChanged`).
+    /// Ephemeral remote desks never fan out — they exist only on the output that
+    /// hosts the FreeRDP session.
     pub fn switch_workspace_routed(&mut self, requested_output: &str, target: u32) {
+        if self.ephemeral_remote_workspace(requested_output) == Some(target) {
+            self.switch_workspace(requested_output, target);
+            return;
+        }
         if self.workspace_mode() == metis_config::WorkspaceMode::Linked {
             let keys: Vec<String> = self.space.outputs().map(|o| o.name()).collect();
             if keys.is_empty() {
@@ -7886,15 +7999,15 @@ impl MetisState {
         }
     }
 
-    /// Step to the previous/next workspace (wrapping at 1..=`workspace_count()`),
-    /// honoring linked vs. separate multi-monitor mode.
+    /// Step to the previous/next workspace (wrapping across permanent desks and
+    /// the ephemeral remote desk when present), honoring linked vs. separate mode.
     pub fn cycle_workspace_routed(&mut self, requested_output: &str, delta: i32) {
-        let count = self.workspace_count();
+        let max = self.workspace_span_for(requested_output);
         let current = self.active_workspace_for(requested_output);
         let target = if delta >= 0 {
-            if current >= count { 1 } else { current + 1 }
+            if current >= max { 1 } else { current + 1 }
         } else if current <= 1 {
-            count
+            max
         } else {
             current - 1
         };
@@ -7906,7 +8019,7 @@ impl MetisState {
     /// target workspace's tiles and remaps its windows. Other outputs and the
     /// desk widget tiles are untouched.
     pub fn switch_workspace(&mut self, output_key: &str, target: u32) {
-        let target = target.clamp(1, self.workspace_count());
+        let target = self.clamp_workspace_for(output_key, target);
         let current = self.active_workspace_for(output_key);
         if target == current {
             return;
@@ -8311,14 +8424,14 @@ impl MetisState {
     /// joins that output's visible workspace its tile is stashed/restored and the
     /// window is hidden/shown.
     pub fn move_window_to_workspace(&mut self, window_id: u32, target: u32) {
-        let target = target.clamp(1, self.workspace_count());
+        let key = self.desk_key_for_window(window_id);
+        let target = self.clamp_workspace_for(&key, target);
         let Some(current) = self.windows.workspace(window_id) else {
             return;
         };
         if target == current {
             return;
         }
-        let key = self.desk_key_for_window(window_id);
         self.windows.set_workspace(window_id, target);
         let tile_id = format!("app-{window_id}");
         let active = self.active_workspace_for(&key);
@@ -8605,6 +8718,7 @@ impl MetisState {
                     output: key.clone(),
                     active: self.active_workspace_for(&key),
                     count: self.workspace_count(),
+                    ephemeral_remote: self.ephemeral_remote_workspace(&key),
                 }
             }
             CompositorCommand::MoveWindowToWorkspace {
@@ -8927,24 +9041,18 @@ impl MetisState {
         self.focus_window_id(id);
     }
 
+    /// Dedicated FreeRDP sessions always own an ephemeral desk at
+    /// `workspace_count() + 1` so permanent desks 1..=N stay untouched.
     fn pick_remote_viewer_workspace(&self, key: &str, window_id: u32) -> u32 {
-        let count = self.workspace_count().max(1);
+        let ephemeral = self.workspace_count().saturating_add(1);
         if let Some(&cached) = self.remote_viewer_workspace.get(key)
-            && (1..=count).contains(&cached)
+            && cached == ephemeral
+            && (self.workspace_has_remote_viewer(key, cached, Some(window_id))
+                || self.workspace_occupant_count(key, cached, Some(window_id)) == 0)
         {
-            // Keep using the cached desk while it still hosts remote sessions or is empty.
-            if self.workspace_has_remote_viewer(key, cached, Some(window_id))
-                || self.workspace_occupant_count(key, cached, Some(window_id)) == 0
-            {
-                return cached;
-            }
+            return cached;
         }
-        for ws in 1..=count {
-            if self.workspace_occupant_count(key, ws, Some(window_id)) == 0 {
-                return ws;
-            }
-        }
-        count
+        ephemeral
     }
 
     fn workspace_occupant_count(&self, key: &str, ws: u32, exclude: Option<u32>) -> usize {
@@ -8985,14 +9093,22 @@ impl MetisState {
 
     pub(crate) fn clear_remote_viewer_placement(&mut self, id: u32) {
         self.remote_viewer_placed.remove(&id);
-        // Drop cached workspace when no FreeRDP clients remain on that output.
+        // Drop the ephemeral desk when no FreeRDP clients remain on that output.
         let keys: Vec<String> = self.remote_viewer_workspace.keys().cloned().collect();
         for key in keys {
             let Some(&ws) = self.remote_viewer_workspace.get(&key) else {
                 continue;
             };
-            if !self.workspace_has_remote_viewer(&key, ws, Some(id)) {
-                self.remote_viewer_workspace.remove(&key);
+            if self.workspace_has_remote_viewer(&key, ws, Some(id)) {
+                continue;
+            }
+            self.remote_viewer_workspace.remove(&key);
+            if self.active_workspace_for(&key) == ws {
+                // Leave the remote desk; switch_workspace emits WorkspaceChanged.
+                self.switch_workspace(&key, 1);
+            } else {
+                // Still advertise that the accent dot should disappear.
+                self.emit_workspace_changed(&key);
             }
         }
     }

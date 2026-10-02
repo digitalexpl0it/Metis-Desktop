@@ -185,6 +185,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .as_ref()
                     .map(|u| rudp_host::render_node_device_path(&u.render_node))
                     .unwrap_or_else(|| std::path::PathBuf::from("/dev/dri/renderD128")),
+                rudp_host::RudpCalloopBridge {
+                    input_tx: state.rudp_input_tx.clone(),
+                    pointer_locked: std::sync::Arc::clone(&state.rudp_pointer_locked),
+                },
             );
         }
     }
@@ -199,6 +203,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Register the PAM auth result channel so lock-screen authentication (run on
     // a worker thread) can hand its result back to the event loop.
     state.lock_register_auth_channel();
+    // Quinn RUDP input → remote_input inject on the Smithay thread.
+    state.register_rudp_input_channel();
 
     // Capture the host's WAYLAND_DISPLAY before we overwrite it with our own
     // socket, so the activation-env import (below) can be undone on exit. Only
@@ -629,11 +635,17 @@ fn spawn_portal_daemon(name: &str) -> bool {
 
 /// Best-effort: start xdg-desktop-portal once our Wayland socket exists so the
 /// first GtkApplication launch does not cold-start the whole portal stack.
+///
+/// Always replace any pre-existing `org.freedesktop.portal.Desktop` owner. A
+/// leftover portal from the greeter / previous session is often started with a
+/// GNOME desktop identity and then blocks GTK ~25s per Settings call when
+/// gnome-shell is not running — that is exactly the "wallpaper then frozen
+/// shell" hang after login.
 fn prewarm_desktop_portal() {
     if std::env::var_os("METIS_NO_PORTAL_PREWARM").is_some() {
         return;
     }
-    let _ = spawn_portal_daemon("xdg-desktop-portal");
+    restart_portal_daemon("xdg-desktop-portal", "org.freedesktop.portal.Desktop");
 }
 
 /// GTK apps block on the FileChooser/OpenURI portal during startup unless the
@@ -642,7 +654,37 @@ fn prewarm_portal_gtk() {
     if std::env::var_os("METIS_NO_PORTAL_PREWARM").is_some() {
         return;
     }
-    let _ = spawn_portal_daemon("xdg-desktop-portal-gtk");
+    restart_portal_daemon(
+        "xdg-desktop-portal-gtk",
+        "org.freedesktop.impl.portal.desktop.gtk",
+    );
+}
+
+/// Terminate any existing owner of `bus_name`, then spawn `daemon` with Metis
+/// portal desktop env so `UseIn` / preferred backends resolve correctly.
+fn restart_portal_daemon(daemon: &str, bus_name: &str) {
+    if session_bus_name_active(bus_name) {
+        tracing::info!(
+            daemon,
+            %bus_name,
+            "replacing leftover portal daemon before Metis session warm-up"
+        );
+        terminate_session_bus_name_owner(bus_name);
+        // Give the name a moment to drop before we claim it.
+        let _ = wait_for_session_bus_name_gone(bus_name, std::time::Duration::from_secs(2));
+    }
+    let _ = spawn_portal_daemon(daemon);
+}
+
+fn wait_for_session_bus_name_gone(name: &str, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if !session_bus_name_active(name) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    !session_bus_name_active(name)
 }
 
 /// Start the Metis PolicyKit authentication agent when missing.

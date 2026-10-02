@@ -1,7 +1,9 @@
 use gtk::prelude::*;
 
 use crate::config::BarPosition;
-use crate::services::{WorkspaceSnapshot, active_workspace_for, dispatch_workspace};
+use crate::services::{
+    WorkspaceSnapshot, active_workspace_for, dispatch_workspace, ephemeral_remote_for,
+};
 use crate::ui::bar::BarShell;
 use metis_config::load_dashboard_config;
 
@@ -68,6 +70,11 @@ impl WorkspacesWidget {
         &self.root
     }
 
+    /// Compositor output this bar's workspace strip is bound to.
+    pub fn output(&self) -> Option<&str> {
+        self.output.as_deref()
+    }
+
     pub fn sync_control_center_visible(&self) {
         let enabled = load_dashboard_config().enabled;
         self.control_btn.set_visible(enabled);
@@ -83,6 +90,7 @@ impl WorkspacesWidget {
         // The active dot is this output's own active workspace, not the snapshot's
         // (output-agnostic) value, so each monitor's bar reflects its own state.
         let active_id = active_workspace_for(self.output.as_deref());
+        let remote_id = ephemeral_remote_for(self.output.as_deref());
 
         let dots = if snapshot.workspaces.is_empty() {
             (0..4).map(|_| (0u32, false)).collect::<Vec<_>>()
@@ -95,14 +103,18 @@ impl WorkspacesWidget {
         };
 
         for (id, active) in dots {
-            let dot = workspace_dot(active);
+            let remote = remote_id == Some(id);
+            let dot = workspace_dot(active, remote);
             if id == 0 {
                 dot.add_css_class("metis-bar-ws-dot-idle");
                 dot.set_tooltip_text(Some(&metis_i18n::tr("Metis desktop")));
             } else {
-                dot.set_tooltip_text(Some(
-                    &metis_i18n::tr("Desktop %1").replace("%1", &id.to_string()),
-                ));
+                let tip = if remote {
+                    metis_i18n::tr("Remote session")
+                } else {
+                    metis_i18n::tr("Desktop %1").replace("%1", &id.to_string())
+                };
+                dot.set_tooltip_text(Some(&tip));
                 let output = self.output.clone();
                 let gesture = gtk::GestureClick::new();
                 gesture.connect_pressed(move |_, _, _, _| {
@@ -117,9 +129,12 @@ impl WorkspacesWidget {
     }
 }
 
-fn workspace_dot(active: bool) -> gtk::Box {
+fn workspace_dot(active: bool, remote: bool) -> gtk::Box {
     let dot = gtk::Box::builder().build();
     dot.add_css_class("metis-bar-ws-dot");
+    if remote {
+        dot.add_css_class("metis-bar-ws-dot-remote");
+    }
     if active {
         dot.add_css_class("metis-bar-ws-dot-active");
     }

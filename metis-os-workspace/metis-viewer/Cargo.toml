@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Metis RDP viewer — GTK connect UI over FreeRDP (GRD host unchanged)"
+description = "Metis Viewer — RDP (FreeRDP) and Metis Remote (RUDP) client"
 
 [[bin]]
 name = "metis-viewer"
@@ -16,6 +16,10 @@ glib = "0.22"
 gio = "0.22"
 metis-config = { workspace = true }
 metis-i18n = { workspace = true }
+metis-protocol = { workspace = true }
+metis-rudp-client = { workspace = true }
+metis-decode = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 zeroize = "1"

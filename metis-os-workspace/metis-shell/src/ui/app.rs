@@ -19,12 +19,21 @@ pub fn run(init: MetisInit) {
         wayland_display = ?std::env::var("WAYLAND_DISPLAY").ok(),
         "initializing GTK"
     );
+    let gtk_init_started = std::time::Instant::now();
     if let Err(err) = gtk::init() {
         tracing::error!(?err, "gtk::init() failed — cannot open display");
         return;
     }
+    let gtk_init_ms = gtk_init_started.elapsed().as_millis();
+    if gtk_init_ms > 2_000 {
+        tracing::warn!(
+            gtk_init_ms,
+            "gtk::init() was slow — usually a portal/Settings D-Bus timeout"
+        );
+    }
     tracing::info!(
         have_display = gtk::gdk::Display::default().is_some(),
+        gtk_init_ms,
         "gtk::init() ok — building shell"
     );
 
@@ -57,9 +66,17 @@ pub fn run_desktop_widgets(init: MetisInit) {
         wayland_display = ?std::env::var("WAYLAND_DISPLAY").ok(),
         "initializing GTK (desktop-widgets mode)"
     );
+    let gtk_init_started = std::time::Instant::now();
     if let Err(err) = gtk::init() {
         tracing::error!(?err, "gtk::init() failed — cannot open display");
         return;
+    }
+    let gtk_init_ms = gtk_init_started.elapsed().as_millis();
+    if gtk_init_ms > 2_000 {
+        tracing::warn!(
+            gtk_init_ms,
+            "gtk::init() (desktop-widgets) was slow — usually a portal/Settings D-Bus timeout"
+        );
     }
 
     let dir = if metis_i18n::is_rtl() {
@@ -93,10 +110,12 @@ fn attach_system_events(event_rx: Receiver<SystemEvent>) {
                     if let metis_protocol::CompositorEvent::WorkspaceChanged {
                         output,
                         active,
+                        ephemeral_remote,
                         ..
                     } = &evt
                     {
                         crate::services::set_active_workspace(output, *active);
+                        crate::services::set_ephemeral_remote(output, *ephemeral_remote);
                         crate::ui::bar::refresh_workspaces();
                         // Pull a fresh window list so each output's dock reflects
                         // the now-visible workspace (and any cross-workspace move).

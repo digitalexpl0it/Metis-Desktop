@@ -19,9 +19,37 @@ pub struct ViewerHost {
     /// Optional display name shown on saved-host cards.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
+    /// Wire protocol: classic RDP (FreeRDP) or Metis Remote (RUDP).
+    #[serde(default)]
+    pub protocol: ViewerProtocol,
     /// Remmina-style session options (Display / Local / Experience / Advanced).
     #[serde(default, skip_serializing_if = "ViewerRdpOptions::is_default")]
     pub options: ViewerRdpOptions,
+}
+
+/// How Metis Viewer reaches the remote host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerProtocol {
+    #[default]
+    Rdp,
+    Rudp,
+}
+
+impl ViewerProtocol {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rdp => "RDP",
+            Self::Rudp => "Metis Remote",
+        }
+    }
+
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Rdp => 3389,
+            Self::Rudp => 7843,
+        }
+    }
 }
 
 fn default_port() -> u16 {
@@ -491,6 +519,7 @@ mod tests {
             port: 3389,
             username: "alice".into(),
             label: "Home PC".into(),
+            protocol: ViewerProtocol::Rdp,
             options: options.clone(),
         };
         remember_host(entry.clone()).unwrap();
@@ -503,6 +532,7 @@ mod tests {
             port: 3389,
             username: "alice".into(),
             label: String::new(),
+            protocol: ViewerProtocol::Rdp,
             options: ViewerRdpOptions::default(),
         })
         .unwrap();

@@ -1,14 +1,19 @@
-//! Phase 1 RUDP host capture: export the primary output's composited frame as
-//! dmabuf plane FDs for a future encode worker — **no PipeWire / portal**.
+//! Phase 1–5 RUDP host capture: export the primary output's composited frame as
+//! dmabuf plane FDs for the encode worker — **no PipeWire / portal**.
 //!
 //! Scanout still owns the KMS buffer. When armed, we run a second
 //! `OutputStack` compose into a dedicated GBM dmabuf pool (same pattern as
 //! [`crate::image_capture`]), then publish an [`ExportedFrame`] on a
 //! latest-wins slot + wake channel (never blocks the render thread).
 //!
+//! Phase 5: a **persistent** [`OutputDamageTracker`] classifies scene damage
+//! (skip empty / sparse vs full). Compose into the rotating pool remains
+//! **full-frame** — partial GLES redraw into a fresh BO would leave undefined
+//! pixels.
+//!
 //! Guardrails:
-//! - Prefer hardware-tiled GBM modifiers (`Modifier::Invalid` / render-node
-//!   formats); do not force LINEAR as the only layout.
+//! - Prefer linear GBM modifiers for the export pool (encode / VAAPI import);
+//!   CCS/tiled BOs as GLES targets have killed the DRM session on Intel.
 //! - Do not `sync.wait()` on the render thread — export an explicit fence FD
 //!   (and keep [`SyncPoint`] for the consumer when export is unavailable).
 //! - Pool slots use [`SlotReleaseGuard`] so dropped / superseded frames free
@@ -20,6 +25,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use metis_encode::DamageRect;
 use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufAllocator};
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Allocator, Buffer as AllocBuffer, Fourcc, Modifier};
@@ -30,7 +36,7 @@ use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::output::Output;
-use smithay::utils::{Physical, Point, Scale, Size, Transform};
+use smithay::utils::{Physical, Point, Rectangle, Scale, Size, Transform};
 
 use crate::render::CLEAR_COLOR;
 use crate::state::MetisState;
@@ -40,6 +46,10 @@ const POOL_SIZE: usize = 3;
 const WAKE_CAP: usize = 1;
 /// Synthetic encode latency in the debug consumer (proves slot RAII under load).
 const DEBUG_ENCODE_SLEEP: Duration = Duration::from_millis(6);
+/// Damage area / output area at or above this → `damage_full` (gaming / CAD).
+pub const DAMAGE_FULL_THRESHOLD: f64 = 0.35;
+/// More than this many rects → treat as full-frame (metadata cap).
+pub const DAMAGE_RECT_CAP: usize = 32;
 
 /// One composited primary-output frame for the RUDP encode worker.
 ///
@@ -57,8 +67,10 @@ pub struct ExportedFrame {
     pub fds: Vec<OwnedFd>,
     pub offsets: Vec<u32>,
     pub strides: Vec<u32>,
-    /// Full-frame for Phase 1; damage rects arrive in a later phase.
+    /// True when damage covers a large fraction of the output (or forced full).
     pub damage_full: bool,
+    /// Sparse physical dirty rects when `!damage_full`; empty when full.
+    pub damage: Vec<DamageRect>,
     /// Explicit sync fence FD when the GLES sync point is exportable.
     /// Prefer awaiting this on the encode thread (never on the render path).
     pub fence: Option<OwnedFd>,
@@ -81,6 +93,7 @@ impl std::fmt::Debug for ExportedFrame {
             .field("modifier", &self.modifier)
             .field("planes", &self.fds.len())
             .field("damage_full", &self.damage_full)
+            .field("damage_rects", &self.damage.len())
             .field("has_fence", &self.fence.is_some())
             .field("slot", &self._slot_guard.as_ref().map(|g| g.slot_index))
             .finish()
@@ -97,6 +110,46 @@ impl ExportedFrame {
         }
         let _ = self.sync.wait();
     }
+}
+
+/// Classify scene damage for export / encode metadata.
+///
+/// Empty `rects` → caller should skip export. More than [`DAMAGE_RECT_CAP`]
+/// rects or coverage ≥ [`DAMAGE_FULL_THRESHOLD`] → `damage_full` with empty
+/// rect list.
+pub fn classify_export_damage(
+    rects: Vec<DamageRect>,
+    output_w: i32,
+    output_h: i32,
+) -> (bool, Vec<DamageRect>) {
+    if rects.is_empty() {
+        return (false, rects);
+    }
+    if rects.len() > DAMAGE_RECT_CAP {
+        return (true, Vec::new());
+    }
+    let output_area = (output_w.max(0) as u64)
+        .saturating_mul(output_h.max(0) as u64)
+        .max(1);
+    let damaged: u64 = rects.iter().map(|r| r.area()).sum();
+    let coverage = damaged as f64 / output_area as f64;
+    if coverage >= DAMAGE_FULL_THRESHOLD {
+        (true, Vec::new())
+    } else {
+        (false, rects)
+    }
+}
+
+fn rects_from_smithay(rects: &[Rectangle<i32, Physical>]) -> Vec<DamageRect> {
+    rects
+        .iter()
+        .map(|r| DamageRect {
+            x: r.loc.x,
+            y: r.loc.y,
+            w: r.size.w,
+            h: r.size.h,
+        })
+        .collect()
 }
 
 fn wait_sync_file(fd: &OwnedFd) {
@@ -148,6 +201,16 @@ struct PoolState {
     fourcc: Fourcc,
 }
 
+/// Persistent scene-damage tracker (separate from full-frame pool compose).
+struct ExportDamageState {
+    size: Size<i32, Physical>,
+    scale: Scale<f64>,
+    transform: Transform,
+    tracker: OutputDamageTracker,
+    /// Next `damage_output` age: 0 after reset, then 1.
+    first: bool,
+}
+
 impl PoolState {
     fn new() -> Self {
         Self {
@@ -180,17 +243,18 @@ impl PoolState {
         let mut allocator =
             DmabufAllocator(GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING));
 
-        // Prefer driver-native / tiled modifiers. Never allocate with LINEAR alone.
-        let mut mods: Vec<Modifier> = Vec::new();
-        mods.push(Modifier::Invalid);
+        // Stream export feeds remote encode (VAAPI/NVENC), not local scanout.
+        // Prefer LINEAR first: Intel CCS/tiled BOs as GLES render targets + DRM_PRIME
+        // imports have aborted the DRM session (blank screen after wallpaper).
+        let mut mods: Vec<Modifier> = vec![Modifier::Linear, Modifier::Invalid];
         for m in preferred_modifiers {
-            if *m != Modifier::Invalid && !mods.contains(m) {
+            let label = format!("{m:?}");
+            if label.to_ascii_lowercase().contains("ccs") {
+                continue;
+            }
+            if *m != Modifier::Linear && *m != Modifier::Invalid && !mods.contains(m) {
                 mods.push(*m);
             }
-        }
-        // LINEAR last-resort only (CPU readback / exotic paths) — not preferred.
-        if !mods.contains(&Modifier::Linear) {
-            mods.push(Modifier::Linear);
         }
 
         for _ in 0..POOL_SIZE {
@@ -214,7 +278,7 @@ impl PoolState {
             fourcc = ?self.fourcc,
             modifier = ?AllocBuffer::format(&self.slots[0].dmabuf).modifier,
             pool = POOL_SIZE,
-            "stream export: GBM dmabuf pool ready (tiled-preferring)"
+            "stream export: GBM dmabuf pool ready (linear-first for encode)"
         );
         Ok(())
     }
@@ -245,6 +309,7 @@ pub struct StreamExportHub {
     latest: Mutex<Option<ExportedFrame>>,
     wake_tx: Mutex<Option<SyncSender<()>>>,
     pool: Arc<Mutex<PoolState>>,
+    damage: Mutex<Option<ExportDamageState>>,
     debug_join: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
@@ -262,12 +327,19 @@ impl StreamExportHub {
             latest: Mutex::new(None),
             wake_tx: Mutex::new(None),
             pool: Arc::new(Mutex::new(PoolState::new())),
+            damage: Mutex::new(None),
             debug_join: Mutex::new(None),
         }
     }
 
     pub fn is_armed(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+
+    fn reset_damage_tracker(&self) {
+        if let Ok(mut slot) = self.damage.lock() {
+            *slot = None;
+        }
     }
 
     /// Arm export and return a wake receiver. Read frames via [`Self::take_latest`].
@@ -279,6 +351,7 @@ impl StreamExportHub {
         if let Ok(mut latest) = self.latest.lock() {
             *latest = None;
         }
+        self.reset_damage_tracker();
         self.enabled.store(true, Ordering::SeqCst);
         tracing::info!("stream export: armed (latest-wins + slot RAII, wake cap {WAKE_CAP})");
         rx
@@ -292,6 +365,7 @@ impl StreamExportHub {
         if let Ok(mut latest) = self.latest.lock() {
             *latest = None;
         }
+        self.reset_damage_tracker();
         tracing::info!("stream export: disarmed");
     }
 
@@ -402,7 +476,7 @@ fn dup_planes(dmabuf: &Dmabuf) -> Result<PlaneExport, String> {
 
 fn preferred_modifiers_for_export(state: &MetisState) -> Vec<Modifier> {
     let Some(udev) = state.udev.as_ref() else {
-        return vec![Modifier::Invalid];
+        return vec![Modifier::Linear, Modifier::Invalid];
     };
     let preferred_codes = [
         Fourcc::Xrgb8888,
@@ -410,14 +484,19 @@ fn preferred_modifiers_for_export(state: &MetisState) -> Vec<Modifier> {
         Fourcc::Xbgr8888,
         Fourcc::Abgr8888,
     ];
-    let mut mods = Vec::new();
+    // Linear first — encode path + GLES compose must not pick CCS by default.
+    let mut mods = vec![Modifier::Linear, Modifier::Invalid];
     for fmt in udev.capture_dmabuf_formats.iter() {
-        if preferred_codes.contains(&fmt.code) && !mods.contains(&fmt.modifier) {
+        if !preferred_codes.contains(&fmt.code) {
+            continue;
+        }
+        let label = format!("{:?}", fmt.modifier);
+        if label.to_ascii_lowercase().contains("ccs") {
+            continue;
+        }
+        if !mods.contains(&fmt.modifier) {
             mods.push(fmt.modifier);
         }
-    }
-    if mods.is_empty() {
-        mods.push(Modifier::Invalid);
     }
     mods
 }
@@ -427,6 +506,8 @@ fn preferred_modifiers_for_export(state: &MetisState) -> Vec<Modifier> {
 /// Call only after a successful local DRM `render_frame` for this output.
 /// No-ops when disarmed, on non-primary outputs, or when GBM is unavailable.
 /// Never blocks on GPU sync — fence / [`SyncPoint`] travel with the frame.
+///
+/// Skips publish when the persistent damage tracker reports no scene change.
 pub fn maybe_export_frame(
     state: &mut MetisState,
     renderer: &mut GlesRenderer,
@@ -473,6 +554,7 @@ pub fn maybe_export_frame(
 
     let size_phys: Size<i32, Physical> = mode.size;
     let output_scale = Scale::from(output.current_scale().fractional_scale());
+    let transform = Transform::Normal;
     let render_origin: Point<i32, Physical> = state
         .space
         .output_geometry(output)
@@ -497,11 +579,63 @@ pub fn maybe_export_frame(
         elements = cursor;
     }
 
+    // Scene damage (persistent tracker) — skip before pool acquire when idle.
+    let (damage_full, damage) = {
+        let Ok(mut slot) = state.stream_export.damage.lock() else {
+            return;
+        };
+        let need_new = match slot.as_ref() {
+            None => true,
+            Some(s) => s.size != size_phys || s.scale != output_scale || s.transform != transform,
+        };
+        if need_new {
+            *slot = Some(ExportDamageState {
+                size: size_phys,
+                scale: output_scale,
+                transform,
+                tracker: OutputDamageTracker::new(size_phys, output_scale, transform),
+                first: true,
+            });
+        }
+        let Some(dmg) = slot.as_mut() else {
+            return;
+        };
+        let age = if dmg.first { 0 } else { 1 };
+        let classified = match dmg.tracker.damage_output(age, &elements) {
+            Ok((None, _)) => {
+                dmg.first = false;
+                None
+            }
+            Ok((Some(rects), _)) if rects.is_empty() => {
+                dmg.first = false;
+                None
+            }
+            Ok((Some(rects), _)) => {
+                dmg.first = false;
+                Some(classify_export_damage(
+                    rects_from_smithay(rects),
+                    size_phys.w,
+                    size_phys.h,
+                ))
+            }
+            Err(err) => {
+                tracing::warn!(?err, "stream export: damage_output failed — full frame");
+                dmg.first = false;
+                Some((true, Vec::new()))
+            }
+        };
+        match classified {
+            None => return,
+            Some(v) => v,
+        }
+    };
+
     let Some((mut dmabuf, slot_guard)) = PoolState::acquire(&state.stream_export.pool) else {
         tracing::debug!("stream export: pool exhausted — skip frame");
         return;
     };
 
+    // Full-frame compose into the pool BO (age 0 / throwaway tracker).
     let sync = {
         let mut framebuffer = match renderer.bind(&mut dmabuf) {
             Ok(fb) => fb,
@@ -510,9 +644,9 @@ pub fn maybe_export_frame(
                 return;
             }
         };
-        let mut damage_tracker =
+        let mut compose_tracker =
             OutputDamageTracker::new(size_phys, output_scale, Transform::Normal);
-        match damage_tracker.render_output(renderer, &mut framebuffer, 0, &elements, CLEAR_COLOR) {
+        match compose_tracker.render_output(renderer, &mut framebuffer, 0, &elements, CLEAR_COLOR) {
             Ok(r) => r.sync,
             Err(err) => {
                 tracing::warn!(?err, "stream export: render_output failed");
@@ -544,7 +678,8 @@ pub fn maybe_export_frame(
         fds,
         offsets,
         strides,
-        damage_full: true,
+        damage_full,
+        damage,
         fence,
         sync,
         _slot_guard: Some(slot_guard),
@@ -580,10 +715,67 @@ mod tests {
             offsets: Vec::new(),
             strides: vec![400],
             damage_full: true,
+            damage: Vec::new(),
             fence: None,
             sync: SyncPoint::signaled(),
             _slot_guard: None,
         }
+    }
+
+    #[test]
+    fn classify_empty_is_not_full() {
+        let (full, rects) = classify_export_damage(Vec::new(), 100, 100);
+        assert!(!full);
+        assert!(rects.is_empty());
+    }
+
+    #[test]
+    fn classify_sparse_below_threshold() {
+        // 10x10 = 100 of 10000 → 1%
+        let (full, rects) = classify_export_damage(
+            vec![DamageRect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            }],
+            100,
+            100,
+        );
+        assert!(!full);
+        assert_eq!(rects.len(), 1);
+    }
+
+    #[test]
+    fn classify_high_coverage_is_full() {
+        // 60x60 = 3600 of 10000 → 36%
+        let (full, rects) = classify_export_damage(
+            vec![DamageRect {
+                x: 0,
+                y: 0,
+                w: 60,
+                h: 60,
+            }],
+            100,
+            100,
+        );
+        assert!(full);
+        assert!(rects.is_empty());
+    }
+
+    #[test]
+    fn classify_too_many_rects_is_full() {
+        let rects: Vec<_> = (0..DAMAGE_RECT_CAP + 1)
+            .map(|i| DamageRect {
+                x: i as i32,
+                y: 0,
+                w: 1,
+                h: 1,
+            })
+            .collect();
+        let (full, out) = classify_export_damage(rects, 1920, 1080);
+        assert!(full);
+        assert!(out.is_empty());
     }
 
     #[test]

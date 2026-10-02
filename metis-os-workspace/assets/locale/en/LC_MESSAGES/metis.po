@@ -3079,6 +3079,10 @@ msgstr "Free desktop"
 msgid "Desktop %1"
 msgstr "~/Desktop"
 
+#: /home/drose/Projects/Metis/metis-os-workspace/metis-shell/src/ui/bar/widgets/workspaces.rs
+msgid "Remote session"
+msgstr "Remote session"
+
 #: /home/drose/Projects/Metis/metis-os-workspace/metis-shell/src/ui/dashboard/mod.rs:355
 msgid "Metis Control Center"
 msgstr "Metis Control Center"
