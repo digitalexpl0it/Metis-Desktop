@@ -9,6 +9,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Hybrid MultiRenderer Wave A** — secondary GPUs try Smithay
+  `GpuManager::renderer` when blur/HDR/LUT are idle; full-frame GBM dmabuf
+  transfer (ExportMem fallback) remains for the GLES-only stack, with path
+  metrics.
 - **Metis native RDP host (`metis-rdp-host`)** — portal ScreenCast → PipeWire →
   FreeRDP shadow server; `metis-remote native enable` / Settings **Metis native
   RDP**. GRD remains the default classic RDP backend.

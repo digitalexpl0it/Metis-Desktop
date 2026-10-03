@@ -19,6 +19,7 @@ mod grabs;
 mod handlers;
 mod hdr_encode;
 mod hdr_surface;
+mod hybrid_multi;
 mod idle;
 mod image_capture;
 mod input;

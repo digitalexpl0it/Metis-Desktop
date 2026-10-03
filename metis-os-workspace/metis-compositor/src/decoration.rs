@@ -21,7 +21,7 @@ use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderE
 use smithay::backend::renderer::element::{Id, Kind, render_elements};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::backend::renderer::{Color32F, ImportMem};
+use smithay::backend::renderer::{Color32F, ImportAll, ImportMem};
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 // Muted, desaturated control colors tuned to the dark slate theme rather than the
@@ -141,10 +141,13 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 render_elements! {
-    pub DecorationElement<=GlesRenderer>;
+    pub DecorationElement<R> where R: ImportAll + ImportMem;
     Solid=SolidColorRenderElement,
-    Text=TextureRenderElement<GlesTexture>,
+    Text=TextureRenderElement<R::TextureId>,
 }
+
+/// Concrete SSD elements for the GLES `OutputStack` path.
+pub type GlesDecorationElement = DecorationElement<GlesRenderer>;
 
 /// One window's decoration geometry + identity, gathered before drawing.
 #[derive(Clone)]
@@ -176,9 +179,9 @@ pub struct DecoElements {
     /// window's chrome directly beneath that window's own surface (and above the
     /// windows stacked below it), so an overlapping window can never hide a
     /// lower window's titlebar.
-    pub below: HashMap<u32, Vec<DecorationElement>>,
+    pub below: HashMap<u32, Vec<GlesDecorationElement>>,
     /// Auto-hide reveal chrome (drawn above all clients as a translucent strip).
-    pub overlay: Vec<DecorationElement>,
+    pub overlay: Vec<GlesDecorationElement>,
 }
 
 /// Hit-test regions for a window's controls, in monitor-logical coordinates.
@@ -405,7 +408,7 @@ impl DecorationRuntime {
         renderer: &mut GlesRenderer,
         w: &WindowDeco,
         output_scale: Scale<f64>,
-    ) -> Vec<DecorationElement> {
+    ) -> Vec<GlesDecorationElement> {
         self.build_scale = output_scale;
         let frame = w.frame;
         if frame.width <= 2 || frame.height <= APP_TILE_HEADER_PX {
@@ -592,7 +595,7 @@ impl DecorationRuntime {
     ) -> DecoElements {
         self.begin_frame(windows);
 
-        let mut below: HashMap<u32, Vec<DecorationElement>> = HashMap::new();
+        let mut below: HashMap<u32, Vec<GlesDecorationElement>> = HashMap::new();
         let mut overlay = Vec::new();
         for w in windows {
             let elems = self.window_elements(renderer, w, output_scale);
@@ -612,7 +615,7 @@ impl DecorationRuntime {
         rect: PixelRect,
         color: [f32; 4],
         commit: CommitCounter,
-    ) -> DecorationElement {
+    ) -> GlesDecorationElement {
         let id = self
             .ids
             .entry((window_id, role))
@@ -637,7 +640,7 @@ impl DecorationRuntime {
         kind: DecoControl,
         x: i32,
         cy: i32,
-    ) -> Option<DecorationElement> {
+    ) -> Option<GlesDecorationElement> {
         let needs_render = self
             .buttons
             .get(&(w.id, role))
@@ -696,7 +699,7 @@ impl DecorationRuntime {
         bar_x: i32,
         bar_y: i32,
         overlay: bool,
-    ) -> Option<DecorationElement> {
+    ) -> Option<GlesDecorationElement> {
         if width <= 0 || header <= 0 {
             return None;
         }
@@ -780,7 +783,7 @@ impl DecorationRuntime {
         b: i32,
         header: i32,
         stops: &[[f32; 3]],
-    ) -> Vec<DecorationElement> {
+    ) -> Vec<GlesDecorationElement> {
         let frame = w.frame;
         let height = frame.height - header;
         if b <= 0 || height <= 0 {
@@ -874,7 +877,7 @@ impl DecorationRuntime {
         max_w: i32,
         header: i32,
         bar_y: i32,
-    ) -> Option<DecorationElement> {
+    ) -> Option<GlesDecorationElement> {
         let font = self.font.as_ref()?;
         let color = if w.focused {
             self.palette.text_active
@@ -998,7 +1001,7 @@ impl DecorationRuntime {
         &mut self,
         renderer: &mut GlesRenderer,
         w: &WindowDeco,
-    ) -> Vec<DecorationElement> {
+    ) -> Vec<GlesDecorationElement> {
         let m = SHADOW_MARGIN;
         let r = CORNER_RADIUS_PX;
         let f = w.frame;

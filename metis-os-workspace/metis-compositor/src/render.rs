@@ -35,13 +35,13 @@ smithay::backend::renderer::element::render_elements! {
     pub OutputStack<=GlesRenderer>;
     Wallpaper=TextureRenderElement<GlesTexture>,
     Surface=WaylandSurfaceRenderElement<GlesRenderer>,
-    Deco=crate::decoration::DecorationElement,
+    Deco=crate::decoration::GlesDecorationElement,
     Blur=crate::blur::BlurElement,
     Overlay=SolidColorRenderElement,
     // Scroll-managed windows + their chrome, clipped to their own output so a
     // half-scrolled column never bleeds onto the adjacent display.
     CropSurface=CropRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
-    CropDeco=CropRenderElement<crate::decoration::DecorationElement>,
+    CropDeco=CropRenderElement<crate::decoration::GlesDecorationElement>,
     // Software/hardware pointer for the DRM backend (named-theme cursor). The
     // winit backend uses the host cursor and never emits this.
     CursorMemory=smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<GlesRenderer>,

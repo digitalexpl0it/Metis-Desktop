@@ -47,13 +47,15 @@ Security items from the **2026-09-27 code review** sit above product stretch.
 
 ### Product (promoted 2026-09-20)
 
-- [ ] **1. GLES `MultiRenderer` / zero-copy cross-GPU path** — hybrid transfer
-      now prefers **GBM dmabuf** primary→secondary (no CPU `to_vec`); ExportMem
-      remains fallback. **Residual:** Anvil-style generic `OutputStack` /
-      `DecorationElement` for true Smithay `MultiRenderer` (blur/HDR/deco typed
-      for MultiTexture). ScreenCast dmabuf already done.
+- [ ] **1. GLES `MultiRenderer` / zero-copy cross-GPU path** — **Wave A
+      (2026-10-03):** hybrid outputs try `GpuManager::renderer` MultiRenderer
+      (`hybrid_multi` / `HybridOutputStack`) when blur/HDR/LUT idle; else GBM
+      dmabuf transfer (`cross_gpu`, ExportMem fallback) with path metrics.
+      Generic `DecorationElement<R>` landed; textured SSD on MultiRenderer is
+      solid placeholders for now. **Residual:** blur/HDR/`TextureShaderElement`
+      + textured SSD on MultiTexture; shrink full-frame transfer.
       → Wave 3a residual, Phase 3 multi-GPU notes, Phase 18 §E.
-      *(dmabuf transfer landed 2026-09-27)*
+      *(dmabuf transfer 2026-09-27; MultiRenderer hybrid subset 2026-10-03)*
 - [ ] **2. True per-surface HDR decode** — mixed SDR+HDR now decodes PQ/HLG
       windows to sRGB (Reinhard @ 203 nits) before the encode pass; HDR-only /
       fullscreen still pass-through. **Residual:** float scene-linear composite
@@ -169,8 +171,9 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 ### Wave 3 — Graphics
 - [x] **3a** Primary→secondary transfer for hybrid outputs (CPU readback path;
       local+no-blur fallback). **2026-09-27:** prefer GBM dmabuf bind/import
-      (CPU ExportMem fallback). **Urgent residual:** full GLES `MultiRenderer`
-      element typing — see **Urgent priorities**.
+      (CPU ExportMem fallback). **2026-10-03 Wave A:** MultiRenderer hybrid
+      subset + metrics; blur/HDR/textured SSD still transfer — see **Urgent
+      priorities**.
 - [ ] **3b** Default-on `wp_color_management_v1` — **blocked** on upstream
       wayland-rs server/sys ObjectData UAF; keep `METIS_COLOR_MGMT=1` opt-in
       ([docs/upstream/](../docs/upstream/README.md))
@@ -1891,9 +1894,9 @@ re-doing ScreenCast dmabuf (already shipped).
 - [ ] **Default-on `wp_color_management_v1`** — only after upstream wayland-rs
       **server/sys** ObjectData UAF fix (keep `METIS_COLOR_MGMT=1` opt-in). No
       local ObjectData lifecycle wrapper in Metis (**blocked**, not urgent)
-- [ ] **Urgent: GLES `MultiRenderer` element typing** — Phase 3 residual after
-      dmabuf transfer (2026-09-27). Generic `OutputStack` / deco / blur for
-      Smithay `MultiRenderer` (Anvil-style). See **Urgent priorities**.
+- [ ] **Urgent: GLES `MultiRenderer` element typing** — Wave A (2026-10-03)
+      hybrid MultiRenderer subset + generic `DecorationElement<R>`; residual
+      blur/HDR/textured SSD on MultiTexture. See **Urgent priorities**.
 
 ### F. Explicitly deferred / rejected from review
 

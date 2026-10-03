@@ -79,13 +79,16 @@ remains deferred.
 **Recommendation:** validate OBS / gnome-remote-desktop under a live DRM
 session; watch portal logs for `dmabuf` vs MemFd negotiation.
 
-### P1 — Hybrid cross-GPU transfer (CPU readback) — **improved 2026-09-27**
+### P1 — Hybrid cross-GPU transfer / MultiRenderer — **Wave A 2026-10-03**
 
-**Status:** `cross_gpu::try_transfer_frame` composites on the primary GPU with
-blur, then prefers **GBM dmabuf** bind + secondary `import_dmabuf` (no
-`copy_framebuffer` → `to_vec`). ExportMem/ImportMem remains the fallback when
-dmabuf allocate/import fails. Full Smithay `MultiRenderer` + generic
-`OutputStack` (Anvil-style) is still the end state for zero-copy element paths.
+**Status:** Hybrid CRTCs first try `hybrid_multi::try_multirenderer_frame`
+(`GpuManager::renderer` + `HybridOutputStack`) when bar blur / HDR encode /
+Stage-2 LUT are idle. Otherwise `cross_gpu::try_transfer_frame` composites on
+the primary GPU (blur allowed) and prefers **GBM dmabuf** bind + secondary
+`import_dmabuf`; ExportMem/ImportMem remains the allocate/import fallback.
+`CrossGpuStats` counts dmabuf / ExportMem / MultiRenderer ok|fail. Residual:
+blur + HDR `TextureShaderElement` + textured SSD on MultiTexture so full-frame
+transfer can shrink.
 
 ### P1 — Fullscreen direct scanout (hybrid PRIME)
 

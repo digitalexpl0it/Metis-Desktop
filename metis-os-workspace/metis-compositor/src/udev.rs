@@ -4,9 +4,10 @@
 //! [`GpuManager`] and one [`BackendData`] per DRM device, so every seat GPU owns
 //! its scanner, output manager, render node, notifier, and CRTC surfaces. Metis's
 //! GLES-only custom elements are rendered by the output GPU's GLES renderer.
-//! Cross-GPU outputs prefer a primary→secondary transfer (see [`crate::cross_gpu`])
-//! so blur and the full stack composite on the primary GPU; on transfer failure
-//! we fall back to the local renderer with blur disabled.
+//! Cross-GPU outputs prefer Wave A [`crate::hybrid_multi`] (`GpuManager::renderer`)
+//! when blur/HDR/LUT are idle; otherwise primary→secondary transfer
+//! ([`crate::cross_gpu`]) so the full GLES stack (blur/HDR) composites on the
+//! primary GPU. On both failures we fall back to the local renderer with blur off.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -108,7 +109,7 @@ type MetisDrmOutputManager = DrmOutputManager<
     FrameFeedback,
     DrmDeviceFd,
 >;
-type MetisGpuManager = GpuManager<GbmGlesBackend<GlesRenderer, DrmDeviceFd>>;
+pub(crate) type MetisGpuManager = GpuManager<GbmGlesBackend<GlesRenderer, DrmDeviceFd>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UdevOutputId {
@@ -1478,18 +1479,57 @@ impl MetisState {
             if let Some(s) = self.udev.as_mut().and_then(|u| u.surface_mut(id)) {
                 s.pending = false;
             }
-            match crate::cross_gpu::try_transfer_frame(
+            // Wave A: MultiRenderer when blur/HDR/LUT idle; else full-frame transfer.
+            let multi = crate::hybrid_multi::try_multirenderer_frame(
                 self,
                 &mut gpus,
                 primary_gpu,
                 render_node,
                 id,
                 &output,
-            ) {
+            );
+            let transfer = match multi {
                 Ok(Some(xfer)) => {
+                    let damaged = !xfer.empty;
                     frame_states = Some(xfer.states);
-                    Ok(!xfer.empty)
+                    Ok(Some(damaged))
                 }
+                Ok(None) => Ok(None),
+                Err(multi_err) => {
+                    if multi_err.contains("skipped") {
+                        tracing::trace!(
+                            %multi_err,
+                            output = %output.name(),
+                            "hybrid MultiRenderer skipped; using full-frame transfer"
+                        );
+                    } else {
+                        tracing::debug!(
+                            %multi_err,
+                            ?primary_gpu,
+                            ?render_node,
+                            output = %output.name(),
+                            "hybrid MultiRenderer failed; trying full-frame transfer"
+                        );
+                    }
+                    match crate::cross_gpu::try_transfer_frame(
+                        self,
+                        &mut gpus,
+                        primary_gpu,
+                        render_node,
+                        id,
+                        &output,
+                    ) {
+                        Ok(Some(xfer)) => {
+                            frame_states = Some(xfer.states);
+                            Ok(Some(!xfer.empty))
+                        }
+                        Ok(None) => Ok(None),
+                        Err(err) => Err(err),
+                    }
+                }
+            };
+            match transfer {
+                Ok(Some(damaged)) => Ok(damaged),
                 Ok(None) => {
                     // Same GPU — should not happen when cross_gpu is true.
                     render_local_output_frame(
@@ -1509,7 +1549,7 @@ impl MetisState {
                         ?primary_gpu,
                         ?render_node,
                         output = %output.name(),
-                        "cross-GPU transfer failed; falling back to local renderer (blur off)"
+                        "cross-GPU MultiRenderer+transfer failed; falling back to local renderer (blur off)"
                     );
                     render_local_output_frame(
                         self,

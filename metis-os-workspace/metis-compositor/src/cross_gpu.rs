@@ -13,8 +13,11 @@
 //! When transfer fails entirely, callers fall back to the local `single_renderer`
 //! path with blur disabled — same behaviour as before Wave 3a.
 //!
-//! Full [`MultiRenderer`] element typing (Anvil-style generic `OutputStack`) remains
-//! the end state; this dmabuf path removes the CPU memcpy while that lands.
+//! Wave A adds a true [`MultiRenderer`] path for the Anvil-easy stack (see
+//! [`crate::hybrid_multi`]); this full-frame transfer remains the fallback when
+//! blur / HDR / colour post-pass need GLES-only elements.
+
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use smithay::{
     backend::{
@@ -42,6 +45,54 @@ use smithay::{
 use crate::render::{CLEAR_COLOR, OutputStack};
 use crate::state::MetisState;
 use crate::udev::UdevOutputId;
+
+static DMABUF_OK: AtomicU64 = AtomicU64::new(0);
+static EXPORT_MEM_FALLBACK: AtomicU64 = AtomicU64::new(0);
+static TRANSFER_FAIL: AtomicU64 = AtomicU64::new(0);
+static MULTI_OK: AtomicU64 = AtomicU64::new(0);
+static MULTI_FAIL: AtomicU64 = AtomicU64::new(0);
+
+/// Snapshot of hybrid present path counters (Wave A metrics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CrossGpuStats {
+    pub dmabuf_ok: u64,
+    pub export_mem_fallback: u64,
+    pub transfer_fail: u64,
+    pub multi_ok: u64,
+    pub multi_fail: u64,
+}
+
+impl CrossGpuStats {
+    pub fn snapshot() -> Self {
+        Self {
+            dmabuf_ok: DMABUF_OK.load(Ordering::Relaxed),
+            export_mem_fallback: EXPORT_MEM_FALLBACK.load(Ordering::Relaxed),
+            transfer_fail: TRANSFER_FAIL.load(Ordering::Relaxed),
+            multi_ok: MULTI_OK.load(Ordering::Relaxed),
+            multi_fail: MULTI_FAIL.load(Ordering::Relaxed),
+        }
+    }
+}
+
+pub(crate) fn record_dmabuf_ok() {
+    DMABUF_OK.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_export_mem_fallback() {
+    EXPORT_MEM_FALLBACK.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_transfer_fail() {
+    TRANSFER_FAIL.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_multi_ok() {
+    MULTI_OK.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_multi_fail() {
+    MULTI_FAIL.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Result of a successful primary→secondary transfer scan-out.
 pub struct TransferFrameResult {
@@ -160,12 +211,16 @@ pub fn try_transfer_frame(
                 Err(err) => {
                     tracing::debug!(%err, "cross-GPU dmabuf path failed; trying CPU readback");
                     let cpu =
-                        render_to_cpu(renderer, size_buf, size, scale, &frame_elements, clear)?;
+                        render_to_cpu(renderer, size_buf, size, scale, &frame_elements, clear)
+                            .inspect_err(|_| record_transfer_fail())?;
+                    record_export_mem_fallback();
                     (TransferPixels::Cpu(cpu), false)
                 }
             }
         } else {
-            let cpu = render_to_cpu(renderer, size_buf, size, scale, &frame_elements, clear)?;
+            let cpu = render_to_cpu(renderer, size_buf, size, scale, &frame_elements, clear)
+                .inspect_err(|_| record_transfer_fail())?;
+            record_export_mem_fallback();
             (TransferPixels::Cpu(cpu), false)
         }
     };
@@ -177,12 +232,16 @@ pub fn try_transfer_frame(
     let renderer = target_guard.as_mut();
 
     let texture = match pixels {
-        TransferPixels::Dmabuf(dmabuf) => renderer
-            .import_dmabuf(&dmabuf, None)
-            .map_err(|e| format!("cross-GPU import_dmabuf: {e:?}"))?,
+        TransferPixels::Dmabuf(dmabuf) => renderer.import_dmabuf(&dmabuf, None).map_err(|e| {
+            record_transfer_fail();
+            format!("cross-GPU import_dmabuf: {e:?}")
+        })?,
         TransferPixels::Cpu(bytes) => renderer
             .import_memory(&bytes, Fourcc::Abgr8888, size_buf, false)
-            .map_err(|e| format!("cross-GPU import_memory: {e:?}"))?,
+            .map_err(|e| {
+                record_transfer_fail();
+                format!("cross-GPU import_memory: {e:?}")
+            })?,
     };
     let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
     let element = TextureRenderElement::from_texture_buffer(
@@ -208,11 +267,15 @@ pub fn try_transfer_frame(
         smithay::backend::drm::compositor::FrameFlags::DEFAULT,
     ) {
         Ok(res) => {
-            tracing::trace!(
+            if used_dmabuf {
+                record_dmabuf_ok();
+            }
+            tracing::debug!(
                 output = %output.name(),
                 ?primary_gpu,
                 ?target_node,
                 used_dmabuf,
+                stats = ?CrossGpuStats::snapshot(),
                 "cross-GPU primary→secondary transfer presented"
             );
             Ok(Some(TransferFrameResult {
@@ -220,7 +283,10 @@ pub fn try_transfer_frame(
                 states: res.states,
             }))
         }
-        Err(err) => Err(format!("cross-GPU render_frame: {err:?}")),
+        Err(err) => {
+            record_transfer_fail();
+            Err(format!("cross-GPU render_frame: {err:?}"))
+        }
     }
 }
 
@@ -285,4 +351,21 @@ fn render_to_cpu(
         .map_texture(&mapping)
         .map_err(|e| format!("cross-GPU map_texture: {e:?}"))?
         .to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cross_gpu_stats_snapshot_reads_atomics() {
+        let before = CrossGpuStats::snapshot();
+        record_dmabuf_ok();
+        record_export_mem_fallback();
+        record_multi_ok();
+        let after = CrossGpuStats::snapshot();
+        assert!(after.dmabuf_ok > before.dmabuf_ok);
+        assert!(after.export_mem_fallback > before.export_mem_fallback);
+        assert!(after.multi_ok > before.multi_ok);
+    }
 }
