@@ -10,7 +10,8 @@ use metis_config::{
 };
 use metis_protocol::{
     DatagramHeader, RUDP_DATAGRAM_HEADER_LEN, RUDP_PROTOCOL_VERSION, ReliableAccessUnit,
-    RudpControlMsg, encode_rudp_frame, try_decode_rudp_frame, try_reassemble_media,
+    RudpControlMsg, encode_rudp_frame, is_audio_datagram, try_decode_audio_datagram,
+    try_decode_rudp_frame, try_reassemble_media,
 };
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -54,6 +55,16 @@ pub enum SessionEvent {
         width: u32,
         height: u32,
         codec: String,
+    },
+    AudioReady {
+        sample_rate: u32,
+        channels: u8,
+        codec: String,
+    },
+    AudioPacket {
+        seq: u32,
+        pts_us: i64,
+        data: Vec<u8>,
     },
     PointerLock {
         locked: bool,
@@ -247,6 +258,19 @@ async fn session_pump(
                                         codec,
                                     }).await;
                                 }
+                                RudpControlMsg::AudioReady {
+                                    sample_rate,
+                                    channels,
+                                    codec,
+                                } => {
+                                    let _ = event_tx
+                                        .send(SessionEvent::AudioReady {
+                                            sample_rate,
+                                            channels,
+                                            codec,
+                                        })
+                                        .await;
+                                }
                                 RudpControlMsg::PointerLock { locked } => {
                                     let _ = event_tx.send(SessionEvent::PointerLock { locked }).await;
                                 }
@@ -268,7 +292,17 @@ async fn session_pump(
             dgram = conn.read_datagram() => {
                 match dgram {
                     Ok(bytes_buf) => {
-                        if let Ok((hdr, total)) = DatagramHeader::decode(&bytes_buf) {
+                        if is_audio_datagram(&bytes_buf) {
+                            if let Ok(pkt) = try_decode_audio_datagram(&bytes_buf) {
+                                let _ = event_tx
+                                    .send(SessionEvent::AudioPacket {
+                                        seq: pkt.seq,
+                                        pts_us: pkt.pts_us,
+                                        data: pkt.payload,
+                                    })
+                                    .await;
+                            }
+                        } else if let Ok((hdr, total)) = DatagramHeader::decode(&bytes_buf) {
                             let payload = bytes_buf[RUDP_DATAGRAM_HEADER_LEN..total].to_vec();
                             let entry = pending.entry(hdr.frame_seq).or_insert_with(|| FrameAssembly {
                                 pts_us: hdr.pts_us,

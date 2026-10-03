@@ -1145,7 +1145,7 @@ fn extract_item_name(line: &str) -> Option<String> {
         .strip_prefix("Package:")
         .or_else(|| line.strip_prefix("package:"))
     {
-        let id = rest.trim().split_whitespace().next().unwrap_or("").trim();
+        let id = rest.split_whitespace().next().unwrap_or("").trim();
         if !id.is_empty() {
             return Some(short_package_id(id));
         }

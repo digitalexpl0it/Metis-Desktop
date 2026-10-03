@@ -63,10 +63,11 @@ Security items from the **2026-09-27 code review** sit above product stretch.
 - [ ] **3. Metis-native remote host** — **Partial (2026-09-27 / 2026-09-30):**
       experimental FreeRDP shadow + Viewer host grid; **RUDP Phases 1–7** +
       **Settings → Metis Remote** (`rudp.json`, encode, PAM/TOFU, UDP firewall,
-      control-stream input, Viewer client). **Residual:** HW decode; audio;
-      AV1 encode; Wayland/portal capture for shadow; promote past
-      experimental (GRD remains on **Remote access**). Text clipboard
-      bidirectional on the RUDP control plane landed 2026-10-03.
+      control-stream input, Viewer client). **Residual:** AV1 encode;
+      Wayland/portal capture for shadow; promote past experimental
+      (GRD remains on **Remote access**). Text clipboard (2026-10-03),
+      host→client Opus audio (2026-10-03), and Viewer HW decode
+      VAAPI→NVDEC→soft (2026-10-03) landed.
       → Wave 4c, Phase 7 §B RUDP-Stream, Phase 15 §F,
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 - [x] **4. Per-Steam-appid Gamescope profile UI** — Settings → Gaming editor for
@@ -1038,11 +1039,15 @@ latency and clear setup docs.
       gated); host advertises `PointerLock`; `metis-rudp-smoke --input-smoke`.
       Relative Wayland emission when locked landed with Phase 8.
 - [x] **RUDP-Stream Phase 8 — first-party client** (2026-10-01) — `metis-decode`
-      (FFmpeg software H.264/HEVC → RGBA); `metis-rudp-client` lib; Metis Viewer
+      (FFmpeg H.264/HEVC → RGBA); `metis-rudp-client` lib; Metis Viewer
       Metis Remote mode (TOFU UI, video present, PointerLock input switching);
       Settings bind address + **Connect with Metis Viewer…**; host relative
-      inject when locked. Residual: HW decode; audio; promote past
-      experimental (GRD remains default under **Remote access**).
+      inject when locked. Residual: promote past experimental (GRD remains
+      default under **Remote access**).
+- [x] **RUDP Viewer HW decode** (2026-10-03) — `metis-decode` Auto ladder
+      VAAPI → NVDEC/cuvid → software; HW surfaces downloaded to CPU RGBA for
+      GTK `MemoryTexture` (no dmabuf/GL zero-copy yet); Viewer status shows
+      FFmpeg decoder name.
 - [x] **RUDP text clipboard** (2026-10-03) — `RudpControlMsg::ClipboardSet`
       (UTF-8, ≤48 KiB) on the Quinn control stream; host fans local
       `wl_data_device` captures to clients and installs Viewer sets via
@@ -1052,6 +1057,10 @@ latency and clear setup docs.
       as the session owner, calloop posts `UnlockPamSession` → `unlock_session()`
       when `lock.locked` (not `ext-session-lock`). Non-owner allowlist users stay
       locked with input gated.
+- [x] **RUDP audio v1** (2026-10-03) — host Pulse default-sink monitor → Opus
+      (48 kHz stereo, ~20 ms) over `MRUA` datagrams; `AudioReady` on control;
+      Viewer Opus decode + cpal playback. Demand-gated on authenticated
+      sessions; soft-fail to video-only. No mic uplink.
 - [x] **RUDP host crash containment** (2026-10-02) — enabling Metis Remote
       crashed the DRM session at login (Y-tiled export BO, `AVDictionary`
       double-free, then `av_hwframe_map` treating our DRM descriptor as an

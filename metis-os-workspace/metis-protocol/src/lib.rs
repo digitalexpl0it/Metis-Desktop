@@ -2,6 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 mod rate_limit;
+mod rudp_audio;
 mod rudp_ctrl;
 mod rudp_video;
 
@@ -11,6 +12,11 @@ pub use rate_limit::{
     IPC_REQUESTS_PER_SEC, RATE_WINDOW, RUNTIME_CMD_DISPATCH_PER_SEC, RUNTIME_CMD_WRITES_PER_SEC,
     SlidingWindow, try_admit_runtime_command_dispatch, try_admit_runtime_command_widgets_dispatch,
     try_admit_runtime_command_widgets_write, try_admit_runtime_command_write,
+};
+pub use rudp_audio::{
+    AUDIO_CODEC_OPUS, AudioDatagram, RUDP_AUDIO_CHANNELS, RUDP_AUDIO_DATAGRAM_VERSION,
+    RUDP_AUDIO_FRAME_MS, RUDP_AUDIO_FRAME_SAMPLES, RUDP_AUDIO_HEADER_LEN, RUDP_AUDIO_MAGIC,
+    RUDP_AUDIO_SAMPLE_RATE, encode_audio_datagram, is_audio_datagram, try_decode_audio_datagram,
 };
 pub use rudp_ctrl::{
     RUDP_CLIPBOARD_MAX_BYTES, RUDP_MAX_FRAME, RUDP_PROTOCOL_VERSION, RudpControlMsg,

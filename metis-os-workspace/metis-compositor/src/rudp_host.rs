@@ -36,9 +36,10 @@ use metis_encode::{
     EncoderBackend, EncoderConfig, HwEncoder, NullEncoder, RudpCodec, open_isolated_encoder,
 };
 use metis_protocol::{
-    RUDP_DEFAULT_DATAGRAM_BUDGET, RUDP_PROTOCOL_VERSION, ReliableAccessUnit, RudpControlMsg,
-    RudpDamageRect, RudpRejectReason, build_media_datagrams, codec_from_str, encode_rudp_frame,
-    truncate_clipboard_text, try_decode_rudp_frame,
+    RUDP_AUDIO_CHANNELS, RUDP_AUDIO_SAMPLE_RATE, RUDP_DEFAULT_DATAGRAM_BUDGET,
+    RUDP_PROTOCOL_VERSION, ReliableAccessUnit, RudpControlMsg, RudpDamageRect, RudpRejectReason,
+    build_media_datagrams, codec_from_str, encode_rudp_frame, truncate_clipboard_text,
+    try_decode_rudp_frame,
 };
 use quinn::Endpoint;
 use smithay::reexports::calloop;
@@ -46,6 +47,7 @@ use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::pam_auth::{pam_check, pam_service};
+use crate::rudp_audio::{self, RudpAudioShared};
 use crate::rudp_guard::{HostMarker, HostPhase, STABLE_AFTER};
 use crate::rudp_identity;
 use crate::stream_export::{ExportedFrame, StreamExportHub};
@@ -212,6 +214,7 @@ pub struct RudpHostSystem {
     hub: Arc<StreamExportHub>,
     quinn_join: Option<JoinHandle<()>>,
     frame_join: Option<JoinHandle<()>>,
+    audio_join: Option<JoinHandle<()>>,
     /// Frames submitted to the hardware encoder (for tests / metrics).
     pub frames_encoded: Arc<AtomicU64>,
     /// Bytes produced by encode drain (approx outbound payload size).
@@ -270,6 +273,7 @@ impl RudpHostSystem {
         let clipboard_out = Arc::new(Mutex::new(None));
         let clipboard_serial = Arc::new(AtomicU64::new(0));
         let active_sessions = Arc::new(AtomicUsize::new(0));
+        let audio = Arc::new(RudpAudioShared::new());
         let video = Arc::new(VideoShared {
             latest_packet: Arc::clone(&latest_packet),
             width: AtomicU32::new(0),
@@ -278,7 +282,13 @@ impl RudpHostSystem {
             active_sessions: Arc::clone(&active_sessions),
             session_joins: AtomicU64::new(0),
             clipboard_out: Arc::clone(&clipboard_out),
+            audio: Arc::clone(&audio),
         });
+        let audio_join = Some(rudp_audio::spawn_audio_supervisor(
+            Arc::clone(&stop),
+            Arc::clone(&active_sessions),
+            Arc::clone(&audio),
+        ));
         let quinn_stop = Arc::clone(&stop);
         let quinn_allowed = Arc::clone(&allowed_users_live);
         let quinn_video = Arc::clone(&video);
@@ -352,6 +362,7 @@ impl RudpHostSystem {
             hub,
             quinn_join: Some(quinn_join),
             frame_join: Some(frame_join),
+            audio_join,
             frames_encoded,
             bytes_encoded,
             latest_packet,
@@ -407,6 +418,9 @@ impl RudpHostSystem {
         if let Some(handle) = self.frame_join.take() {
             let _ = handle.join();
         }
+        if let Some(handle) = self.audio_join.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -453,6 +467,7 @@ struct VideoShared {
     /// Monotonic join counter — a change makes the frame thread emit an IDR.
     session_joins: AtomicU64,
     clipboard_out: Arc<Mutex<Option<RudpClipboardOut>>>,
+    audio: Arc<RudpAudioShared>,
 }
 
 /// Counts one authenticated session for as long as it lives (incl. task cancel).
@@ -521,6 +536,7 @@ struct VideoSession {
     control_send: tokio::sync::Mutex<quinn::SendStream>,
     video_send: tokio::sync::Mutex<quinn::SendStream>,
     video_ready_sent: AtomicBool,
+    audio_ready_sent: AtomicBool,
     warned_no_dgram: AtomicBool,
 }
 
@@ -590,6 +606,7 @@ async fn connection_broker_loop(
                                 control_send: tokio::sync::Mutex::new(control_send),
                                 video_send: tokio::sync::Mutex::new(video_send),
                                 video_ready_sent: AtomicBool::new(false),
+                                audio_ready_sent: AtomicBool::new(false),
                                 warned_no_dgram: AtomicBool::new(false),
                             });
                             {
@@ -644,6 +661,7 @@ async fn video_pump_loop(
 ) {
     tracing::info!("rudp host: video pump started");
     let mut last_seq: Option<u64> = None;
+    let mut last_audio_seq: Option<u32> = None;
     let mut last_ready = (0u32, 0u32, CODEC_H264);
     let mut last_pointer_lock: Option<bool> = None;
     let mut last_clipboard_serial: Option<u64> = None;
@@ -710,6 +728,60 @@ async fn video_pump_loop(
                 }
             }
             last_ready = (w, h, codec_raw);
+        }
+
+        // System audio (host → client Opus datagrams).
+        let audio_streaming = video.audio.streaming.load(Ordering::Relaxed);
+        if audio_streaming {
+            let snap: Vec<Arc<VideoSession>> = {
+                let guard = sessions.read().await;
+                guard.values().cloned().collect()
+            };
+            let msg = RudpControlMsg::AudioReady {
+                sample_rate: RUDP_AUDIO_SAMPLE_RATE,
+                channels: RUDP_AUDIO_CHANNELS,
+                codec: "opus".into(),
+            };
+            for session in &snap {
+                if session.audio_ready_sent.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let mut send = session.control_send.lock().await;
+                if write_control_msg(&mut send, &msg).await.is_ok() {
+                    session.audio_ready_sent.store(true, Ordering::Relaxed);
+                }
+            }
+            if let Ok(guard) = video.audio.latest.lock()
+                && let Some(pkt) = guard.clone()
+                && last_audio_seq != Some(pkt.seq)
+            {
+                last_audio_seq = Some(pkt.seq);
+                for session in &snap {
+                    if session.conn.datagram_send_buffer_space() == 0 {
+                        continue;
+                    }
+                    match session
+                        .conn
+                        .send_datagram(Bytes::from(pkt.datagram.clone()))
+                    {
+                        Ok(()) => {}
+                        Err(quinn::SendDatagramError::UnsupportedByPeer) => {
+                            if !session.warned_no_dgram.swap(true, Ordering::Relaxed) {
+                                tracing::warn!(
+                                    "rudp host: peer does not support datagrams — audio dropped"
+                                );
+                            }
+                        }
+                        Err(quinn::SendDatagramError::Disabled) => {}
+                        Err(quinn::SendDatagramError::TooLarge) => {
+                            tracing::debug!("rudp host: audio datagram too large");
+                        }
+                        Err(err) => {
+                            tracing::debug!(%err, "rudp host: audio send_datagram failed");
+                        }
+                    }
+                }
+            }
         }
 
         let packet = {
@@ -1532,6 +1604,7 @@ mod tests {
             active_sessions: Arc::new(AtomicUsize::new(0)),
             session_joins: AtomicU64::new(0),
             clipboard_out: Arc::new(Mutex::new(None)),
+            audio: Arc::new(RudpAudioShared::new()),
         });
         let a = SessionGuard::new(&video);
         let b = SessionGuard::new(&video);

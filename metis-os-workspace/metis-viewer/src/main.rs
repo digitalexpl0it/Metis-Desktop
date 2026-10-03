@@ -3,6 +3,7 @@
 mod credentials;
 mod freerdp;
 mod options;
+mod rudp_audio;
 mod rudp_session;
 mod theme;
 

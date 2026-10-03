@@ -10,7 +10,7 @@ use ffmpeg_next::software::scaling::Flags as SwsFlags;
 use metis_encode::RudpCodec;
 
 use crate::VideoDecoder;
-use crate::types::{DecodeError, DecodeResult, DecodedFrame, DecoderInfo};
+use crate::types::{DecodeError, DecodeResult, DecodedFrame, DecoderBackend, DecoderInfo};
 
 static FFMPEG_INIT: Once = Once::new();
 
@@ -106,6 +106,7 @@ impl FfmpegSoftDecoder {
 
             Ok(Self {
                 info: DecoderInfo {
+                    backend: DecoderBackend::Soft,
                     codec,
                     decoder_name: name.to_string(),
                     width: width as u32,

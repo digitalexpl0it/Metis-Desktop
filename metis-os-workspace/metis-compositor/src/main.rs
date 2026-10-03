@@ -38,6 +38,7 @@ mod output_vrr;
 mod pam_auth;
 mod remote_input;
 mod render;
+mod rudp_audio;
 mod rudp_guard;
 mod rudp_host;
 mod rudp_identity;

@@ -22,6 +22,7 @@ METIS_APT_PACKAGES=(
   libgraphene-1.0-dev
   libgtk4-layer-shell-dev
   libpulse-dev
+  libopus-dev
   libudev-dev
   libinput-dev
   libseat-dev

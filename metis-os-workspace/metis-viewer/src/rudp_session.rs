@@ -343,16 +343,20 @@ fn build_session_window(
     let outbound_clip_serial = Rc::new(Cell::new(0u64));
     let last_outbound_clip = Rc::new(RefCell::new(String::new()));
     let clip_handler: Rc<Cell<Option<glib::SignalHandlerId>>> = Rc::new(Cell::new(None));
+    let audio_playback: Rc<RefCell<Option<crate::rudp_audio::RudpAudioPlayback>>> =
+        Rc::new(RefCell::new(None));
 
     {
         let worker_tx = worker_tx.clone();
         let clip_handler = clip_handler.clone();
+        let audio_playback = audio_playback.clone();
         win.connect_close_request(move |_| {
             if let Some(id) = clip_handler.take()
                 && let Some(display) = gdk::Display::default()
             {
                 display.clipboard().disconnect(id);
             }
+            *audio_playback.borrow_mut() = None;
             let _ = worker_tx.send(ToWorker::Shutdown);
             glib::Propagation::Proceed
         });
@@ -367,6 +371,7 @@ fn build_session_window(
         let applying_remote_clip = applying_remote_clip.clone();
         let last_remote_clip_serial = last_remote_clip_serial.clone();
         let last_outbound_clip = last_outbound_clip.clone();
+        let audio_playback = audio_playback.clone();
         let win = win.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
             let Ok(rx) = gtk_rx.lock() else {
@@ -376,6 +381,7 @@ fn build_session_window(
                 match rx.try_recv() {
                     Ok(ToGtk::Event(ev)) => {
                         if matches!(ev, SessionEvent::Disconnected) {
+                            *audio_playback.borrow_mut() = None;
                             status.set_text(&tr("Disconnected"));
                             return glib::ControlFlow::Break;
                         }
@@ -389,6 +395,7 @@ fn build_session_window(
                             &applying_remote_clip,
                             &last_remote_clip_serial,
                             &last_outbound_clip,
+                            &audio_playback,
                         );
                     }
                     Ok(_) => {}
@@ -549,6 +556,7 @@ fn apply_event(
     applying_remote_clip: &Rc<Cell<bool>>,
     last_remote_clip_serial: &Rc<Cell<u64>>,
     last_outbound_clip: &Rc<RefCell<String>>,
+    audio_playback: &Rc<RefCell<Option<crate::rudp_audio::RudpAudioPlayback>>>,
 ) {
     match ev {
         SessionEvent::VideoReady {
@@ -557,7 +565,7 @@ fn apply_event(
             codec,
         } => {
             video_size.set((*width, *height));
-            status.set_text(&format!("{width}×{height} {codec}"));
+            let codec_label = codec.clone();
             let codec = match codec.as_str() {
                 "h264" => RudpCodec::H264,
                 _ => RudpCodec::Hevc,
@@ -565,7 +573,34 @@ fn apply_event(
             if let Ok(dec) = open_decoder(codec, *width, *height)
                 && let Ok(mut g) = decoder.lock()
             {
+                status.set_text(&format!(
+                    "{width}×{height} {codec_label} · {}",
+                    dec.info().decoder_name
+                ));
                 *g = Some(dec);
+            } else {
+                status.set_text(&format!("{width}×{height} {codec_label}"));
+            }
+        }
+        SessionEvent::AudioReady {
+            sample_rate,
+            channels,
+            codec: _,
+        } => match crate::rudp_audio::RudpAudioPlayback::start(*sample_rate, *channels) {
+            Ok(playback) => {
+                *audio_playback.borrow_mut() = Some(playback);
+            }
+            Err(err) => {
+                tracing::warn!(%err, "rudp audio: playback unavailable");
+            }
+        },
+        SessionEvent::AudioPacket {
+            seq,
+            pts_us: _,
+            data,
+        } => {
+            if let Some(playback) = audio_playback.borrow().as_ref() {
+                playback.push_packet(*seq, data);
             }
         }
         SessionEvent::PointerLock { locked } => {
@@ -605,6 +640,13 @@ fn apply_event(
                     _ => RudpCodec::Hevc,
                 };
                 if let Ok(d) = open_decoder(codec, w, h) {
+                    if !pointer_locked.get() {
+                        status.set_text(&format!(
+                            "{w}×{h} {} · {}",
+                            au.codec,
+                            d.info().decoder_name
+                        ));
+                    }
                     *g = Some(d);
                 } else {
                     return;
@@ -617,7 +659,10 @@ fn apply_event(
                 present_rgba(picture, &frame.rgba, frame.width, frame.height);
             }
         }
-        SessionEvent::Disconnected => status.set_text(&tr("Disconnected")),
+        SessionEvent::Disconnected => {
+            *audio_playback.borrow_mut() = None;
+            status.set_text(&tr("Disconnected"));
+        }
     }
 }
 

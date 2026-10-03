@@ -39,6 +39,13 @@ pub enum RudpControlMsg {
         /// `"h264"` or `"hevc"`.
         codec: String,
     },
+    /// Host advertises system-audio stream parameters (host → client Opus).
+    AudioReady {
+        sample_rate: u32,
+        channels: u8,
+        /// `"opus"`.
+        codec: String,
+    },
     /// Client → host: absolute pointer in compositor logical desktop coords.
     PointerAbsolute {
         x: f64,
@@ -184,6 +191,11 @@ mod tests {
             width: 1920,
             height: 1080,
             codec: "hevc".into(),
+        });
+        roundtrip(RudpControlMsg::AudioReady {
+            sample_rate: 48_000,
+            channels: 2,
+            codec: "opus".into(),
         });
         roundtrip(RudpControlMsg::ClipboardSet {
             mime: "text/plain;charset=utf-8".into(),

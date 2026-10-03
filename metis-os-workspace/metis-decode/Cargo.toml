@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Metis Remote (RUDP) software video decode (H.264/HEVC via FFmpeg)"
+description = "Metis Remote (RUDP) video decode (H.264/HEVC via FFmpeg VAAPI/NVDEC/soft → RGBA)"
 
 [dependencies]
 thiserror = { workspace = true }

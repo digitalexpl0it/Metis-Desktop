@@ -24,3 +24,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 zeroize = "1"
+# Metis Remote system audio playback (Opus → cpal).
+opus = "0.3"
+cpal = "0.15"

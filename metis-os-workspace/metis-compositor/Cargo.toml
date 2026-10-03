@@ -40,6 +40,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rcgen = "0.14"
+# Metis Remote system audio (Pulse sink-monitor → Opus).
+libpulse-binding = "2.28"
+libpulse-simple-binding = "2.28"
+opus = "0.3"
 
 [dependencies.smithay]
 git = "https://github.com/Smithay/smithay"

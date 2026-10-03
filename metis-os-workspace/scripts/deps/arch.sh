@@ -20,6 +20,7 @@ METIS_PACMAN_PACKAGES=(
   libadwaita
   gtk4-layer-shell
   libpulse
+  opus
   libinput
   seatd
   mesa

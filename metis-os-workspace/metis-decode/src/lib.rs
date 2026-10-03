@@ -1,17 +1,21 @@
-//! Software video decode for Metis Remote (RUDP).
+//! Video decode for Metis Remote (RUDP).
 //!
-//! Decodes H.264 / HEVC access units from the RUDP wire into packed RGBA8
-//! frames via system FFmpeg (no hardware decode in Phase 8).
+//! Decodes H.264 / HEVC access units into packed RGBA8 frames via system
+//! FFmpeg. [`open_decoder`] tries VAAPI → NVDEC/cuvid → software, always
+//! downloading hardware surfaces to CPU RGBA for GTK.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+mod detect;
 mod ffmpeg_dec;
+mod ffmpeg_hw;
 mod types;
 
 pub use ffmpeg_dec::FfmpegSoftDecoder;
-pub use types::{DecodeError, DecodeResult, DecodedFrame, DecoderInfo, RudpCodec};
+pub use ffmpeg_hw::FfmpegHwDecoder;
+pub use types::{DecodeError, DecodeResult, DecodedFrame, DecoderBackend, DecoderInfo, RudpCodec};
 
-/// Software video decoder: push compressed AUs, pull RGBA frames.
+/// Video decoder: push compressed AUs, pull RGBA frames.
 pub trait VideoDecoder: Send {
     fn info(&self) -> &DecoderInfo;
     /// Feed one access unit. Returns the latest fully decoded frame, if any.
@@ -22,21 +26,77 @@ pub trait VideoDecoder: Send {
     }
 }
 
-/// Open a software decoder for `codec` at the expected display size.
+/// Open a decoder with the Auto ladder (VAAPI → NVDEC → software).
 pub fn open_decoder(
     codec: RudpCodec,
     width: u32,
     height: u32,
 ) -> DecodeResult<Box<dyn VideoDecoder>> {
-    let dec = FfmpegSoftDecoder::open(codec, width, height)?;
-    tracing::info!(
-        ?codec,
-        width,
-        height,
-        name = %dec.info().decoder_name,
-        "metis-decode: software decoder ready"
-    );
-    Ok(Box::new(dec))
+    open_decoder_with(DecoderBackend::Auto, codec, width, height)
+}
+
+/// Open a decoder for `backend` (Auto expands to the candidate ladder).
+pub fn open_decoder_with(
+    backend: DecoderBackend,
+    codec: RudpCodec,
+    width: u32,
+    height: u32,
+) -> DecodeResult<Box<dyn VideoDecoder>> {
+    let candidates = detect::decode_candidates(backend);
+    let mut last_err = DecodeError::Unavailable("no decoder candidates".into());
+
+    for (cand_backend, device) in candidates {
+        match cand_backend {
+            DecoderBackend::Soft => match FfmpegSoftDecoder::open(codec, width, height) {
+                Ok(dec) => {
+                    tracing::info!(
+                        ?codec,
+                        width,
+                        height,
+                        name = %dec.info().decoder_name,
+                        "metis-decode: software decoder ready"
+                    );
+                    return Ok(Box::new(dec));
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "metis-decode: software decoder open failed");
+                    last_err = err;
+                }
+            },
+            DecoderBackend::Vaapi | DecoderBackend::Nvdec => {
+                let device_ref = device.as_deref();
+                match FfmpegHwDecoder::try_open(cand_backend, device_ref, codec, width, height) {
+                    Ok(dec) => {
+                        tracing::info!(
+                            ?codec,
+                            width,
+                            height,
+                            backend = ?cand_backend,
+                            name = %dec.info().decoder_name,
+                            device = ?device,
+                            "metis-decode: hardware decoder ready"
+                        );
+                        return Ok(Box::new(dec));
+                    }
+                    Err(err) => {
+                        tracing::info!(
+                            backend = ?cand_backend,
+                            device = ?device,
+                            %err,
+                            "metis-decode: hardware decoder unavailable; trying next"
+                        );
+                        last_err = err;
+                    }
+                }
+            }
+            DecoderBackend::Auto => {
+                // Candidates are always concrete backends.
+                last_err = DecodeError::InvalidInput("unexpected Auto candidate".into());
+            }
+        }
+    }
+
+    Err(last_err)
 }
 
 #[cfg(test)]
@@ -55,8 +115,18 @@ mod tests {
         });
     }
 
+    /// Soft open must work without DRM / HW drivers.
+    #[test]
+    fn software_open_without_drm() {
+        ensure_ffmpeg();
+        let dec = open_decoder_with(DecoderBackend::Soft, RudpCodec::H264, 16, 16)
+            .expect("soft h264 open");
+        assert_eq!(dec.info().backend, DecoderBackend::Soft);
+        assert_eq!(dec.info().decoder_name, "h264");
+    }
+
     /// Encode one solid-color frame with libx264 (Annex-B), then decode via
-    /// [`open_decoder`]. Skips when the host FFmpeg lacks `libx264`.
+    /// soft path. Skips when the host FFmpeg lacks `libx264`.
     #[test]
     fn software_h264_roundtrip_rgba() {
         ensure_ffmpeg();
@@ -66,7 +136,8 @@ mod tests {
         };
         assert!(!au.is_empty());
 
-        let mut dec = open_decoder(RudpCodec::H264, 16, 16).expect("open h264 decoder");
+        let mut dec = open_decoder_with(DecoderBackend::Soft, RudpCodec::H264, 16, 16)
+            .expect("open h264 decoder");
         let frame = dec
             .push_au(&au)
             .expect("push")
@@ -80,6 +151,14 @@ mod tests {
         assert_eq!(frame.rgba.len(), 16 * 16 * 4);
         // Non-zero pixels (green-ish solid).
         assert!(frame.rgba.iter().any(|&b| b > 0));
+    }
+
+    /// Auto ladder must still yield a usable decoder (soft last).
+    #[test]
+    fn auto_open_falls_back_to_usable_decoder() {
+        ensure_ffmpeg();
+        let dec = open_decoder(RudpCodec::H264, 64, 64).expect("auto open");
+        assert!(!dec.info().decoder_name.is_empty());
     }
 
     fn encode_tiny_h264() -> Option<Vec<u8>> {

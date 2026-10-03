@@ -1118,6 +1118,11 @@ while locked. Classic RDP still pauses listen on lock (separate from Metis Remot
 When a game locks the pointer, the host advertises `PointerLock` so the Viewer
 sends relative motion.
 
+**Audio.** While a Viewer session is connected, Metis Remote captures the host
+**default sink monitor** (system audio via Pulse/PipeWire-pulse), encodes Opus,
+and plays it on the Viewer. There is no microphone / client→host audio yet.
+If Pulse is unavailable on the host, the session continues **video-only**.
+
 **Smoke-test / debug CLI:**
 
 ```bash
@@ -1138,7 +1143,12 @@ Client pins: `~/.config/metis/rudp/known_hosts`.
 (`intel-media-va-driver` / Mesa VA); NVIDIA needs the proprietary driver with NVENC
 and an FFmpeg build that exposes `*_nvenc`. If the chosen encode backend cannot
 open, the host logs a clear error and does not fall back to software x264/x265.
-Viewer decode uses FFmpeg software H.264/HEVC today.
+Viewer decode tries FFmpeg **VAAPI** then **NVDEC/cuvid**, then software
+H.264/HEVC, always downloading to CPU RGBA for GTK (no zero-copy yet). Needs an
+FFmpeg build with those decoders plus a working `libva` stack (Intel/AMD) or
+NVIDIA driver/CUDA for NVDEC; without them the Viewer falls back to software
+automatically. Build also needs `libopus-dev` (and runtime `libopus0`) for Metis
+Remote audio.
 
 Use a DRM Metis session (not nested winit) for the host.
 
