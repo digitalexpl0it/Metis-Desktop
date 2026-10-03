@@ -1128,7 +1128,7 @@ Host identity files: `~/.config/metis/rudp/host.crt`, `host.key`, `identity.json
 Client pins: `~/.config/metis/rudp/known_hosts`.
 
 **Packages:** build with `libavcodec-dev` / `libavutil-dev` / `libavformat-dev`
-/ `libswscale-dev` (and runtime `ffmpeg`). Intel/AMD need a working VAAPI stack
+/ `libswscale-dev` / `libswresample-dev` (and runtime `ffmpeg`). Intel/AMD need a working VAAPI stack
 (`intel-media-va-driver` / Mesa VA); NVIDIA needs the proprietary driver with NVENC
 and an FFmpeg build that exposes `*_nvenc`. If the chosen encode backend cannot
 open, the host logs a clear error and does not fall back to software x264/x265.

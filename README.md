@@ -114,18 +114,22 @@ and [Screenshots](docs/USER_GUIDE.md#screenshots) (portal capture via `metis-por
     ├── metis-capture/           # Shared Wayland ext-image-copy-capture client
     ├── metis-compositor/        # Smithay Wayland compositor (winit + DRM backends)
     ├── metis-config/            # Shared config + theme tokens (serde, no GTK)
+    ├── metis-decode/            # Metis Remote client video decode (FFmpeg)
+    ├── metis-encode/            # Metis Remote host encode worker / probe (FFmpeg VAAPI/NVENC)
     ├── metis-gaming/            # Flatpak optimizer, health checks, metis-gamingd
     ├── metis-grid/              # Window grid / tiling + scrolling layout (pure logic)
     ├── metis-i18n/              # gettext (shell/settings) + Fluent (compositor)
     ├── metis-portal/            # xdg-desktop-portal backend
     ├── metis-polkit-agent/      # GTK4 PolicyKit auth agent (session password dialogs)
     ├── metis-protocol/          # Shared JSON IPC contracts + rate limits
-    ├── metis-remote/            # Desktop sharing + Polkit privileged helpers
+    ├── metis-remote/            # Classic RDP helpers + Polkit privileged helpers
+    ├── metis-rudp-client/       # Metis Remote Quinn client (TOFU, PAM auth, video)
+    ├── metis-rudp-smoke/        # CLI smoke test for Metis Remote
     ├── metis-screenshot/        # Native screenshot / recording helpers
     ├── metis-secrets/           # Freedesktop Secret Service (oo7) wrapper
     ├── metis-settings/          # GTK4 settings app
     ├── metis-shell/             # GTK4 layer-shell bar, panels, Task View, widgets host
-    └── metis-viewer/            # Remote desktop viewer client
+    └── metis-viewer/            # Remote viewer (Metis Remote + FreeRDP)
 ```
 
 ## Technology stack
@@ -136,7 +140,11 @@ and [Screenshots](docs/USER_GUIDE.md#screenshots) (portal capture via `metis-por
   libseat for greeter sessions; `calloop` event loop; server-side decorations;
   XWayland for X11 apps.
 - **Shell / UI:** GTK 4.18+ (`gtk4-rs` 0.11) with [`gtk4-layer-shell`](https://github.com/wmww/gtk4-layer-shell);
-  on-demand Control Center / Notification Center / Task View; `zbus` for notifications.- **IPC:** JSON over Unix sockets (`metis-protocol`) plus a runtime command file under `$XDG_RUNTIME_DIR/metis/`.
+  on-demand Control Center / Notification Center / Task View; `zbus` for notifications.
+- **IPC:** JSON over Unix sockets (`metis-protocol`) plus a runtime command file under `$XDG_RUNTIME_DIR/metis/`.
+- **Metis Remote:** Quinn/RUDP desktop stream (hardware VAAPI/NVENC encode in an
+  isolated worker; Viewer + `metis-rudp-client` decode). Classic RDP remains via
+  GNOME Remote Desktop / FreeRDP under Settings → Remote access.
 - **Portals:** first-party **`metis-portal`** (`xdg-desktop-portal` backend:
   Settings, Screenshot, ScreenCast, Background, PowerProfileMonitor) plus
   `xdg-desktop-portal-gtk` for FileChooser / notifications.
@@ -322,8 +330,9 @@ Full walkthrough in the **[User Guide](docs/USER_GUIDE.md)**. The essentials:
   include Display, Appearance, Background, Edge bar, Windows, **Desktop widgets**,
   Metis Menu, Weather, Network (incl. **DNS** / VPN), Calendars, Input,
   **Shortcuts** (read-only guide; edit under Keyboard), Bluetooth, Printers,
-  Power, Sound, **Users**, **Date & Time**, **Updates**, **Gaming**, **Control Center**, and
-  **Remote access**. Admin prompts use Metis’s built-in `metis-polkit-agent`
+  Power, Sound, **Users**, **Date & Time**, **Updates**, **Gaming**, **Control Center**,
+  **Metis Remote** (low-latency RUDP), and **Remote access** (classic RDP / third-party).
+  Admin prompts use Metis’s built-in `metis-polkit-agent`
   (top-center overlay). **Updates** checks ~90s after login and every 6 hours by
   default; Settings **Check now** feeds the edge-bar badge and updater.
 - **Gaming** — Settings → Gaming: graphics mode, health → Fix, guided **Run gaming
@@ -395,7 +404,9 @@ Other files are created on demand:
 | `keybinds.json`        | You edit Shortcuts                 | Desktop chords → actions (Settings → Keyboard)                                                    |
 | `power.json`           | You configure power settings       | Power profile (`powerprofilesctl`), idle blank/suspend, lid-close                                 |
 | `datetime.json`        | You configure Date & Time          | 12/24h preference, first day of week (system time via `timedatectl` / Polkit)                     |
-| `remote.json`          | You configure Remote access        | Live-session RDP sharing via gnome-remote-desktop                                                 |
+| `remote.json`          | You configure Remote access        | Classic RDP / GRD / FreeRDP shadow / third-party remote tools                                     |
+| `rudp.json`            | You configure Metis Remote         | Low-latency RUDP host: enable, UDP port (default 7843), LAN-only, PAM allowlist, encode prefs     |
+| `viewer.json`          | You save Viewer hosts              | Metis Viewer saved hosts (RDP + Metis Remote); passwords never stored                             |
 | `dashboard.json`       | You configure Control Center       | Enable, widget order, max height %, refresh interval, confirm-before-kill                         |
 | `gaming.json`          | You configure gaming               | Graphics mode, auto performance/GameMode, Flatpak GPU env, library paths, Metis launch tweaks     |
 | `gaming-flatpak.json`  | Gaming setup runs                  | Record of applied Flatpak gaming overrides                                                        |
@@ -434,8 +445,10 @@ reference.
   UAF; opt-in via `METIS_COLOR_MGMT=1`); true per-surface HDR content remains stretch.
 - **Phase 6 — Flatpak, Steam & gaming (v1):** **complete** (2026-07-05).
 - **Phase 7 — Remote access:** complete for GRD session sharing — Settings →
-  Remote access, portal capture + EIS input, Metis Viewer client, RustDesk
-  Settings preset, security closeout. Still deferred: Metis-native host protocol.
+  Remote access, portal capture + EIS input, Metis Viewer (FreeRDP), RustDesk
+  Settings preset, security closeout. **Metis Remote (RUDP)** is the first-party
+  low-latency host path (Settings → Metis Remote; Quinn + hardware encode;
+  Viewer protocol **Metis Remote**).
 - **Phase 8 — Internationalization:** **complete** (2026-07-24). Hybrid gettext
   (shell/settings) + Fluent (compositor); Settings Language & region; onboarding
   language step; live Apply rebuilds. See [`docs/I18N.md`](docs/I18N.md).
@@ -469,7 +482,8 @@ reference.
 Optional follow-up (remaining): default-on colour-management protocol (upstream
 wayland-rs ObjectData UAF — still opt-in `METIS_COLOR_MGMT=1`); fuller per-surface
 HDR tone-map / float scene-linear; Anvil-style MultiRenderer element typing;
-Wayland/portal-backed Metis-native RDP host (experimental FreeRDP shadow landed).
+Metis Remote polish (multi-monitor / pointer-lock edge cases); classic RDP host
+beyond GRD + experimental FreeRDP shadow.
 
 See [`metis-os-workspace/TODO.md`](metis-os-workspace/TODO.md) for the detailed
 roadmap, [`CHANGELOG.md`](CHANGELOG.md) for recent changes,

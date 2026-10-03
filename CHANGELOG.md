@@ -21,11 +21,28 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **Crash-loop guard** — if a session ends unexpectedly while Remote is
   starting or streaming, the next login keeps the host off and Settings →
   Metis Remote explains why.
+- **Metis Viewer `localhost` / hostnames** — Metis Remote connects resolve
+  via DNS (`localhost:7843` etc.) instead of requiring a bare IP
+  `SocketAddr` parse.
+- **Trust-then-connect** — after TOFU Trust, Viewer retries with the same
+  credentials; PAM Reject is delivered before the host closes the QUIC
+  connection (no more cryptic `read: connection lost` on bad password).
+- **Settings host fingerprint width** — long SHA-256 fingerprints wrap in a
+  vertical block so they no longer stretch the Settings window.
+- **Viewer typing lag on the new-connection form** — removed nested
+  propagate-natural-height scrolls that reflowed the whole page per keystroke.
+- **FreeRDP 3.32 argv** — Viewer maps bitmap-cache / printer options to
+  `/cache:bitmap:on|off` and `/printer` (no deprecated `+/-` keywords).
+- **CI / packaging build deps** — Debian/Ubuntu workflows and deps scripts
+  install FFmpeg -dev (`libav*`, `libswscale`, `libswresample`) + `libva-dev`
+  so `ffmpeg-sys-next` can link in `debian:trixie` CI.
 
 ### Changed
 
 - Metis Remote **Auto** encoder uses the render GPU's encoder first and falls
   back across vendors on hybrid systems; H.264 is the default codec.
+- Metis Viewer hosts UI is protocol-aware (Metis Remote vs RDP); Metis Remote
+  uses the local PAM password and skips FreeRDP-only options.
 
 ## [2026-09-27]
 

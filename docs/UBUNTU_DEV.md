@@ -44,15 +44,18 @@ If your image lacks `libgtk4-layer-shell-dev`, run `METIS_LAYER_SHELL_FROM_SOURC
 ### Metis Remote (RUDP) encode — FFmpeg
 
 Hardware encode for Metis Remote (`metis-encode`) links against system FFmpeg
-(`libavcodec` / `libavutil`) and imports compositor dmabufs via DRM-PRIME
-(VAAPI on Intel/AMD, NVENC on NVIDIA). The Viewer client (`metis-decode`) uses
-the same FFmpeg stack for software H.264/HEVC decode (+ `libswscale` to RGBA).
-Install the -dev packages to build:
+(`libavcodec` / `libavutil` / `libswresample`) and imports compositor dmabufs via
+DRM-PRIME (VAAPI on Intel/AMD, NVENC on NVIDIA). The Viewer client
+(`metis-decode`) uses the same FFmpeg stack for software H.264/HEVC decode
+(+ `libswscale` to RGBA). CI (`ci.yml` / `release-deb.yml`) and
+`scripts/deps/{debian-13,ubuntu-26.04}.sh` install the same -dev set. Install
+locally:
 
 ```bash
 sudo apt install -y \
   ffmpeg \
-  libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+  libavcodec-dev libavformat-dev libavutil-dev \
+  libswscale-dev libswresample-dev \
   libva-dev
 ```
 

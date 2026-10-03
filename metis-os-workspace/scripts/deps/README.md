@@ -15,3 +15,6 @@ gtk4-layer-shell >= 1.0, PipeWire >= 1.4, Rust >= 1.95 (via rustup; distro
 Each file sets package arrays and `METIS_LAYER_SHELL_FROM_SOURCE`.
 All profiles install Tesseract and English language data because Extract Text is
 a standard Metis Screenshot feature rather than an optional integration.
+Debian/Ubuntu profiles also install FFmpeg -dev packages (`libav*`,
+`libswscale-dev`, `libswresample-dev`, `libva-dev`) for Metis Remote encode/decode;
+keep those lists aligned with `.github/workflows/ci.yml` and `release-deb.yml`.
