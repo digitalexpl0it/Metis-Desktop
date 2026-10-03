@@ -20,9 +20,10 @@ pub enum EncoderBackend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RudpCodec {
+    /// Default: widely available on Intel/AMD VAAPI; HEVC encode often missing.
     #[default]
-    Hevc,
     H264,
+    Hevc,
 }
 
 impl RudpCodec {
@@ -115,7 +116,7 @@ pub struct EncodedPacket {
     pub damage: Vec<DamageRect>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncoderInfo {
     pub backend: EncoderBackend,
     pub codec: RudpCodec,
@@ -132,6 +133,11 @@ pub enum EncodeError {
     InvalidInput(String),
     #[error("ffmpeg: {0}")]
     Ffmpeg(String),
+    /// Isolated encode worker died, hung, or broke protocol (encoder must be replaced).
+    #[error("encode worker: {0}")]
+    Worker(String),
+    #[error("cancelled")]
+    Cancelled,
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }

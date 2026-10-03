@@ -1,12 +1,22 @@
 //! Phase 2–7 RUDP host: Quinn listener + hardware encode on an isolated
 //! Tokio / worker thread pair — **never** on the Smithay calloop thread.
 //!
-//! Arms [`crate::stream_export::StreamExportHub`] on start and disarms on
-//! [`Drop`]. Frame path: wake → `take_latest` → `wait_ready` → `metis-encode`
-//! (VAAPI/NVENC, no mmap) → latest-wins outbound packet slot. Phase 6 fans
-//! packets to authenticated sessions (keyframes on uni-stream, deltas as
-//! FEC'd datagrams). Phase 7 maps control-stream input onto calloop →
-//! [`crate::remote_input`] and advertises Wayland pointer lock.
+//! Crash containment (enabling Metis Remote must never take down the session):
+//! - All FFmpeg / libva / CUDA code runs in a separate `metis-encode-probe
+//!   worker` process ([`metis_encode::open_isolated_encoder`]). A driver crash
+//!   there costs one bounded encoder restart, never the compositor.
+//! - Nothing is composed or encoded until an authenticated client is connected
+//!   (export demand gating); idle hosts add zero GPU work to the session.
+//! - Every blocking wait on the frame thread is bounded or cancellable, so
+//!   [`RudpHostSystem::shutdown`] (called on calloop) cannot hang the desktop.
+//! - [`crate::rudp_guard`] auto-disables the host after an unclean session end
+//!   while it was running, so a crash can never become a login crash loop.
+//!
+//! Frame path: wake → `take_latest` → bounded fence wait → worker encode →
+//! latest-wins outbound packet slot. Phase 6 fans packets to authenticated
+//! sessions (keyframes on uni-stream, deltas as FEC'd datagrams). Phase 7 maps
+//! control-stream input onto calloop → [`crate::remote_input`] and advertises
+//! Wayland pointer lock.
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -14,7 +24,7 @@ use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -22,8 +32,8 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use metis_config::{RudpEncoderBackend, RudpVideoCodec};
 use metis_encode::{
-    DEFAULT_BITRATE_KBPS, DEFAULT_FPS_HINT, EncodeInput, EncodedPacket, EncoderBackend,
-    EncoderConfig, HwEncoder, NullEncoder, RudpCodec, open_encoder,
+    DEFAULT_BITRATE_KBPS, DEFAULT_FPS_HINT, EncodeError, EncodeInput, EncodedPacket,
+    EncoderBackend, EncoderConfig, HwEncoder, NullEncoder, RudpCodec, open_isolated_encoder,
 };
 use metis_protocol::{
     RUDP_DEFAULT_DATAGRAM_BUDGET, RUDP_PROTOCOL_VERSION, ReliableAccessUnit, RudpControlMsg,
@@ -36,20 +46,56 @@ use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::pam_auth::{pam_check, pam_service};
+use crate::rudp_guard::{HostMarker, HostPhase, STABLE_AFTER};
 use crate::rudp_identity;
 use crate::stream_export::{ExportedFrame, StreamExportHub};
 
 /// Default QUIC listen port for Metis RUDP.
 pub const DEFAULT_RUDP_PORT: u16 = 7843;
 
+/// Upper bound for one reliable write to a client (control / keyframe).
+const PUMP_WRITE_TIMEOUT: Duration = Duration::from_millis(750);
+/// GPU fence wait per exported frame on the frame thread.
+const FENCE_TIMEOUT: Duration = Duration::from_millis(500);
+/// Consecutive encoder (worker) failures before hardware encode is given up
+/// for this host instance — one back-off per entry in [`ENCODER_BACKOFF`],
+/// then stop. Reset after [`ENCODER_HEALTHY_RESET`] of clean encode.
+const ENCODER_MAX_FAILURES: u32 = ENCODER_BACKOFF.len() as u32 + 1;
+const ENCODER_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+];
+const ENCODER_HEALTHY_RESET: Duration = Duration::from_secs(60);
+/// Keep a warm worker this long after the last client leaves.
+const ENCODER_IDLE_CLOSE: Duration = Duration::from_secs(15);
+
 /// Input events from the Quinn control stream, marshaled onto calloop.
 #[derive(Debug, Clone, Copy)]
 pub enum RudpInputEvent {
-    PointerAbsolute { x: f64, y: f64 },
-    PointerRelative { dx: f64, dy: f64 },
-    PointerButton { button: u32, pressed: bool },
-    PointerScroll { dx: f64, dy: f64 },
-    Key { keycode: u32, pressed: bool },
+    PointerAbsolute {
+        x: f64,
+        y: f64,
+    },
+    PointerRelative {
+        dx: f64,
+        dy: f64,
+    },
+    PointerButton {
+        button: u32,
+        pressed: bool,
+    },
+    PointerScroll {
+        dx: f64,
+        dy: f64,
+    },
+    Key {
+        keycode: u32,
+        pressed: bool,
+    },
+    /// Not input: the frame pipeline needs a full frame now (client joined /
+    /// encoder restarted) even if the desktop is idle — repaint + force export.
+    RefreshVideo,
 }
 
 impl RudpInputEvent {
@@ -86,7 +132,7 @@ impl Default for RudpEncodePrefs {
     fn default() -> Self {
         Self {
             backend: RudpEncoderBackend::Auto,
-            codec: RudpVideoCodec::Hevc,
+            codec: RudpVideoCodec::H264,
             bitrate_kbps: DEFAULT_BITRATE_KBPS,
         }
     }
@@ -167,6 +213,8 @@ pub struct RudpHostSystem {
     pub render_node_path: PathBuf,
     /// Shared with calloop: true when a Wayland pointer lock is active.
     pub pointer_locked: Arc<AtomicBool>,
+    /// Crash-loop guard marker; dropped (file removed) after threads join.
+    _marker: Arc<HostMarker>,
 }
 
 impl RudpHostSystem {
@@ -190,15 +238,19 @@ impl RudpHostSystem {
         let encode_status = Arc::new(Mutex::new(None));
         let wake = hub.arm();
 
+        let marker = Arc::new(HostMarker::create());
         let allowed_users_live = Arc::new(StdRwLock::new(allowed_users.clone()));
-        let video_width = Arc::new(AtomicU32::new(0));
-        let video_height = Arc::new(AtomicU32::new(0));
+        let video = Arc::new(VideoShared {
+            latest_packet: Arc::clone(&latest_packet),
+            width: AtomicU32::new(0),
+            height: AtomicU32::new(0),
+            codec: AtomicU8::new(codec_to_u8(to_encode_codec(encode_prefs.codec))),
+            active_sessions: AtomicUsize::new(0),
+            session_joins: AtomicU64::new(0),
+        });
         let quinn_stop = Arc::clone(&stop);
         let quinn_allowed = Arc::clone(&allowed_users_live);
-        let quinn_packets = Arc::clone(&latest_packet);
-        let quinn_w = Arc::clone(&video_width);
-        let quinn_h = Arc::clone(&video_height);
-        let quinn_codec = encode_prefs.codec;
+        let quinn_video = Arc::clone(&video);
         let quinn_bridge = bridge.clone();
         let pointer_locked = Arc::clone(&bridge.pointer_locked);
         let frame_ctx = FramePipelineCtx {
@@ -207,36 +259,41 @@ impl RudpHostSystem {
             stop: Arc::clone(&stop),
             frames_encoded: Arc::clone(&frames_encoded),
             bytes_encoded: Arc::clone(&bytes_encoded),
-            latest_packet: Arc::clone(&latest_packet),
             encode_error: Arc::clone(&encode_error),
             encode_status: Arc::clone(&encode_status),
             prefs: encode_prefs.clone(),
             render_node_path: render_node_path.clone(),
-            video_width: Arc::clone(&video_width),
-            video_height: Arc::clone(&video_height),
+            video: Arc::clone(&video),
+            refresh_tx: bridge.input_tx.clone(),
+            marker: Arc::clone(&marker),
+            started: Instant::now(),
         };
         let frame_join = std::thread::Builder::new()
             .name("metis-rudp-frames".into())
             .spawn(move || frame_pipeline_loop(frame_ctx))
-            .map_err(|e| format!("spawn rudp frame thread: {e}"))?;
+            .map_err(|e| {
+                hub.disarm();
+                format!("spawn rudp frame thread: {e}")
+            })?;
 
-        let quinn_join = std::thread::Builder::new()
+        let quinn_join = match std::thread::Builder::new()
             .name("metis-rudp-quinn".into())
             .spawn(move || {
-                if let Err(err) = run_quinn_runtime(
-                    config,
-                    quinn_stop,
-                    quinn_allowed,
-                    quinn_packets,
-                    quinn_w,
-                    quinn_h,
-                    quinn_codec,
-                    quinn_bridge,
-                ) {
+                if let Err(err) =
+                    run_quinn_runtime(config, quinn_stop, quinn_allowed, quinn_video, quinn_bridge)
+                {
                     tracing::error!(%err, "rudp host: Quinn runtime exited with error");
                 }
-            })
-            .map_err(|e| format!("spawn rudp quinn thread: {e}"))?;
+            }) {
+            Ok(handle) => handle,
+            Err(err) => {
+                // Don't leak a running frame thread / armed hub on partial start.
+                stop.store(true, Ordering::SeqCst);
+                hub.disarm();
+                let _ = frame_join.join();
+                return Err(format!("spawn rudp quinn thread: {err}"));
+            }
+        };
 
         // Ensure identity before logging fingerprint (Quinn thread also loads it).
         let fingerprint = match rudp_identity::load_or_create_server_config() {
@@ -277,6 +334,7 @@ impl RudpHostSystem {
             encode_prefs,
             render_node_path,
             pointer_locked,
+            _marker: marker,
         })
     }
 
@@ -308,15 +366,57 @@ fn ensure_rustls_provider() {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+const CODEC_H264: u8 = 0;
+const CODEC_HEVC: u8 = 1;
+
+fn codec_to_u8(codec: RudpCodec) -> u8 {
+    match codec {
+        RudpCodec::H264 => CODEC_H264,
+        RudpCodec::Hevc => CODEC_HEVC,
+    }
+}
+
+fn codec_wire_name(raw: u8) -> &'static str {
+    if raw == CODEC_HEVC { "hevc" } else { "h264" }
+}
+
+/// State shared by the frame pipeline thread and the Quinn runtime.
+struct VideoShared {
+    latest_packet: Arc<Mutex<Option<EncodedPacket>>>,
+    /// Current encode size (0 until the first frame is encoded).
+    width: AtomicU32,
+    height: AtomicU32,
+    /// Codec of the encoder actually running (may differ from the preference
+    /// after a fallback) — advertised to clients in `VideoReady`.
+    codec: AtomicU8,
+    /// Authenticated sessions; > 0 ⇒ export + encode demand.
+    active_sessions: AtomicUsize,
+    /// Monotonic join counter — a change makes the frame thread emit an IDR.
+    session_joins: AtomicU64,
+}
+
+/// Counts one authenticated session for as long as it lives (incl. task cancel).
+struct SessionGuard(Arc<VideoShared>);
+
+impl SessionGuard {
+    fn new(video: &Arc<VideoShared>) -> Self {
+        video.active_sessions.fetch_add(1, Ordering::SeqCst);
+        video.session_joins.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(video))
+    }
+}
+
+impl Drop for SessionGuard {
+    fn drop(&mut self) {
+        self.0.active_sessions.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn run_quinn_runtime(
     config: RudpHostConfig,
     stop: Arc<AtomicBool>,
     allowed_users: Arc<StdRwLock<Vec<String>>>,
-    latest_packet: Arc<Mutex<Option<EncodedPacket>>>,
-    video_width: Arc<AtomicU32>,
-    video_height: Arc<AtomicU32>,
-    codec_pref: RudpVideoCodec,
+    video: Arc<VideoShared>,
     bridge: RudpCalloopBridge,
 ) -> Result<(), String> {
     ensure_rustls_provider();
@@ -329,7 +429,7 @@ fn run_quinn_runtime(
         .build()
         .map_err(|e| format!("rudp tokio runtime: {e}"))?;
 
-    runtime.block_on(async move {
+    let result = runtime.block_on(async move {
         let endpoint = Endpoint::server(server_config, config.bind)
             .map_err(|e| format!("rudp bind {}: {e}", config.bind))?;
         tracing::info!(
@@ -341,26 +441,19 @@ fn run_quinn_runtime(
         let sessions: SessionRegistry = Arc::new(AsyncRwLock::new(HashMap::new()));
         let pump_stop = Arc::clone(&stop);
         let pump_sessions = Arc::clone(&sessions);
-        let pump_packets = Arc::clone(&latest_packet);
-        let pump_w = Arc::clone(&video_width);
-        let pump_h = Arc::clone(&video_height);
+        let pump_video = Arc::clone(&video);
         let pump_lock = Arc::clone(&bridge.pointer_locked);
         tokio::spawn(async move {
-            video_pump_loop(
-                pump_stop,
-                pump_sessions,
-                pump_packets,
-                pump_w,
-                pump_h,
-                codec_pref,
-                pump_lock,
-            )
-            .await;
+            video_pump_loop(pump_stop, pump_sessions, pump_video, pump_lock).await;
         });
 
-        connection_broker_loop(endpoint, stop, allowed_users, sessions, bridge).await;
+        connection_broker_loop(endpoint, stop, allowed_users, sessions, video, bridge).await;
         Ok::<(), String>(())
-    })
+    });
+    // Plain drop waits forever for spawn_blocking (PAM) tasks; shutdown runs
+    // on calloop via RudpHostSystem::shutdown, so it must be bounded.
+    runtime.shutdown_timeout(Duration::from_secs(1));
+    result
 }
 
 struct VideoSession {
@@ -378,6 +471,7 @@ async fn connection_broker_loop(
     stop: Arc<AtomicBool>,
     allowed_users: Arc<StdRwLock<Vec<String>>>,
     sessions: SessionRegistry,
+    video: Arc<VideoShared>,
     bridge: RudpCalloopBridge,
 ) {
     while !stop.load(Ordering::Relaxed) {
@@ -396,6 +490,7 @@ async fn connection_broker_loop(
         };
         let allowed = Arc::clone(&allowed_users);
         let sessions = Arc::clone(&sessions);
+        let video = Arc::clone(&video);
         let bridge = bridge.clone();
         tokio::spawn(async move {
             match connecting.await {
@@ -432,6 +527,8 @@ async fn connection_broker_loop(
                                 let mut guard = sessions.write().await;
                                 guard.insert(session_id.clone(), Arc::clone(&session));
                             }
+                            // Demand on (frame thread starts export + IDR); off on drop.
+                            let _session_count = SessionGuard::new(&video);
                             let input_tx = bridge.input_tx.clone();
                             // Control reads: keepalives + Phase 7 input → calloop.
                             tokio::spawn(async move {
@@ -469,20 +566,13 @@ async fn connection_broker_loop(
 async fn video_pump_loop(
     stop: Arc<AtomicBool>,
     sessions: SessionRegistry,
-    latest_packet: Arc<Mutex<Option<EncodedPacket>>>,
-    video_width: Arc<AtomicU32>,
-    video_height: Arc<AtomicU32>,
-    codec_pref: RudpVideoCodec,
+    video: Arc<VideoShared>,
     pointer_locked: Arc<AtomicBool>,
 ) {
     tracing::info!("rudp host: video pump started");
     let mut last_seq: Option<u64> = None;
-    let mut last_ready = (0u32, 0u32);
+    let mut last_ready = (0u32, 0u32, CODEC_H264);
     let mut last_pointer_lock: Option<bool> = None;
-    let default_codec = match codec_pref {
-        RudpVideoCodec::H264 => "h264",
-        RudpVideoCodec::Hevc => "hevc",
-    };
 
     while !stop.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(4)).await;
@@ -501,9 +591,11 @@ async fn video_pump_loop(
             last_pointer_lock = Some(locked);
         }
 
-        let w = video_width.load(Ordering::Relaxed);
-        let h = video_height.load(Ordering::Relaxed);
-        if w > 0 && h > 0 && (w, h) != last_ready {
+        let w = video.width.load(Ordering::Relaxed);
+        let h = video.height.load(Ordering::Relaxed);
+        let codec_raw = video.codec.load(Ordering::Relaxed);
+        if w > 0 && h > 0 {
+            let changed = (w, h, codec_raw) != last_ready;
             let snap: Vec<Arc<VideoSession>> = {
                 let guard = sessions.read().await;
                 guard.values().cloned().collect()
@@ -511,19 +603,23 @@ async fn video_pump_loop(
             let msg = RudpControlMsg::VideoReady {
                 width: w,
                 height: h,
-                codec: default_codec.to_string(),
+                codec: codec_wire_name(codec_raw).to_string(),
             };
             for session in &snap {
+                // Late joiners need VideoReady too, not just size/codec changes.
+                if !changed && session.video_ready_sent.load(Ordering::Relaxed) {
+                    continue;
+                }
                 let mut send = session.control_send.lock().await;
                 if write_control_msg(&mut send, &msg).await.is_ok() {
                     session.video_ready_sent.store(true, Ordering::Relaxed);
                 }
             }
-            last_ready = (w, h);
+            last_ready = (w, h, codec_raw);
         }
 
         let packet = {
-            let Ok(guard) = latest_packet.lock() else {
+            let Ok(guard) = video.latest_packet.lock() else {
                 continue;
             };
             guard.clone()
@@ -572,8 +668,14 @@ async fn video_pump_loop(
             let framed = au.encode_framed();
             for session in &snap {
                 let mut send = session.video_send.lock().await;
-                if let Err(err) = send.write_all(&framed).await {
-                    tracing::debug!(%err, "rudp host: keyframe write failed");
+                // A client that stops reading must not stall the pump for everyone.
+                match tokio::time::timeout(PUMP_WRITE_TIMEOUT, send.write_all(&framed)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => tracing::debug!(%err, "rudp host: keyframe write failed"),
+                    Err(_) => {
+                        tracing::warn!("rudp host: keyframe write timed out — closing slow client");
+                        session.conn.close(0u32.into(), b"client too slow");
+                    }
                 }
             }
             continue;
@@ -755,8 +857,9 @@ async fn write_control_msg(
     msg: &RudpControlMsg,
 ) -> Result<(), String> {
     let bytes = encode_rudp_frame(msg)?;
-    send.write_all(&bytes)
+    tokio::time::timeout(PUMP_WRITE_TIMEOUT, send.write_all(&bytes))
         .await
+        .map_err(|_| "control write timed out".to_string())?
         .map_err(|e| format!("control write: {e}"))?;
     Ok(())
 }
@@ -796,12 +899,13 @@ fn to_encode_codec(c: RudpVideoCodec) -> RudpCodec {
     }
 }
 
-fn open_or_null(
+fn open_hw_encoder(
     prefs: &RudpEncodePrefs,
     width: u32,
     height: u32,
     render_node: &str,
-) -> Result<Box<dyn HwEncoder>, String> {
+    cancel: &Arc<AtomicBool>,
+) -> Result<Box<dyn HwEncoder>, EncodeError> {
     if std::env::var_os("METIS_ENCODE_NULL").is_some() {
         tracing::warn!("METIS_ENCODE_NULL set — using NullEncoder");
         return Ok(Box::new(NullEncoder::new(width, height)));
@@ -814,7 +918,8 @@ fn open_or_null(
         fps_hint: DEFAULT_FPS_HINT,
         bitrate_kbps: prefs.bitrate_kbps.max(500),
     };
-    open_encoder(&cfg, render_node).map_err(|e| e.to_string())
+    // Out-of-process: a libva / CUDA crash kills the worker, not the session.
+    open_isolated_encoder(&cfg, render_node, Some(Arc::clone(cancel)))
 }
 
 struct FramePipelineCtx {
@@ -823,19 +928,98 @@ struct FramePipelineCtx {
     stop: Arc<AtomicBool>,
     frames_encoded: Arc<AtomicU64>,
     bytes_encoded: Arc<AtomicU64>,
-    latest_packet: Arc<Mutex<Option<EncodedPacket>>>,
     encode_error: Arc<Mutex<Option<String>>>,
     encode_status: Arc<Mutex<Option<String>>>,
     prefs: RudpEncodePrefs,
     render_node_path: PathBuf,
-    video_width: Arc<AtomicU32>,
-    video_height: Arc<AtomicU32>,
+    video: Arc<VideoShared>,
+    /// Calloop channel used to request a repaint + full export frame.
+    refresh_tx: calloop::channel::Sender<RudpInputEvent>,
+    /// Crash-loop guard: phase follows startup / streaming / stable.
+    marker: Arc<HostMarker>,
+    started: Instant,
+}
+
+impl FramePipelineCtx {
+    fn set_status(&self, status: impl Into<String>) {
+        if let Ok(mut slot) = self.encode_status.lock() {
+            *slot = Some(status.into());
+        }
+    }
+
+    fn set_error(&self, err: Option<String>) {
+        if let Ok(mut slot) = self.encode_error.lock() {
+            *slot = err;
+        }
+    }
+
+    /// Ask calloop for a repaint whose export is a full frame (idle desktops
+    /// otherwise produce no frames, leaving a fresh client on a black screen).
+    fn request_refresh(&self) {
+        self.hub.request_full_frame();
+        if self.refresh_tx.send(RudpInputEvent::RefreshVideo).is_err() {
+            tracing::debug!("rudp encode: calloop refresh channel closed");
+        }
+    }
 }
 
 struct ActiveEncoder {
     enc: Box<dyn HwEncoder>,
     width: u32,
     height: u32,
+    opened_at: Instant,
+}
+
+/// Bounded restart policy for the isolated encoder: back off between
+/// attempts and stop trying after [`ENCODER_MAX_FAILURES`] so a broken
+/// driver can't turn into a crash / respawn loop.
+#[derive(Debug, Default)]
+struct EncoderSupervisor {
+    failures: u32,
+    retry_at: Option<Instant>,
+    gave_up: bool,
+    /// After a back-off expires, request one refresh so an idle desktop still
+    /// delivers the frame that reopens the encoder.
+    refresh_on_retry: bool,
+}
+
+impl EncoderSupervisor {
+    fn may_open(&self, now: Instant) -> bool {
+        !self.gave_up && self.retry_at.is_none_or(|at| now >= at)
+    }
+
+    /// Record a failed open / dead worker. Returns `true` once given up.
+    fn record_failure(&mut self, now: Instant) -> bool {
+        self.failures = self.failures.saturating_add(1);
+        if self.failures >= ENCODER_MAX_FAILURES {
+            self.gave_up = true;
+            self.retry_at = None;
+            self.refresh_on_retry = false;
+        } else {
+            let idx = (self.failures as usize)
+                .saturating_sub(1)
+                .min(ENCODER_BACKOFF.len() - 1);
+            self.retry_at = Some(now + ENCODER_BACKOFF[idx]);
+            self.refresh_on_retry = true;
+        }
+        self.gave_up
+    }
+
+    fn record_success(&mut self, encoder_age: Duration) {
+        self.retry_at = None;
+        if encoder_age >= ENCODER_HEALTHY_RESET {
+            self.failures = 0;
+        }
+    }
+
+    /// True exactly once when a back-off has expired.
+    fn take_retry_refresh(&mut self, now: Instant) -> bool {
+        if self.refresh_on_retry && self.may_open(now) {
+            self.refresh_on_retry = false;
+            return true;
+        }
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -844,25 +1028,90 @@ enum EncodeMode {
     Full,
 }
 
+/// Rate-limits identical non-fatal encode warnings (avoid 60 Hz log floods).
+#[derive(Default)]
+struct WarnLimiter {
+    last: Option<(String, Instant)>,
+}
+
+impl WarnLimiter {
+    fn should_log(&mut self, msg: &str) -> bool {
+        let now = Instant::now();
+        match &self.last {
+            Some((prev, at)) if prev == msg && now.duration_since(*at) < Duration::from_secs(5) => {
+                false
+            }
+            _ => {
+                self.last = Some((msg.to_string(), now));
+                true
+            }
+        }
+    }
+}
+
 fn frame_pipeline_loop(ctx: FramePipelineCtx) {
-    tracing::info!("rudp host: frame pipeline started");
+    tracing::info!("rudp host: frame pipeline started (encoder opens when a client connects)");
+    ctx.set_status("idle (no client)");
     let mut last_log = Instant::now();
     let mut fps = 0u32;
     let mut last: Option<(u64, u32, u32, usize)> = None;
     let mut encoder: Option<ActiveEncoder> = None;
+    let mut supervisor = EncoderSupervisor::default();
+    let mut warn_limiter = WarnLimiter::default();
     let mut encode_mode: Option<EncodeMode> = None;
-    let mut need_keyframe = true;
+    let mut seen_joins = 0u64;
+    let mut idle_since: Option<Instant> = None;
     let render_node = ctx.render_node_path.to_string_lossy().into_owned();
 
     while !ctx.stop.load(Ordering::Relaxed) {
+        let now = Instant::now();
+        let sessions = ctx.video.active_sessions.load(Ordering::SeqCst);
+        // Persist the phase *before* demand turns on export compose + encode,
+        // so a crash in that path is attributed correctly next login.
+        let phase = if sessions > 0 {
+            HostPhase::Streaming
+        } else if now.duration_since(ctx.started) < STABLE_AFTER {
+            HostPhase::Starting
+        } else {
+            HostPhase::Stable
+        };
+        ctx.marker.set_phase(phase);
+        ctx.hub.set_demand(sessions > 0);
+
+        let joins = ctx.video.session_joins.load(Ordering::SeqCst);
+        if joins != seen_joins {
+            seen_joins = joins;
+            if let Some(active) = encoder.as_mut() {
+                active.enc.request_keyframe();
+            }
+            ctx.request_refresh();
+        }
+
+        if sessions == 0 {
+            let since = *idle_since.get_or_insert(now);
+            if encoder.is_some() && now.duration_since(since) >= ENCODER_IDLE_CLOSE {
+                tracing::info!("rudp encode: no clients — stopping encode worker");
+                encoder = None;
+                encode_mode = None;
+                ctx.set_status("idle (no client)");
+            }
+        } else {
+            idle_since = None;
+            if encoder.is_none() && supervisor.take_retry_refresh(now) {
+                ctx.request_refresh();
+            }
+        }
+
         match ctx.wake.recv_timeout(Duration::from_millis(16)) {
             Ok(()) | Err(RecvTimeoutError::Timeout) => {
                 while let Some(frame) = ctx.hub.take_latest() {
                     if ctx.stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    // GPU fence on this worker thread — never on calloop / Quinn poll.
-                    frame.wait_ready();
+                    // Bounded GPU fence wait on this thread — never on calloop / Quinn.
+                    if !frame.wait_ready(FENCE_TIMEOUT) {
+                        continue;
+                    }
                     let mode = if frame.damage_full {
                         EncodeMode::Full
                     } else {
@@ -871,88 +1120,39 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                     if encode_mode != Some(mode) {
                         tracing::debug!(
                             ?mode,
-                            damage_full = frame.damage_full,
                             damage_rects = frame.damage.len(),
                             seq = frame.seq,
                             "rudp encode: mode"
                         );
-                        if encode_mode == Some(EncodeMode::Sparse) && mode == EncodeMode::Full {
-                            need_keyframe = true;
+                        if encode_mode == Some(EncodeMode::Sparse)
+                            && mode == EncodeMode::Full
+                            && let Some(active) = encoder.as_mut()
+                        {
+                            active.enc.request_keyframe();
                         }
                         encode_mode = Some(mode);
                     }
-                    match ensure_encoder(&mut encoder, &ctx, &render_node, &frame) {
-                        Ok(opened_new) => {
-                            if opened_new {
-                                need_keyframe = true;
-                            }
-                            if need_keyframe {
-                                if let Some(active) = encoder.as_mut() {
-                                    active.enc.request_keyframe();
-                                }
-                                need_keyframe = false;
-                            }
-                            let encode_result =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    encode_frame(
-                                        encoder.as_mut().map(|a| &mut a.enc),
-                                        &frame,
-                                        &ctx.latest_packet,
-                                        &ctx.bytes_encoded,
-                                        &ctx.video_width,
-                                        &ctx.video_height,
-                                    )
-                                }));
-                            match encode_result {
-                                Ok(Ok(())) => {
-                                    ctx.frames_encoded.fetch_add(1, Ordering::Relaxed);
-                                    fps = fps.saturating_add(1);
-                                    last = Some((
-                                        frame.seq,
-                                        frame.width,
-                                        frame.height,
-                                        frame.fds.len(),
-                                    ));
-                                }
-                                Ok(Err(err)) => {
-                                    tracing::warn!(
-                                        %err,
-                                        seq = frame.seq,
-                                        "rudp encode submit/drain failed"
-                                    );
-                                    if let Ok(mut slot) = ctx.encode_error.lock() {
-                                        *slot = Some(err);
-                                    }
-                                }
-                                Err(panic) => {
-                                    tracing::error!(
-                                        ?panic,
-                                        seq = frame.seq,
-                                        "rudp encode panicked — disabling hardware encoder for this size"
-                                    );
-                                    if let Ok(mut slot) = ctx.encode_error.lock() {
-                                        *slot = Some("encoder panicked".into());
-                                    }
-                                    encoder = Some(ActiveEncoder {
-                                        enc: Box::new(NullEncoder::new(frame.width, frame.height)),
-                                        width: frame.width,
-                                        height: frame.height,
-                                    });
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            tracing::warn!(%err, "rudp encode: encoder unavailable");
-                        }
+                    if process_frame(
+                        &ctx,
+                        &mut encoder,
+                        &mut supervisor,
+                        &mut warn_limiter,
+                        &render_node,
+                        &frame,
+                    ) {
+                        fps = fps.saturating_add(1);
+                        last = Some((frame.seq, frame.width, frame.height, frame.fds.len()));
                     }
-                    // Drop frame → SlotReleaseGuard returns the pool BO.
+                    // Dropping `frame` returns its pool BO via SlotReleaseGuard.
                 }
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
 
         if last_log.elapsed() >= Duration::from_secs(1) {
-            if let Some((seq, w, h, planes)) = last {
+            if let Some((seq, w, h, planes)) = last
+                && fps > 0
+            {
                 let active = ctx
                     .encode_status
                     .lock()
@@ -976,87 +1176,135 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
         }
     }
 
-    if let Some(mut active) = encoder.take() {
-        let _ = active.enc.flush();
-    }
+    // Drop closes the worker socket and reaps the child (bounded, no flush round-trip).
+    drop(encoder);
+    ctx.hub.set_demand(false);
     tracing::info!("rudp host: frame pipeline stopped");
 }
 
-fn ensure_encoder(
-    encoder: &mut Option<ActiveEncoder>,
+/// Open (if needed) and encode one frame. Returns `true` when encoded.
+fn process_frame(
     ctx: &FramePipelineCtx,
+    encoder: &mut Option<ActiveEncoder>,
+    supervisor: &mut EncoderSupervisor,
+    warn_limiter: &mut WarnLimiter,
     render_node: &str,
     frame: &ExportedFrame,
-) -> Result<bool, String> {
-    let need_new = match encoder {
-        None => true,
-        Some(active) => active.width != frame.width || active.height != frame.height,
+) -> bool {
+    let now = Instant::now();
+    let size_matches = encoder
+        .as_ref()
+        .is_some_and(|a| a.width == frame.width && a.height == frame.height);
+    if !size_matches {
+        // Size change or no encoder yet: replace the worker.
+        *encoder = None;
+        if !supervisor.may_open(now) {
+            return false;
+        }
+        match open_hw_encoder(
+            &ctx.prefs,
+            frame.width,
+            frame.height,
+            render_node,
+            &ctx.stop,
+        ) {
+            Ok(enc) => {
+                let info = enc.info();
+                let label = format!(
+                    "{} / {} ({}x{})",
+                    backend_label(info.backend),
+                    info.codec.as_str(),
+                    info.width,
+                    info.height
+                );
+                tracing::info!(%label, "rudp encode: encoder ready (isolated worker)");
+                ctx.video
+                    .codec
+                    .store(codec_to_u8(info.codec), Ordering::Relaxed);
+                ctx.set_status(label);
+                ctx.set_error(None);
+                *encoder = Some(ActiveEncoder {
+                    enc,
+                    width: frame.width,
+                    height: frame.height,
+                    opened_at: now,
+                });
+            }
+            Err(EncodeError::Cancelled) => return false,
+            Err(err) => {
+                let msg = err.to_string();
+                if supervisor.record_failure(now) {
+                    tracing::error!(
+                        err = %msg,
+                        "rudp encode: hardware encoder unavailable — giving up for this \
+                         session (Remote stays reachable; re-enable in Settings to retry)"
+                    );
+                    ctx.set_status("unavailable");
+                } else {
+                    tracing::warn!(
+                        err = %msg,
+                        failures = supervisor.failures,
+                        "rudp encode: encoder open failed — will retry"
+                    );
+                    ctx.set_status("retrying");
+                }
+                ctx.set_error(Some(msg));
+                return false;
+            }
+        }
+    }
+
+    let Some(active) = encoder.as_mut() else {
+        return false;
     };
-    if !need_new {
-        return Ok(false);
-    }
-    if let Some(mut old) = encoder.take() {
-        let _ = old.enc.flush();
-    }
-    match open_or_null(&ctx.prefs, frame.width, frame.height, render_node) {
-        Ok(enc) => {
-            let info = enc.info();
-            let label = format!(
-                "{} / {} ({}x{})",
-                backend_label(info.backend),
-                info.codec.as_str(),
-                info.width,
-                info.height
-            );
-            tracing::info!(%label, "rudp encode: encoder ready");
-            if let Ok(mut slot) = ctx.encode_status.lock() {
-                *slot = Some(label);
+    match encode_frame(active.enc.as_mut(), frame, &ctx.video, &ctx.bytes_encoded) {
+        Ok(()) => {
+            ctx.frames_encoded.fetch_add(1, Ordering::Relaxed);
+            supervisor.record_success(now.duration_since(active.opened_at));
+            true
+        }
+        Err(err) if !active.enc.is_healthy() => {
+            let msg = err.to_string();
+            *encoder = None;
+            if ctx.stop.load(Ordering::Relaxed) {
+                return false;
             }
-            if let Ok(mut slot) = ctx.encode_error.lock() {
-                *slot = None;
+            if supervisor.record_failure(now) {
+                tracing::error!(
+                    err = %msg,
+                    "rudp encode: encode worker failed repeatedly — hardware encode disabled \
+                     for this session"
+                );
+                ctx.set_status("unavailable");
+            } else {
+                tracing::warn!(
+                    err = %msg,
+                    failures = supervisor.failures,
+                    "rudp encode: encode worker died — restarting after back-off \
+                     (desktop unaffected)"
+                );
+                ctx.set_status("restarting");
             }
-            *encoder = Some(ActiveEncoder {
-                enc,
-                width: frame.width,
-                height: frame.height,
-            });
-            Ok(true)
+            ctx.set_error(Some(msg));
+            false
         }
         Err(err) => {
-            // Do not retry a broken FFmpeg open on every frame — that path has
-            // aborted the whole compositor process. Keep the host alive with a
-            // null encoder so Quinn/auth still work until the user fixes encode.
-            tracing::error!(
-                %err,
-                "rudp encode: hardware encoder unavailable — falling back to null (no video)"
-            );
-            if let Ok(mut slot) = ctx.encode_error.lock() {
-                *slot = Some(err.clone());
+            let msg = err.to_string();
+            if warn_limiter.should_log(&msg) {
+                tracing::warn!(err = %msg, seq = frame.seq, "rudp encode: frame skipped");
             }
-            if let Ok(mut slot) = ctx.encode_status.lock() {
-                *slot = Some("null (encoder unavailable)".into());
-            }
-            *encoder = Some(ActiveEncoder {
-                enc: Box::new(NullEncoder::new(frame.width, frame.height)),
-                width: frame.width,
-                height: frame.height,
-            });
-            Ok(true)
+            ctx.set_error(Some(msg));
+            false
         }
     }
 }
 
 fn encode_frame(
-    encoder: Option<&mut Box<dyn HwEncoder>>,
+    enc: &mut dyn HwEncoder,
     frame: &ExportedFrame,
-    latest_packet: &Arc<Mutex<Option<EncodedPacket>>>,
-    bytes_encoded: &Arc<AtomicU64>,
-    video_width: &Arc<AtomicU32>,
-    video_height: &Arc<AtomicU32>,
-) -> Result<(), String> {
-    let Some(enc) = encoder else {
-        return Err("encoder not open".into());
-    };
+    video: &VideoShared,
+    bytes_encoded: &AtomicU64,
+) -> Result<(), EncodeError> {
     let borrowed: Vec<_> = frame.fds.iter().map(|fd| fd.as_fd()).collect();
     let input = EncodeInput {
         seq: frame.seq,
@@ -1071,13 +1319,13 @@ fn encode_frame(
         damage_full: frame.damage_full,
         damage: &frame.damage,
     };
-    enc.submit(&input).map_err(|e| e.to_string())?;
-    let packets = enc.drain().map_err(|e| e.to_string())?;
-    video_width.store(frame.width, Ordering::Relaxed);
-    video_height.store(frame.height, Ordering::Relaxed);
+    enc.submit(&input)?;
+    let packets = enc.drain()?;
+    video.width.store(frame.width, Ordering::Relaxed);
+    video.height.store(frame.height, Ordering::Relaxed);
     for pkt in packets {
         bytes_encoded.fetch_add(pkt.data.len() as u64, Ordering::Relaxed);
-        if let Ok(mut slot) = latest_packet.lock() {
+        if let Ok(mut slot) = video.latest_packet.lock() {
             *slot = Some(pkt);
         }
     }
@@ -1120,11 +1368,18 @@ pub fn render_node_device_path(node: &smithay::backend::drm::DrmNode) -> PathBuf
 }
 
 /// DRM session bootstrap: env override, else `rudp.json`, else Phase 1 debug export.
+///
+/// Runs the crash-loop guard first: if the previous session died while the
+/// host was starting / streaming, Remote stays off (and is disabled in
+/// `rudp.json` with a Settings notice) instead of risking the same crash.
 pub fn maybe_start_for_session(
     hub: &Arc<StreamExportHub>,
     render_node_path: PathBuf,
     bridge: RudpCalloopBridge,
 ) -> Option<RudpHostSystem> {
+    if crate::rudp_guard::auto_disable_after_crash() {
+        return None;
+    }
     match desired_host() {
         Some((config, users, lan_only, prefs)) => {
             match RudpHostSystem::spawn(
@@ -1154,6 +1409,60 @@ pub fn maybe_start_for_session(
 mod tests {
     use super::*;
     use std::net::SocketAddrV4;
+
+    #[test]
+    fn supervisor_backs_off_then_gives_up() {
+        let t0 = Instant::now();
+        let mut s = EncoderSupervisor::default();
+        assert!(s.may_open(t0));
+        for (i, backoff) in ENCODER_BACKOFF.iter().enumerate() {
+            assert!(!s.record_failure(t0), "failure {i} must not give up yet");
+            assert!(!s.may_open(t0));
+            assert!(s.may_open(t0 + *backoff));
+            assert!(s.take_retry_refresh(t0 + *backoff));
+            assert!(!s.take_retry_refresh(t0 + *backoff), "refresh fires once");
+        }
+        assert!(s.record_failure(t0), "final failure gives up");
+        assert!(!s.may_open(t0 + Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn supervisor_resets_after_healthy_run() {
+        let t0 = Instant::now();
+        let mut s = EncoderSupervisor::default();
+        s.record_failure(t0);
+        s.record_success(Duration::from_secs(1));
+        assert_eq!(s.failures, 1, "short run keeps the failure count");
+        s.record_success(ENCODER_HEALTHY_RESET);
+        assert_eq!(s.failures, 0);
+        assert!(s.may_open(t0));
+    }
+
+    #[test]
+    fn session_guard_counts_and_releases() {
+        let video = Arc::new(VideoShared {
+            latest_packet: Arc::new(Mutex::new(None)),
+            width: AtomicU32::new(0),
+            height: AtomicU32::new(0),
+            codec: AtomicU8::new(CODEC_H264),
+            active_sessions: AtomicUsize::new(0),
+            session_joins: AtomicU64::new(0),
+        });
+        let a = SessionGuard::new(&video);
+        let b = SessionGuard::new(&video);
+        assert_eq!(video.active_sessions.load(Ordering::SeqCst), 2);
+        drop(a);
+        assert_eq!(video.active_sessions.load(Ordering::SeqCst), 1);
+        drop(b);
+        assert_eq!(video.active_sessions.load(Ordering::SeqCst), 0);
+        assert_eq!(video.session_joins.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn codec_wire_names() {
+        assert_eq!(codec_wire_name(codec_to_u8(RudpCodec::H264)), "h264");
+        assert_eq!(codec_wire_name(codec_to_u8(RudpCodec::Hevc)), "hevc");
+    }
 
     #[test]
     fn config_parse_bool() {
@@ -1197,6 +1506,9 @@ mod tests {
         )
         .expect("spawn host");
         assert!(hub.is_armed());
+        // No client yet: armed but no demand ⇒ no export compose at all.
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!hub.wants_frames());
         assert_eq!(host.allowed_users, vec!["alice".to_string()]);
         drop(host);
         assert!(!hub.is_armed());

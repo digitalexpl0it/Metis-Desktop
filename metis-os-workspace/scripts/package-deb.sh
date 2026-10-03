@@ -97,7 +97,8 @@ build_binaries() {
       -p metis-polkit-agent \
       -p metis-viewer \
       -p metis-screenshot \
-      -p metis-gaming
+      -p metis-gaming \
+      -p metis-encode
   )
 }
 
@@ -136,6 +137,8 @@ write_control() {
   esac
   # OCR is a first-class editor feature, not an optional integration.
   depends="${depends}, tesseract-ocr, tesseract-ocr-eng, ffmpeg"
+  # Metis Remote hardware encode (VAAPI) on Intel / AMD.
+  recommends="${recommends}, intel-media-va-driver | i965-va-driver, mesa-va-drivers"
 
   cat >"$STAGE/DEBIAN/control" <<EOF
 Package: ${PKG_NAME}

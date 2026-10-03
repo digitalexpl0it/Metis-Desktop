@@ -24,6 +24,7 @@
   libei,
   openssl,
   mesa,
+  ffmpeg,
   gettext,
   src,
 }:
@@ -80,6 +81,8 @@ rustPlatform.buildRustPackage rec {
     libei
     openssl
     mesa
+    # metis-encode (Metis Remote): libavcodec VAAPI/NVENC + swscale.
+    ffmpeg
   ];
 
   cargoBuildFlags = [
@@ -90,6 +93,8 @@ rustPlatform.buildRustPackage rec {
     "-p" "metis-remote"
     "-p" "metis-viewer"
     "-p" "metis-gaming"
+    # metis-encode-probe: isolated encode worker, must sit next to metis-compositor.
+    "-p" "metis-encode"
   ];
 
   doCheck = false;

@@ -59,9 +59,26 @@ sudo apt install -y \
 Runtime: keep `ffmpeg` installed. Intel/AMD also need a VAAPI driver
 (`intel-media-va-driver-non-free` / `mesa-va-drivers` as appropriate). NVIDIA
 needs the proprietary driver with encode support and an FFmpeg build that
-ships `hevc_nvenc` / `h264_nvenc`. There is no silent software x264/x265
-encode fallback — if the chosen backend cannot open, Settings/status reports
-the error.
+ships `hevc_nvenc` / `h264_nvenc`. Install also ships `metis-encode-probe`,
+which must sit next to `metis-compositor`: it is both the codec probe and the
+isolated encode worker (`metis-encode-probe worker 3`). The compositor never
+loads FFmpeg / libva / CUDA in-process, so a driver abort or segfault only
+restarts the worker. There is no silent software x264/x265 encode fallback —
+if the chosen backend cannot open, the host logs the full attempt ladder.
+
+Hardware smoke test (real VAAPI encode through the worker, plus a deliberate
+worker `abort()` that must come back as a clean error):
+
+```bash
+cd metis-os-workspace
+# VAAPI (Intel / AMD render node):
+METIS_TEST_RENDER_NODE=/dev/dri/renderD128 cargo test -p metis-encode --test worker_smoke -- --nocapture
+# NVENC (NVIDIA, H.264 + HEVC; optional METIS_TEST_NVENC_NODE=/dev/dri/renderD12x):
+METIS_TEST_NVENC=1 cargo test -p metis-encode --test worker_smoke -- --nocapture
+```
+
+The NVENC tests assert the encoder really is NVENC (no silent VAAPI fallback)
+and print open / encode timings.
 
 ### Lock screen biometrics (optional)
 

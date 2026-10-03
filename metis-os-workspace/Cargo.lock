@@ -2500,6 +2500,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2627,6 +2628,7 @@ dependencies = [
 name = "metis-rudp-smoke"
 version = "0.1.19"
 dependencies = [
+ "libc",
  "metis-protocol",
  "metis-rudp-client",
  "tokio",

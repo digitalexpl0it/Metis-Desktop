@@ -319,7 +319,7 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
             BUILD_ARGS+=("$prof")
         fi
     fi
-    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming; then
+    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode; then
         echo "ERROR: release build failed." >&2
         exit 1
     fi
@@ -343,6 +343,13 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
     echo "Installing binaries to $BIN_DST …"
     $SUDO install -Dm755 "$REL/metis-compositor" "$BIN_DST/metis-compositor"
     $SUDO install -Dm755 "$REL/metis-shell" "$BIN_DST/metis-shell"
+    # Isolated encode worker + probe: all FFmpeg/libva/CUDA code runs here so a
+    # driver crash can never take down the compositor. Must sit next to it.
+    if [[ -x "$REL/metis-encode-probe" ]]; then
+        $SUDO install -Dm755 "$REL/metis-encode-probe" "$BIN_DST/metis-encode-probe"
+    else
+        echo "WARNING: metis-encode-probe missing — Metis Remote will have no video until rebuilt." >&2
+    fi
     if [[ -x "$REL/metis-settings" ]]; then
         $SUDO install -Dm755 "$REL/metis-settings" "$BIN_DST/metis-settings"
     fi
@@ -904,11 +911,11 @@ export RUST_LOG="${RUST_LOG:-metis_shell=info,metis_compositor=info,warn}"
                 BUILD_ARGS+=("$prof")
             fi
         fi
-        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming)
+        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode)
     else
         SHELL_BIN="$TARGET_DIR/debug/metis-shell"
         COMP_BIN="$TARGET_DIR/debug/metis-compositor"
-        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming)
+        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode)
     fi
 
     if [[ "$FORCE_BUILD" -eq 1 ]] || binary_needs_rebuild "$SHELL_BIN" || binary_needs_rebuild "$COMP_BIN"; then

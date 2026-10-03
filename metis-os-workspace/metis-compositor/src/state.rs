@@ -5075,6 +5075,10 @@ impl MetisState {
                     RudpInputEvent::Key { keycode, pressed } => {
                         state.inject_remote_key(keycode, pressed);
                     }
+                    RudpInputEvent::RefreshVideo => {
+                        state.stream_export.request_full_frame();
+                        state.schedule_redraw();
+                    }
                 }
             })
         {

@@ -12,8 +12,12 @@
 //! pixels.
 //!
 //! Guardrails:
-//! - Prefer linear GBM modifiers for the export pool (encode / VAAPI import);
-//!   CCS/tiled BOs as GLES targets have killed the DRM session on Intel.
+//! - Armed is not enough: nothing is composed until a consumer sets demand
+//!   ([`StreamExportHub::set_demand`]) — enabling Metis Remote with no client
+//!   connected adds zero GPU work to the session.
+//! - LINEAR GBM buffers only for the export pool (CPU-read by the isolated
+//!   encode worker); CCS/tiled BOs as GLES targets have killed the DRM session
+//!   on Intel.
 //! - Do not `sync.wait()` on the render thread — export an explicit fence FD
 //!   (and keep [`SyncPoint`] for the consumer when export is unavailable).
 //! - Pool slots use [`SlotReleaseGuard`] so dropped / superseded frames free
@@ -101,14 +105,14 @@ impl std::fmt::Debug for ExportedFrame {
 }
 
 impl ExportedFrame {
-    /// Block until GPU work for this frame is complete (encode / debug thread only).
-    pub fn wait_ready(&self) {
+    /// Block (encode / debug thread only) until GPU work for this frame is
+    /// complete or `timeout` elapses. Returns `false` on timeout / error — the
+    /// caller must drop the frame rather than read a half-rendered buffer.
+    pub fn wait_ready(&self, timeout: Duration) -> bool {
         if let Some(fence) = &self.fence {
-            // Native sync_file: poll until readable (signalled).
-            wait_sync_file(fence);
-            return;
+            return wait_sync_file(fence, timeout);
         }
-        let _ = self.sync.wait();
+        self.sync.wait().is_ok()
     }
 }
 
@@ -152,23 +156,38 @@ fn rects_from_smithay(rects: &[Rectangle<i32, Physical>]) -> Vec<DamageRect> {
         .collect()
 }
 
-fn wait_sync_file(fd: &OwnedFd) {
+/// Poll a sync_file until signalled. A wedged GPU must not wedge the encode
+/// thread (compositor shutdown joins it), so the wait is bounded.
+fn wait_sync_file(fd: &OwnedFd, timeout: Duration) -> bool {
     use std::os::fd::AsRawFd;
-    let mut pollfd = libc::pollfd {
-        fd: fd.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    // -1 timeout: wait until signalled (encode thread only).
+    let deadline = Instant::now() + timeout;
     loop {
-        let rc = unsafe { libc::poll(&mut pollfd, 1, -1) };
-        if rc >= 0 {
-            break;
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            tracing::warn!(
+                ?timeout,
+                "stream export: GPU fence not signalled — dropping frame"
+            );
+            return false;
+        }
+        let mut pollfd = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ms = i32::try_from(left.as_millis()).unwrap_or(i32::MAX).max(1);
+        // SAFETY: one valid pollfd on an fd we own.
+        let rc = unsafe { libc::poll(&mut pollfd, 1, ms) };
+        if rc > 0 {
+            return pollfd.revents & (libc::POLLERR | libc::POLLNVAL) == 0;
+        }
+        if rc == 0 {
+            continue;
         }
         let err = std::io::Error::last_os_error();
         if err.kind() != std::io::ErrorKind::Interrupted {
             tracing::debug!(?err, "stream export: sync_file poll failed");
-            break;
+            return false;
         }
     }
 }
@@ -225,7 +244,7 @@ impl PoolState {
         gbm: &GbmDevice<DrmDeviceFd>,
         width: u32,
         height: u32,
-        preferred_modifiers: &[Modifier],
+        _preferred_modifiers: &[Modifier],
     ) -> Result<(), String> {
         if width == 0 || height == 0 {
             return Err("zero-sized stream export buffer".into());
@@ -244,26 +263,25 @@ impl PoolState {
             DmabufAllocator(GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING));
 
         // Stream export feeds remote encode (VAAPI/NVENC), not local scanout.
-        // Prefer LINEAR first: Intel CCS/tiled BOs as GLES render targets + DRM_PRIME
-        // imports have aborted the DRM session (blank screen after wallpaper).
-        let mut mods: Vec<Modifier> = vec![Modifier::Linear, Modifier::Invalid];
-        for m in preferred_modifiers {
-            let label = format!("{m:?}");
-            if label.to_ascii_lowercase().contains("ccs") {
-                continue;
-            }
-            if *m != Modifier::Linear && *m != Modifier::Invalid && !mods.contains(m) {
-                mods.push(*m);
-            }
-        }
+        // LINEAR ONLY — never pass Modifier::Invalid. GBM treats Invalid as "driver
+        // pick" and often returns I915_y_tiled; composing into that BO with GLES has
+        // aborted the DRM session (blank screen after wallpaper).
+        let linear = [Modifier::Linear];
 
         for _ in 0..POOL_SIZE {
             let dmabuf = allocator
-                .create_buffer(width, height, self.fourcc, &mods)
-                .or_else(|_| allocator.create_buffer(width, height, Fourcc::Argb8888, &mods))
-                .map_err(|e| format!("stream export dmabuf allocate: {e}"))?;
+                .create_buffer(width, height, self.fourcc, &linear)
+                .or_else(|_| allocator.create_buffer(width, height, Fourcc::Argb8888, &linear))
+                .map_err(|e| {
+                    format!("stream export dmabuf allocate (LINEAR required for RUDP): {e}")
+                })?;
             self.fourcc = AllocBuffer::format(&dmabuf).code;
             let got_mod = AllocBuffer::format(&dmabuf).modifier;
+            if got_mod != Modifier::Linear {
+                return Err(format!(
+                    "stream export: expected LINEAR dmabuf, got {got_mod:?} — refusing tiled export"
+                ));
+            }
             self.slots.push(PoolSlot {
                 dmabuf,
                 width,
@@ -278,7 +296,7 @@ impl PoolState {
             fourcc = ?self.fourcc,
             modifier = ?AllocBuffer::format(&self.slots[0].dmabuf).modifier,
             pool = POOL_SIZE,
-            "stream export: GBM dmabuf pool ready (linear-first for encode)"
+            "stream export: GBM dmabuf pool ready (LINEAR only for encode)"
         );
         Ok(())
     }
@@ -305,6 +323,12 @@ impl PoolState {
 /// consumer without ever blocking the producer.
 pub struct StreamExportHub {
     enabled: AtomicBool,
+    /// A consumer actually wants frames (e.g. an authenticated RUDP client).
+    /// Armed-but-idle costs nothing: no second compose, no pool BOs touched.
+    demand: AtomicBool,
+    /// Next export ignores scene damage and publishes a full frame (client
+    /// join / encoder restart — the decoder needs a complete picture).
+    force_full: AtomicBool,
     seq: AtomicU64,
     latest: Mutex<Option<ExportedFrame>>,
     wake_tx: Mutex<Option<SyncSender<()>>>,
@@ -323,6 +347,8 @@ impl StreamExportHub {
     pub fn new() -> Self {
         Self {
             enabled: AtomicBool::new(false),
+            demand: AtomicBool::new(false),
+            force_full: AtomicBool::new(false),
             seq: AtomicU64::new(0),
             latest: Mutex::new(None),
             wake_tx: Mutex::new(None),
@@ -334,6 +360,36 @@ impl StreamExportHub {
 
     pub fn is_armed(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Armed **and** a consumer is waiting — only then compose export frames.
+    pub fn wants_frames(&self) -> bool {
+        self.is_armed() && self.demand.load(Ordering::Relaxed)
+    }
+
+    /// Start / stop producing frames. Rising edge forces a full frame.
+    pub fn set_demand(&self, wanted: bool) {
+        let was = self.demand.swap(wanted, Ordering::SeqCst);
+        if wanted && !was {
+            self.reset_damage_tracker();
+            self.force_full.store(true, Ordering::SeqCst);
+            tracing::info!("stream export: consumer attached — producing frames");
+        } else if !wanted && was {
+            if let Ok(mut latest) = self.latest.lock() {
+                *latest = None;
+            }
+            tracing::info!("stream export: no consumer — export idle");
+        }
+    }
+
+    /// Ask for the next export to be a full frame even without scene damage.
+    pub fn request_full_frame(&self) {
+        self.force_full.store(true, Ordering::SeqCst);
+    }
+
+    /// True when the render loop should export even if the local frame was empty.
+    pub fn forced_frame_pending(&self) -> bool {
+        self.wants_frames() && self.force_full.load(Ordering::Relaxed)
     }
 
     fn reset_damage_tracker(&self) {
@@ -352,6 +408,8 @@ impl StreamExportHub {
             *latest = None;
         }
         self.reset_damage_tracker();
+        self.demand.store(false, Ordering::SeqCst);
+        self.force_full.store(false, Ordering::SeqCst);
         self.enabled.store(true, Ordering::SeqCst);
         tracing::info!("stream export: armed (latest-wins + slot RAII, wake cap {WAKE_CAP})");
         rx
@@ -359,6 +417,8 @@ impl StreamExportHub {
 
     pub fn disarm(&self) {
         self.enabled.store(false, Ordering::SeqCst);
+        self.demand.store(false, Ordering::SeqCst);
+        self.force_full.store(false, Ordering::SeqCst);
         if let Ok(mut slot) = self.wake_tx.lock() {
             *slot = None;
         }
@@ -378,6 +438,7 @@ impl StreamExportHub {
     /// encode latency (Phase 1 proof of latest-wins + slot release).
     pub fn arm_debug_consumer(self: &Arc<Self>) {
         let wake = self.arm();
+        self.set_demand(true);
         let hub = Arc::clone(self);
         let handle = std::thread::Builder::new()
             .name("metis-stream-export".into())
@@ -424,7 +485,9 @@ fn debug_consumer_loop(hub: Arc<StreamExportHub>, wake: Receiver<()>) {
     let mut last_meta: Option<(u32, u32, u64, u64, usize)> = None;
     while let Ok(()) | Err(RecvTimeoutError::Timeout) = wake.recv_timeout(Duration::from_secs(2)) {
         while let Some(frame) = hub.take_latest() {
-            frame.wait_ready();
+            if !frame.wait_ready(Duration::from_millis(500)) {
+                continue;
+            }
             frame_count = frame_count.saturating_add(1);
             last_meta = Some((
                 frame.width,
@@ -474,31 +537,9 @@ fn dup_planes(dmabuf: &Dmabuf) -> Result<PlaneExport, String> {
     Ok((fds, offsets, strides))
 }
 
-fn preferred_modifiers_for_export(state: &MetisState) -> Vec<Modifier> {
-    let Some(udev) = state.udev.as_ref() else {
-        return vec![Modifier::Linear, Modifier::Invalid];
-    };
-    let preferred_codes = [
-        Fourcc::Xrgb8888,
-        Fourcc::Argb8888,
-        Fourcc::Xbgr8888,
-        Fourcc::Abgr8888,
-    ];
-    // Linear first — encode path + GLES compose must not pick CCS by default.
-    let mut mods = vec![Modifier::Linear, Modifier::Invalid];
-    for fmt in udev.capture_dmabuf_formats.iter() {
-        if !preferred_codes.contains(&fmt.code) {
-            continue;
-        }
-        let label = format!("{:?}", fmt.modifier);
-        if label.to_ascii_lowercase().contains("ccs") {
-            continue;
-        }
-        if !mods.contains(&fmt.modifier) {
-            mods.push(fmt.modifier);
-        }
-    }
-    mods
+fn preferred_modifiers_for_export(_state: &MetisState) -> Vec<Modifier> {
+    // Allocation insists on LINEAR alone; keep the helper for API stability.
+    vec![Modifier::Linear]
 }
 
 /// Second-pass compose of `output` into the export pool; publish if armed.
@@ -507,16 +548,19 @@ fn preferred_modifiers_for_export(state: &MetisState) -> Vec<Modifier> {
 /// No-ops when disarmed, on non-primary outputs, or when GBM is unavailable.
 /// Never blocks on GPU sync — fence / [`SyncPoint`] travel with the frame.
 ///
-/// Skips publish when the persistent damage tracker reports no scene change.
+/// Skips publish when the persistent damage tracker reports no scene change,
+/// unless a full frame was requested ([`StreamExportHub::request_full_frame`]).
+/// Does nothing at all until a consumer signals demand.
 pub fn maybe_export_frame(
     state: &mut MetisState,
     renderer: &mut GlesRenderer,
     render_node: DrmNode,
     output: &Output,
 ) {
-    if !state.stream_export.is_armed() {
+    if !state.stream_export.wants_frames() {
         return;
     }
+    let forced = state.stream_export.force_full.load(Ordering::Relaxed);
     if output.name().as_str() != state.primary_key() {
         return;
     }
@@ -624,9 +668,10 @@ pub fn maybe_export_frame(
                 Some((true, Vec::new()))
             }
         };
-        match classified {
-            None => return,
-            Some(v) => v,
+        match (classified, forced) {
+            (_, true) => (true, Vec::new()),
+            (None, false) => return,
+            (Some(v), false) => v,
         }
     };
 
@@ -684,6 +729,12 @@ pub fn maybe_export_frame(
         sync,
         _slot_guard: Some(slot_guard),
     };
+    if forced {
+        state
+            .stream_export
+            .force_full
+            .store(false, Ordering::SeqCst);
+    }
     state.stream_export.try_publish(frame);
 }
 
@@ -789,6 +840,43 @@ mod tests {
         assert_eq!(got.seq, 5);
         assert!(hub.take_latest().is_none());
         hub.disarm();
+    }
+
+    #[test]
+    fn demand_gates_frames_and_forces_full() {
+        let hub = StreamExportHub::new();
+        let _wake = hub.arm();
+        assert!(hub.is_armed());
+        assert!(!hub.wants_frames(), "armed alone must not compose");
+        assert!(!hub.forced_frame_pending());
+        hub.set_demand(true);
+        assert!(hub.wants_frames());
+        assert!(
+            hub.forced_frame_pending(),
+            "consumer attach forces a full frame"
+        );
+        hub.try_publish(test_frame(1));
+        hub.set_demand(false);
+        assert!(!hub.wants_frames());
+        assert!(hub.take_latest().is_none(), "demand off drops queued frame");
+        hub.disarm();
+        assert!(!hub.forced_frame_pending());
+    }
+
+    #[test]
+    fn fence_wait_is_bounded() {
+        // An unsignalled pipe read end stands in for a wedged GPU fence.
+        let mut fds = [0i32; 2];
+        // SAFETY: plain pipe(2) into a local array.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        // SAFETY: fresh fds we own.
+        let (read, _write) = unsafe {
+            use std::os::fd::FromRawFd;
+            (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1]))
+        };
+        let started = Instant::now();
+        assert!(!wait_sync_file(&read, Duration::from_millis(50)));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

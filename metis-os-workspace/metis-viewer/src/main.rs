@@ -265,9 +265,15 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     panel_header.append(&cancel_btn);
     panel.append(&panel_header);
 
-    if !freerdp_ok {
-        panel.append(&missing_freerdp_banner());
-    }
+    let initial_protocol = if prefill.rudp {
+        ViewerProtocol::Rudp
+    } else {
+        ViewerProtocol::Rdp
+    };
+
+    let freerdp_banner = missing_freerdp_banner();
+    freerdp_banner.set_visible(!freerdp_ok && initial_protocol == ViewerProtocol::Rdp);
+    panel.append(&freerdp_banner);
 
     let host_entry = gtk::Entry::new();
     host_entry.set_placeholder_text(Some(&tr("Hostname or IP")));
@@ -282,11 +288,6 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     port_entry.set_max_length(5);
     port_entry.set_width_chars(5);
     port_entry.set_max_width_chars(5);
-    let initial_protocol = if prefill.rudp {
-        ViewerProtocol::Rudp
-    } else {
-        ViewerProtocol::Rdp
-    };
     port_entry.set_text(
         &prefill
             .port
@@ -300,21 +301,6 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         ViewerProtocol::Rdp => 0,
         ViewerProtocol::Rudp => 1,
     });
-    {
-        let port_entry = port_entry.clone();
-        protocol_dropdown.connect_selected_notify(move |dd| {
-            let proto = if dd.selected() == 1 {
-                ViewerProtocol::Rudp
-            } else {
-                ViewerProtocol::Rdp
-            };
-            // Only rewrite port when it still looks like the other protocol's default.
-            let cur = port_entry.text();
-            if cur.is_empty() || cur.as_str() == "3389" || cur.as_str() == "7843" {
-                port_entry.set_text(&proto.default_port().to_string());
-            }
-        });
-    }
     panel.append(&field_box(&tr("Protocol"), &protocol_dropdown));
 
     let host_port = gtk::Box::new(gtk::Orientation::Horizontal, 10);
@@ -356,20 +342,31 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     pass_entry.set_show_peek_icon(true);
     pass_entry.set_placeholder_text(Some(&tr("Optional")));
     panel.append(&field_box(&tr("Password"), &pass_entry));
-    let pass_hint = gtk::Label::new(Some(&tr(
-        "Leave blank to let FreeRDP prompt. Passwords are never saved.",
-    )));
+    let pass_hint = gtk::Label::new(None);
     pass_hint.set_xalign(0.0);
     pass_hint.set_wrap(true);
     pass_hint.add_css_class("metis-viewer-hint");
     panel.append(&pass_hint);
 
+    // RDP-only: FreeRDP advanced notebook. Hidden for Metis Remote.
     let options_ui = Rc::new(OptionsUi::build());
+    let rdp_options = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    rdp_options.add_css_class("metis-viewer-rdp-options");
     let options_header = gtk::Label::new(Some(&tr("Advanced Desktop Settings")));
     options_header.set_xalign(0.0);
     options_header.add_css_class("metis-viewer-card-title");
-    panel.append(&options_header);
-    panel.append(&options_ui.root);
+    rdp_options.append(&options_header);
+    rdp_options.append(&options_ui.root);
+    panel.append(&rdp_options);
+
+    let rudp_hint = gtk::Label::new(Some(&tr(
+        "Metis Remote uses your local PAM password. Video is hardware-encoded \
+         on the host; no FreeRDP options apply.",
+    )));
+    rudp_hint.set_xalign(0.0);
+    rudp_hint.set_wrap(true);
+    rudp_hint.add_css_class("metis-viewer-hint");
+    panel.append(&rudp_hint);
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.add_css_class("metis-viewer-actions");
@@ -378,17 +375,75 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     save_btn.add_css_class("metis-viewer-secondary");
     let connect_btn = gtk::Button::with_label(&tr("Connect"));
     connect_btn.add_css_class("suggested-action");
-    connect_btn.set_sensitive(freerdp_ok);
     actions.append(&save_btn);
     actions.append(&connect_btn);
     panel.append(&actions);
+
+    // Cap form height so Advanced Desktop Settings scroll inside the panel
+    // instead of stretching the whole Viewer window.
+    let form_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .max_content_height(360)
+        .hexpand(true)
+        .build();
+    form_scroll.add_css_class("metis-viewer-add-scroll");
+    form_scroll.set_child(Some(&panel));
 
     let revealer = gtk::Revealer::new();
     revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     revealer.set_transition_duration(220);
     revealer.set_reveal_child(false);
-    revealer.set_child(Some(&panel));
+    revealer.set_child(Some(&form_scroll));
     page.append(&revealer);
+
+    let sync_protocol_ui = {
+        let port_entry = port_entry.clone();
+        let pass_hint = pass_hint.clone();
+        let rdp_options = rdp_options.clone();
+        let rudp_hint = rudp_hint.clone();
+        let connect_btn = connect_btn.clone();
+        let freerdp_banner = freerdp_banner.clone();
+        Rc::new(move |proto: ViewerProtocol| {
+            let cur = port_entry.text();
+            if cur.is_empty() || cur.as_str() == "3389" || cur.as_str() == "7843" {
+                port_entry.set_text(&proto.default_port().to_string());
+            }
+            match proto {
+                ViewerProtocol::Rdp => {
+                    pass_hint.set_text(&tr(
+                        "Leave blank to let FreeRDP prompt. Passwords are never saved.",
+                    ));
+                    rdp_options.set_visible(true);
+                    rudp_hint.set_visible(false);
+                    freerdp_banner.set_visible(!freerdp_ok);
+                    connect_btn.set_sensitive(freerdp_ok);
+                }
+                ViewerProtocol::Rudp => {
+                    pass_hint.set_text(&tr(
+                        "Required — local PAM password on the host. Never saved.",
+                    ));
+                    rdp_options.set_visible(false);
+                    rudp_hint.set_visible(true);
+                    freerdp_banner.set_visible(false);
+                    connect_btn.set_sensitive(true);
+                }
+            }
+        })
+    };
+    sync_protocol_ui(initial_protocol);
+    {
+        let sync_protocol_ui = sync_protocol_ui.clone();
+        protocol_dropdown.connect_selected_notify(move |dd| {
+            let proto = if dd.selected() == 1 {
+                ViewerProtocol::Rudp
+            } else {
+                ViewerProtocol::Rdp
+            };
+            sync_protocol_ui(proto);
+        });
+    }
 
     // Always visible — card connects close the panel, so status must live outside it.
     let status = gtk::Label::new(None);
@@ -440,8 +495,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     let empty_title = gtk::Label::new(Some(&tr("No saved hosts")));
     empty_title.add_css_class("metis-viewer-empty-title");
     let empty_body = gtk::Label::new(Some(&tr(
-        "Add a host to connect with FreeRDP. Sharing is enabled on the remote \
-         machine under Settings → Remote access.",
+        "Add a host for Metis Remote or classic RDP. Metis Remote is enabled on \
+         the host under Settings → Metis Remote; RDP under Remote access.",
     )));
     empty_body.set_wrap(true);
     empty_body.set_justify(gtk::Justification::Center);

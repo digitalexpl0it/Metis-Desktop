@@ -123,7 +123,7 @@ mkdir -p \
   "$STAGE/etc/pam.d"
 
 rel="$CARGO_TARGET_DIR/release"
-for bin in metis-compositor metis-shell metis-settings metis-portal metis-remote metis-polkit-agent metis-viewer metis-gamingd metis-screenshot; do
+for bin in metis-compositor metis-shell metis-settings metis-portal metis-remote metis-polkit-agent metis-viewer metis-gamingd metis-screenshot metis-encode-probe; do
   require_bin "$rel/$bin"
   install -Dm755 "$rel/$bin" "$STAGE/usr/bin/$bin"
 done

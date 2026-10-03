@@ -1074,12 +1074,21 @@ game session ends.
    and asks the compositor to listen (default UDP **7843**).
 3. Set the **UDP port** if needed (1024–65535).
 4. Under **Hardware encode**, choose **Encoder** (`Auto` / `VAAPI` / `NVENC`),
-   preferred codec (HEVC first, with H.264 fallback), and target **Bitrate**.
-   Auto selects NVENC on NVIDIA render nodes and VAAPI on Intel/AMD. Capture uses
-   a linear GBM pool; VAAPI imports DRM-PRIME into NV12 surfaces (with a Linear
-   mmap + swscale upload fallback when hwmap is unavailable). Encode failures
-   never take down the session — the host stays up and logs the error.
-   Unchanged frames are skipped; sparse vs full damage is tagged for the client.
+   preferred codec (H.264 default, HEVC optional with H.264 fallback), and target
+   **Bitrate**. Auto uses the render GPU's encoder first (VAAPI on Intel/AMD,
+   NVENC on NVIDIA) and falls back to the other GPU on hybrid systems.
+   Nothing is captured or encoded until an authenticated client connects —
+   enabling the host adds no GPU work on its own. Capture uses a LINEAR GBM
+   pool; frames are converted to NV12 and encoded inside a separate
+   `metis-encode-probe worker` process. A driver crash or hang there restarts
+   the encoder (with back-off, up to three times) and never takes down the
+   desktop. Unchanged frames are skipped; sparse vs full damage is tagged for
+   the client.
+
+   If a desktop session ever ends unexpectedly while Remote is starting or
+   streaming, Metis turns the host off at the next login and Settings shows a
+   notice — re-enable it to try again. This guarantees a broken driver can't
+   cause a login crash loop.
    Encoded video ships as Quinn datagrams with FEC (keyframes on a reliable
    stream).
 5. Under **Allowed accounts**, toggle which local system users may authenticate
@@ -1484,7 +1493,7 @@ changes live.
 | Update install stops on a config-file prompt | The updater should offer **Keep my version** / **Use package version**. If packages were left half-configured from an older build: `sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --fix-broken install` |
 | User list shows default icon instead of DE picture | Metis reads `~/.face`, `~/.face.icon`, then `/var/lib/AccountsService/icons/<username>`. Set a picture in Settings → Users or ensure the AccountsService icon exists and is world-readable |
 | RDP connects but screen is black | Confirm you are on a DRM session (not nested dev); unlock if the session is locked; check `metis-remote status` and PipeWire/portal stack |
-| Enabling Metis Remote blanks the session / kicks you out | Fixed 2026-10-01: VAAPI no longer feeds `DRM_PRIME` into `*_vaapi` (requires `VAAPI` NV12); export pool is linear-first (CCS GLES targets crashed Intel). Rebuild/reinstall compositor (`./run-metis.sh --install-session`), keep `rudp.json` `"enabled": false` until reinstalled, then re-enable. If it still fails, set `"enabled": false` from a TTY and check `~/.local/state/metis/logs/session-latest.log` for `hevc_vaapi` / `rudp encode` lines |
+| Enabling Metis Remote blanks the session / kicks you out | Fixed 2026-10-02: all FFmpeg / VAAPI / NVENC code now runs in a separate `metis-encode-probe worker` process, so a driver crash restarts the encoder instead of the desktop; nothing is captured or encoded until a client authenticates; export buffers are **LINEAR-only**; default codec is H.264. Log out, then reinstall from a TTY or another session (`./metis-shell/run-metis.sh --install-session` — installs `metis-encode-probe` next to the compositor). If Settings shows "turned off automatically", the crash guard caught an unclean session end — re-enable to retry. If video stays black, check logs for `encode worker` / `encoder open failed` — the desktop stays up |
 | Login shows wallpaper for ~25s before the edge bar | Fixed 2026-10-01: leftover greeter/`xdg-desktop-portal` on the bus made `gtk::init()` wait the Settings portal timeout. Metis now replaces stale portal daemons at session start and spawns the shell with `GDK_DEBUG=no-portals`. Rebuild/reinstall and re-login. Check logs for `gtk::init() was slow` / `replacing leftover portal daemon` |
 | `metis-remote` not found | Package may be missing — `dpkg -l metis-desktop` and reinstall with `sudo apt install ./metis-desktop_*.deb`. Dev trees: `./run-metis.sh --install-session` |
 | Metis Viewer: `cliprdr_… failed` / instant disconnect | Update Viewer (clipboard channel disabled in spawn). **Do not RDP into the same session from itself** — connect from another machine (e.g. the KVM host → guest IP) |

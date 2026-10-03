@@ -1042,6 +1042,20 @@ latency and clear setup docs.
       Settings bind address + **Connect with Metis Viewer…**; host relative
       inject when locked. Residual: HW decode; clipboard; promote past
       experimental (GRD remains default under **Remote access**).
+- [x] **RUDP host crash containment** (2026-10-02) — enabling Metis Remote
+      crashed the DRM session at login (Y-tiled export BO, `AVDictionary`
+      double-free, then `av_hwframe_map` treating our DRM descriptor as an
+      unmap → segfault). Now: all FFmpeg/libva/CUDA runs in an isolated
+      `metis-encode-probe worker` (socketpair + SCM_RIGHTS, PDEATHSIG, fd
+      scrub, bounded timeouts); validated LINEAR mmap + `DMA_BUF_IOCTL_SYNC`
+      + swscale NV12 upload (no hwmap); export/encode demand-gated on
+      authenticated sessions (IDR + forced full frame on join); bounded
+      fence waits / Quinn shutdown; encoder restart back-off (3 then give up);
+      crash-loop guard marker auto-disables the host with a Settings notice;
+      Auto backend = render-GPU encoder first, cross-vendor fallback.
+      Residual: zero-copy VAAPI import via VPP (RGB→NV12) once it can be
+      proven safe inside the worker; per-packet queue instead of latest-wins
+      slot so deltas are never skipped under a slow keyframe write.
 
 ### C. Security & session policy
 

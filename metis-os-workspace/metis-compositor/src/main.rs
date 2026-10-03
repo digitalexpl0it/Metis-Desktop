@@ -38,6 +38,7 @@ mod output_vrr;
 mod pam_auth;
 mod remote_input;
 mod render;
+mod rudp_guard;
 mod rudp_host;
 mod rudp_identity;
 mod screenshot_overlay;
@@ -281,6 +282,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // next session can fail to become master and the TTY is left on a black
     // framebuffer). Dropping `UdevState` drops the DrmDevice + libseat session.
     if state.is_drm_backend() {
+        // Stop Remote first: joins its threads, reaps the encode worker, and
+        // clears the crash-guard marker before the GPU goes away.
+        state.rudp_host = None;
         tracing::info!("releasing DRM devices and seat session");
         state.udev = None;
     }

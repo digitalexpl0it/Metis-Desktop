@@ -27,6 +27,23 @@ pub fn build() -> gtk::Widget {
     hint.add_css_class("metis-settings-hint");
     content.append(&hint);
 
+    // Shown when the compositor's crash-loop guard switched the host off.
+    let guard_banner = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    guard_banner.add_css_class("metis-settings-banner");
+    guard_banner.set_margin_bottom(12);
+    let guard_icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+    guard_icon.set_valign(gtk::Align::Start);
+    guard_banner.append(&guard_icon);
+    let guard_text = gtk::Label::new(None);
+    guard_text.set_xalign(0.0);
+    guard_text.set_wrap(true);
+    guard_text.set_hexpand(true);
+    guard_banner.append(&guard_text);
+    let guard_dismiss = gtk::Button::with_label(&tr("Dismiss"));
+    guard_dismiss.set_valign(gtk::Align::Center);
+    guard_banner.append(&guard_dismiss);
+    content.append(&guard_banner);
+
     let (host_card, host_body) =
         ui::section_with_icon(&tr("Metis Remote"), "network-workgroup-symbolic");
 
@@ -100,9 +117,11 @@ pub fn build() -> gtk::Widget {
     let (enc_card, enc_body) =
         ui::section_with_icon(&tr("Hardware encode"), "video-display-symbolic");
     let enc_hint = gtk::Label::new(Some(&tr(
-        "Auto picks NVENC on NVIDIA render nodes and VAAPI elsewhere. Prefer HEVC; \
-         the host falls back to H.264 if the preferred codec cannot open. Requires \
-         system FFmpeg with VAAPI and/or NVENC.",
+        "Auto uses the desktop's render GPU (VAAPI on Intel/AMD, NVENC on NVIDIA) \
+         and falls back between them. Default is H.264 (widely available). Encoding \
+         runs in a separate sandboxed process and only while a client is connected — \
+         a driver fault restarts the encoder, never the desktop. Requires system \
+         FFmpeg with VAAPI and/or NVENC.",
     )));
     enc_hint.set_xalign(0.0);
     enc_hint.set_wrap(true);
@@ -116,7 +135,7 @@ pub fn build() -> gtk::Widget {
     encoder_dd.set_halign(gtk::Align::End);
     enc_body.append(&ui::row(&tr("Encoder"), &encoder_dd));
 
-    let codec_labels = [tr("HEVC (H.265)"), tr("H.264")];
+    let codec_labels = [tr("H.264"), tr("HEVC (H.265)")];
     let codec_refs: Vec<&str> = codec_labels.iter().map(|s| s.as_str()).collect();
     let codec_dd = gtk::DropDown::from_strings(&codec_refs);
     codec_dd.set_selected(codec_index(cfg.borrow().codec));
@@ -160,9 +179,18 @@ pub fn build() -> gtk::Widget {
         let conn_addr = conn_addr.clone();
         let fw_status = fw_status.clone();
         let retry_fw = retry_fw.clone();
+        let guard_banner = guard_banner.clone();
+        let guard_text = guard_text.clone();
         let cfg = cfg.clone();
         Rc::new(move || {
             let c = cfg.borrow();
+            match c.auto_disabled_reason.as_deref().filter(|_| !c.enabled) {
+                Some(reason) => {
+                    guard_text.set_text(&tr(reason));
+                    guard_banner.set_visible(true);
+                }
+                None => guard_banner.set_visible(false),
+            }
             if c.enabled {
                 status.set_text(&format!(
                     "{} (UDP {})",
@@ -204,6 +232,14 @@ pub fn build() -> gtk::Widget {
         })
     };
 
+    {
+        let cfg = cfg.clone();
+        let persist = persist.clone();
+        guard_dismiss.connect_clicked(move |_| {
+            cfg.borrow_mut().auto_disabled_reason = None;
+            persist();
+        });
+    }
     {
         let fingerprint = fingerprint.clone();
         copy_fp.connect_clicked(move |_| {
@@ -341,15 +377,15 @@ fn encoder_backend_from_index(idx: u32) -> RudpEncoderBackend {
 
 fn codec_index(codec: RudpVideoCodec) -> u32 {
     match codec {
-        RudpVideoCodec::Hevc => 0,
-        RudpVideoCodec::H264 => 1,
+        RudpVideoCodec::H264 => 0,
+        RudpVideoCodec::Hevc => 1,
     }
 }
 
 fn codec_from_index(idx: u32) -> RudpVideoCodec {
     match idx {
-        1 => RudpVideoCodec::H264,
-        _ => RudpVideoCodec::Hevc,
+        1 => RudpVideoCodec::Hevc,
+        _ => RudpVideoCodec::H264,
     }
 }
 
@@ -360,8 +396,8 @@ fn encode_plan_text(cfg: &RudpConfig) -> String {
         RudpEncoderBackend::Nvenc => tr("NVENC"),
     };
     let codec = match cfg.codec {
-        RudpVideoCodec::Hevc => tr("prefer HEVC, fall back to H.264"),
-        RudpVideoCodec::H264 => tr("prefer H.264, fall back to HEVC"),
+        RudpVideoCodec::H264 => tr("prefer H.264 (VAAPI probes H.264 before HEVC)"),
+        RudpVideoCodec::Hevc => tr("prefer HEVC (VAAPI still probes H.264 first)"),
     };
     format!("{backend}; {codec}; {} kbps", cfg.bitrate_kbps)
 }

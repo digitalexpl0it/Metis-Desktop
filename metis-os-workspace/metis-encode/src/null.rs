@@ -16,7 +16,7 @@ impl NullEncoder {
         Self {
             info: EncoderInfo {
                 backend: EncoderBackend::Auto,
-                codec: RudpCodec::Hevc,
+                codec: RudpCodec::H264,
                 encoder_name: "null".into(),
                 width,
                 height,

@@ -872,7 +872,7 @@ fn render_local_output_frame(
         Ok(res) => {
             let empty = res.is_empty;
             *frame_states = Some(res.states);
-            if !empty {
+            if !empty || state.stream_export.forced_frame_pending() {
                 crate::stream_export::maybe_export_frame(state, renderer, render_node, output);
             }
             Ok(!empty)

@@ -7,8 +7,9 @@
 //!   Password on stdin (or METIS_RUDP_PASSWORD).
 //!   --tofu-reset clears the known_hosts pin for this host.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Write};
 use std::net::SocketAddr;
+use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
 use metis_protocol::RudpControlMsg;
@@ -97,13 +98,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut password = if let Ok(p) = std::env::var("METIS_RUDP_PASSWORD") {
         p
     } else {
-        eprint!("Password: ");
-        let _ = std::io::stderr().flush();
-        let mut p = String::new();
-        std::io::stdin()
-            .read_to_string(&mut p)
-            .map_err(|e| format!("read password: {e}"))?;
-        p.trim_end_matches(['\r', '\n']).to_string()
+        read_password_prompt().map_err(|e| format!("read password: {e}"))?
     };
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -231,12 +226,51 @@ async fn smoke_session(
     Ok(())
 }
 
+/// Prompt on stderr, read one line from stdin with echo disabled (TTY only).
+/// Uses `read_line` (not `read_to_string`) so Enter finishes the prompt —
+/// waiting for EOF made the CLI look hung after password entry.
+fn read_password_prompt() -> std::io::Result<String> {
+    eprint!("Password: ");
+    let _ = std::io::stderr().flush();
+
+    let stdin = std::io::stdin();
+    let fd = stdin.as_raw_fd();
+    let saved = save_and_disable_tty_echo(fd);
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line);
+    if let Some(term) = saved {
+        // SAFETY: restore the exact termios we captured before disabling echo.
+        unsafe {
+            let _ = libc::tcsetattr(fd, libc::TCSANOW, &term);
+        }
+        eprintln!();
+    }
+    read?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
+fn save_and_disable_tty_echo(fd: i32) -> Option<libc::termios> {
+    // SAFETY: termios on a valid fd; failure → leave echo alone.
+    unsafe {
+        let mut term: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut term) != 0 {
+            return None;
+        }
+        let saved = term;
+        term.c_lflag &= !libc::ECHO;
+        if libc::tcsetattr(fd, libc::TCSANOW, &term) != 0 {
+            return None;
+        }
+        Some(saved)
+    }
+}
+
 fn print_help() {
     println!(
         "metis-rudp-smoke — Metis Remote auth + video + input smoke test\n\n\
          Usage:\n  \
          metis-rudp-smoke <host:port> --user <name> [--video-secs N] [--input-smoke] [--tofu-reset]\n\n\
-         Password: stdin or METIS_RUDP_PASSWORD.\n\
+         Password: TTY prompt (no echo) or METIS_RUDP_PASSWORD.\n\
          --video-secs N  receive/reassemble video for N seconds (requires host encode).\n\
          --input-smoke   send a short pointer/keyboard sequence after SessionOk.\n\
          TOFU pins live in ~/.config/metis/rudp/known_hosts."

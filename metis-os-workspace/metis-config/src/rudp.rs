@@ -38,9 +38,11 @@ impl RudpEncoderBackend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RudpVideoCodec {
+    /// Default: H.264 — HEVC VAAPI encode is missing on many Intel iGPUs and
+    /// libva/ffmpeg have aborted the DRM session when opening `hevc_vaapi`.
     #[default]
-    Hevc,
     H264,
+    Hevc,
 }
 
 impl RudpVideoCodec {
@@ -70,7 +72,7 @@ pub struct RudpConfig {
     /// Hardware encode backend: Auto (NVIDIA→NVENC else VAAPI), VAAPI, or NVENC.
     #[serde(default)]
     pub encoder: RudpEncoderBackend,
-    /// Preferred codec; open tries this first then the other of HEVC/H.264.
+    /// Preferred codec hint; VAAPI always probes H.264 before HEVC.
     #[serde(default)]
     pub codec: RudpVideoCodec,
     /// Target encode bitrate in kbps.
@@ -85,6 +87,11 @@ pub struct RudpConfig {
     /// Last firewall error (shown in Settings).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firewall_last_error: Option<String>,
+    /// Set by the compositor when it turned the host off after the previous
+    /// session ended unexpectedly while Remote was starting / streaming
+    /// (crash-loop guard). Settings shows it; re-enabling clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_disabled_reason: Option<String>,
 }
 
 fn default_port() -> u16 {
@@ -112,6 +119,7 @@ impl Default for RudpConfig {
             firewall_applied: false,
             firewall_backend: String::new(),
             firewall_last_error: None,
+            auto_disabled_reason: None,
         }
     }
 }
@@ -135,6 +143,10 @@ impl RudpConfig {
             .map(|u| u.trim().to_string())
             .filter(|u| !u.is_empty() && seen.insert(u.clone()))
             .collect();
+        // The notice only describes why the host is off; it is stale once on.
+        if self.enabled {
+            self.auto_disabled_reason = None;
+        }
         self
     }
 
@@ -456,8 +468,28 @@ mod tests {
         let json = serde_json::to_string(&RudpConfig::default()).expect("ser");
         let cfg: RudpConfig = serde_json::from_str(&json).expect("de");
         assert_eq!(cfg.encoder, RudpEncoderBackend::Auto);
-        assert_eq!(cfg.codec, RudpVideoCodec::Hevc);
+        assert_eq!(cfg.codec, RudpVideoCodec::H264);
         assert_eq!(cfg.bitrate_kbps, DEFAULT_RUDP_BITRATE_KBPS);
+    }
+
+    #[test]
+    fn auto_disabled_reason_cleared_when_enabled() {
+        let off = RudpConfig {
+            auto_disabled_reason: Some("crash".into()),
+            ..Default::default()
+        }
+        .sanitize();
+        assert_eq!(off.auto_disabled_reason.as_deref(), Some("crash"));
+        let on = RudpConfig {
+            enabled: true,
+            auto_disabled_reason: Some("crash".into()),
+            ..Default::default()
+        }
+        .sanitize();
+        assert!(on.auto_disabled_reason.is_none());
+        // Absent field stays absent on disk (no rewrite churn for old configs).
+        let json = serde_json::to_string(&RudpConfig::default()).expect("ser");
+        assert!(!json.contains("auto_disabled_reason"));
     }
 
     #[test]

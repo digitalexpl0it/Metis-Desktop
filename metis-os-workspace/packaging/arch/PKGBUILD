@@ -41,6 +41,8 @@ optdepends=(
   'gnome-remote-desktop: RDP session sharing host'
   'freerdp: Metis Viewer / FreeRDP client'
   'gamemode: gaming performance daemon'
+  'intel-media-driver: Metis Remote VAAPI encode on Intel GPUs'
+  'libva-mesa-driver: Metis Remote VAAPI encode on AMD GPUs'
   'flatpak: Flatpak app support'
 )
 makedepends=(
@@ -82,7 +84,8 @@ build() {
     -p metis-remote \
     -p metis-viewer \
     -p metis-screenshot \
-    -p metis-gaming
+    -p metis-gaming \
+    -p metis-encode
 }
 
 package() {

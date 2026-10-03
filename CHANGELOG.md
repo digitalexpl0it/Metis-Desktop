@@ -5,6 +5,28 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-02]
+
+### Fixed
+
+- **Enabling Metis Remote no longer crashes the desktop** — hardware encode
+  (FFmpeg / VAAPI / NVENC) runs in an isolated `metis-encode-probe worker`
+  process; a driver crash or hang restarts the encoder (bounded back-off) and
+  never the compositor. Removed the unsafe DRM-PRIME `av_hwframe_map` import
+  that segfaulted on every frame; frames are now read from validated LINEAR
+  dmabufs with `DMA_BUF_IOCTL_SYNC` and uploaded as NV12.
+- **Idle Remote host costs nothing** — capture and encode start only when an
+  authenticated client connects (forced keyframe + full frame on join; late
+  joiners now receive `VideoReady`).
+- **Crash-loop guard** — if a session ends unexpectedly while Remote is
+  starting or streaming, the next login keeps the host off and Settings →
+  Metis Remote explains why.
+
+### Changed
+
+- Metis Remote **Auto** encoder uses the render GPU's encoder first and falls
+  back across vendors on hybrid systems; H.264 is the default codec.
+
 ## [2026-09-27]
 
 ### Added
