@@ -124,9 +124,8 @@ fn load_palette() -> Palette {
     }
 }
 
-/// Parse a `#rrggbb` color into linear-ish `[r, g, b]` in 0..1 (sRGB bytes / 255,
-/// matching how the GL pipeline treats the rest of the chrome). Falls back to a
-/// dark slate on malformed input.
+/// Parse a `#rrggbb` color into `[r, g, b]` in 0..1 (sRGB bytes / 255).
+/// Falls back to a dark slate on malformed input.
 fn hex_rgb(hex: &str) -> [f32; 3] {
     let h = hex.trim().trim_start_matches('#');
     if h.len() != 6 {
@@ -134,6 +133,28 @@ fn hex_rgb(hex: &str) -> [f32; 3] {
     }
     let parse = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0) as f32 / 255.0;
     [parse(0), parse(2), parse(4)]
+}
+
+fn srgb_channel_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Encode chrome colours for the active stack: sRGB bytes, or Rec.709 linear
+/// when float scene-linear compositing is on.
+fn chrome_rgb(rgb: [f32; 3], scene_linear: bool) -> [f32; 3] {
+    if scene_linear {
+        [
+            srgb_channel_to_linear(rgb[0]),
+            srgb_channel_to_linear(rgb[1]),
+            srgb_channel_to_linear(rgb[2]),
+        ]
+    } else {
+        rgb
+    }
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -295,6 +316,8 @@ pub struct DecorationRuntime {
     last_config_check: Instant,
     /// Output scale used while building render elements for the current window.
     build_scale: Scale<f64>,
+    /// When true, solids and rasterized chrome are stored as Rec.709 linear.
+    scene_linear: bool,
 }
 
 impl Default for DecorationRuntime {
@@ -317,6 +340,7 @@ impl Default for DecorationRuntime {
             window_border: read_window_border(),
             last_config_check: Instant::now(),
             build_scale: Scale::from(1.0),
+            scene_linear: false,
         }
     }
 }
@@ -363,6 +387,16 @@ impl DecorationRuntime {
         self.shadow_corner_tl = None;
         self.shadow_corner_tr = None;
         self.commit.increment();
+    }
+
+    /// Enable Rec.709-linear chrome encoding for the float scene path.
+    /// Clears raster caches when the mode changes so colours are rebuilt.
+    pub fn set_scene_linear(&mut self, scene_linear: bool) {
+        if self.scene_linear == scene_linear {
+            return;
+        }
+        self.scene_linear = scene_linear;
+        self.clear_texture_caches();
     }
 
     fn prune_dead_windows(&mut self, live: &std::collections::HashSet<u32>) {
@@ -452,11 +486,15 @@ impl DecorationRuntime {
         }
 
         let mut out = Vec::new();
-        let titlebar_rgb = if w.focused {
-            self.palette.titlebar_active
-        } else {
-            self.palette.titlebar_inactive
-        };
+        let lin = self.scene_linear;
+        let titlebar_rgb = chrome_rgb(
+            if w.focused {
+                self.palette.titlebar_active
+            } else {
+                self.palette.titlebar_inactive
+            },
+            lin,
+        );
         let border_stops: Vec<[f32; 3]> = if w.focused {
             resolve_border_stops(
                 self.window_border.mode,
@@ -464,12 +502,18 @@ impl DecorationRuntime {
                 &self.window_border.gradient,
                 &self.palette,
             )
+            .into_iter()
+            .map(|c| chrome_rgb(c, lin))
+            .collect()
         } else {
-            vec![[
-                self.palette.border_inactive[0],
-                self.palette.border_inactive[1],
-                self.palette.border_inactive[2],
-            ]]
+            vec![chrome_rgb(
+                [
+                    self.palette.border_inactive[0],
+                    self.palette.border_inactive[1],
+                    self.palette.border_inactive[2],
+                ],
+                lin,
+            )]
         };
 
         let header = APP_TILE_HEADER_PX.min(frame.height);
@@ -691,7 +735,7 @@ impl DecorationRuntime {
             .unwrap_or(true);
 
         if needs_render {
-            let (pixels, pw, ph) = rasterize_button(kind, w.focused)?;
+            let (pixels, pw, ph) = rasterize_button(kind, w.focused, self.scene_linear)?;
             self.buttons.insert(
                 (w.id, role),
                 CachedButton {
@@ -899,20 +943,28 @@ impl DecorationRuntime {
         R::TextureId: Clone + 'static,
     {
         let font = self.font.as_ref()?;
-        let color = if w.focused {
-            self.palette.text_active
-        } else {
-            self.palette.text_inactive
+        let lin = self.scene_linear;
+        let color = {
+            let c = if w.focused {
+                self.palette.text_active
+            } else {
+                self.palette.text_inactive
+            };
+            let rgb = chrome_rgb([c[0], c[1], c[2]], lin);
+            [rgb[0], rgb[1], rgb[2], c[3]]
         };
         // Opaque pill behind the title. Derive it from this window's titlebar shade
         // but nudge it toward white-on-dark / black-on-light so the chip is clearly
         // visible against the titlebar (and solid over the wallpaper when the
         // titlebar opacity is turned down). Always alpha 1.0.
-        let tb = if w.focused {
-            self.palette.titlebar_active
-        } else {
-            self.palette.titlebar_inactive
-        };
+        let tb = chrome_rgb(
+            if w.focused {
+                self.palette.titlebar_active
+            } else {
+                self.palette.titlebar_inactive
+            },
+            lin,
+        );
         let pill = pill_base(tb);
         // Thin border ringing the pill. The focused window draws the configured
         // pill-border (accent gradient / solid / custom gradient) as a crisp pop;
@@ -925,12 +977,18 @@ impl DecorationRuntime {
                 &self.pill_border.gradient,
                 &self.palette,
             )
+            .into_iter()
+            .map(|c| chrome_rgb(c, lin))
+            .collect()
         } else {
-            vec![[
-                self.palette.border_inactive[0],
-                self.palette.border_inactive[1],
-                self.palette.border_inactive[2],
-            ]]
+            vec![chrome_rgb(
+                [
+                    self.palette.border_inactive[0],
+                    self.palette.border_inactive[1],
+                    self.palette.border_inactive[2],
+                ],
+                lin,
+            )]
         };
         let border_px = self.pill_border.width_px.clamp(0.0, 8.0);
 
@@ -1573,12 +1631,16 @@ fn rasterize_shadow_corner(mirror_x: bool) -> Option<(Vec<u8>, i32, i32)> {
 /// Rasterize a control button: an anti-aliased filled circle (traffic-light color
 /// when focused, gray when not) with a dark glyph (× close, + maximize, − minimize)
 /// drawn only on focused buttons. Returns premultiplied RGBA at `BTN_SS`× scale.
-fn rasterize_button(kind: DecoControl, focused: bool) -> Option<(Vec<u8>, i32, i32)> {
+fn rasterize_button(
+    kind: DecoControl,
+    focused: bool,
+    scene_linear: bool,
+) -> Option<(Vec<u8>, i32, i32)> {
     let n = BTN_SIZE * BTN_SS;
     if n <= 0 {
         return None;
     }
-    let circle = if focused {
+    let circle_srgb = if focused {
         match kind {
             DecoControl::Close => BTN_CLOSE,
             DecoControl::Maximize => BTN_MAX,
@@ -1588,6 +1650,13 @@ fn rasterize_button(kind: DecoControl, focused: bool) -> Option<(Vec<u8>, i32, i
     } else {
         BTN_INACTIVE
     };
+    let cr = chrome_rgb(
+        [circle_srgb[0], circle_srgb[1], circle_srgb[2]],
+        scene_linear,
+    );
+    let circle = [cr[0], cr[1], cr[2], circle_srgb[3]];
+    let gr = chrome_rgb([BTN_GLYPH[0], BTN_GLYPH[1], BTN_GLYPH[2]], scene_linear);
+    let glyph = [gr[0], gr[1], gr[2], BTN_GLYPH[3]];
 
     let mut pixels = vec![0u8; (n * n * 4) as usize];
     let center = n as f32 / 2.0;
@@ -1609,10 +1678,10 @@ fn rasterize_button(kind: DecoControl, focused: bool) -> Option<(Vec<u8>, i32, i
             if focused {
                 let g = glyph_coverage(kind, dx, dy, half_len, half_thick);
                 if g > 0.0 {
-                    let ga = g * BTN_GLYPH[3];
-                    rgb[0] = BTN_GLYPH[0] * ga + rgb[0] * (1.0 - ga);
-                    rgb[1] = BTN_GLYPH[1] * ga + rgb[1] * (1.0 - ga);
-                    rgb[2] = BTN_GLYPH[2] * ga + rgb[2] * (1.0 - ga);
+                    let ga = g * glyph[3];
+                    rgb[0] = glyph[0] * ga + rgb[0] * (1.0 - ga);
+                    rgb[1] = glyph[1] * ga + rgb[1] * (1.0 - ga);
+                    rgb[2] = glyph[2] * ga + rgb[2] * (1.0 - ga);
                 }
             }
 

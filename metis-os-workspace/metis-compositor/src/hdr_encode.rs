@@ -574,7 +574,7 @@ void main() {
 }
 "#;
 
-/// Rec.709 scene-linear → extended Reinhard → BT.2020 → PQ.
+/// Rec.709 scene-linear → BT.2390-style EETF → PQ (float scene path).
 const PQ_ENCODE_LINEAR_SHADER: &str = r#"#version 100
 
 //_DEFINES_
@@ -618,6 +618,30 @@ float linear_to_pq(float y) {
     return pow((c1 + c2 * ym) / (1.0 + c3 * ym), m2);
 }
 
+// BT.2390-10 EETF approximation (skip black lift). Input is scene-linear
+// relative to reference_white (1.0 = rw nits); returns absolute PQ code.
+float bt2390_eetf_pq(float x_rel, float rw, float peak) {
+    float Y = max(x_rel, 0.0) * rw;
+    float E = linear_to_pq(Y / 10000.0);
+    float Ep = max(linear_to_pq(peak / 10000.0), 1e-6);
+    float Es = linear_to_pq(rw / 10000.0);
+    float E1 = E / Ep;
+    float Es1 = Es / Ep;
+    float KS = clamp(1.5 * Es1 - 0.5, 0.0, 0.99);
+    float E2;
+    if (E1 < KS) {
+        E2 = E1;
+    } else {
+        float t = clamp((E1 - KS) / max(1.0 - KS, 1e-6), 0.0, 1.0);
+        float t2 = t * t;
+        float t3 = t2 * t;
+        E2 = (2.0 * t3 - 3.0 * t2 + 1.0) * KS
+           + (t3 - 2.0 * t2 + t) * (1.0 - KS)
+           + (-2.0 * t3 + 3.0 * t2);
+    }
+    return clamp(E2 * Ep, 0.0, 1.0);
+}
+
 void main() {
     vec4 lin_in = texture2D(tex, v_coords);
 #if defined(NO_ALPHA)
@@ -625,18 +649,12 @@ void main() {
 #endif
 
     float rw = max(reference_white, 1.0);
-    float cmax = max(content_max_nits, rw);
-    float white_rel = cmax / rw;
-    vec3 x = max(lin_in.rgb, vec3(0.0));
-    vec3 mapped = (x * (vec3(1.0) + x / (white_rel * white_rel))) / (vec3(1.0) + x);
-    mapped = clamp(mapped, 0.0, 1.0);
-    mapped = rec709_to_bt2020(mapped);
-
-    float scale = reference_white / 10000.0;
+    float peak = max(content_max_nits, rw);
+    vec3 c2020 = rec709_to_bt2020(max(lin_in.rgb, vec3(0.0)));
     vec3 pq = vec3(
-        linear_to_pq(mapped.r * scale),
-        linear_to_pq(mapped.g * scale),
-        linear_to_pq(mapped.b * scale)
+        bt2390_eetf_pq(c2020.r, rw, peak),
+        bt2390_eetf_pq(c2020.g, rw, peak),
+        bt2390_eetf_pq(c2020.b, rw, peak)
     );
 
     vec4 color = vec4(pq, lin_in.a) * alpha;
@@ -650,7 +668,7 @@ void main() {
 }
 "#;
 
-/// Rec.709 scene-linear → extended Reinhard → BT.2020 → HLG.
+/// Rec.709 scene-linear → BT.2390-style EETF → HLG (float scene path).
 const HLG_ENCODE_LINEAR_SHADER: &str = r#"#version 100
 
 //_DEFINES_
@@ -683,6 +701,30 @@ vec3 rec709_to_bt2020(vec3 c) {
     );
 }
 
+float linear_to_pq(float y) {
+    y = max(y, 0.0);
+    float m1 = 2610.0 / 16384.0;
+    float m2 = 2523.0 / 32.0;
+    float c1 = 3424.0 / 4096.0;
+    float c2 = 2413.0 / 128.0;
+    float c3 = 2392.0 / 128.0;
+    float ym = pow(y, m1);
+    return pow((c1 + c2 * ym) / (1.0 + c3 * ym), m2);
+}
+
+float pq_to_linear(float n) {
+    n = clamp(n, 0.0, 1.0);
+    float m1 = 2610.0 / 16384.0;
+    float m2 = 2523.0 / 32.0;
+    float c1 = 3424.0 / 4096.0;
+    float c2 = 2413.0 / 128.0;
+    float c3 = 2392.0 / 128.0;
+    float np = pow(n, 1.0 / m2);
+    float num = max(np - c1, 0.0);
+    float den = c2 - c3 * np;
+    return pow(num / max(den, 1e-6), 1.0 / m1);
+}
+
 float linear_to_hlg(float x) {
     x = max(x, 0.0);
     float a = 0.17883277;
@@ -694,6 +736,28 @@ float linear_to_hlg(float x) {
     return a * log(12.0 * x - b) + c;
 }
 
+float bt2390_eetf_pq(float x_rel, float rw, float peak) {
+    float Y = max(x_rel, 0.0) * rw;
+    float E = linear_to_pq(Y / 10000.0);
+    float Ep = max(linear_to_pq(peak / 10000.0), 1e-6);
+    float Es = linear_to_pq(rw / 10000.0);
+    float E1 = E / Ep;
+    float Es1 = Es / Ep;
+    float KS = clamp(1.5 * Es1 - 0.5, 0.0, 0.99);
+    float E2;
+    if (E1 < KS) {
+        E2 = E1;
+    } else {
+        float t = clamp((E1 - KS) / max(1.0 - KS, 1e-6), 0.0, 1.0);
+        float t2 = t * t;
+        float t3 = t2 * t;
+        E2 = (2.0 * t3 - 3.0 * t2 + 1.0) * KS
+           + (t3 - 2.0 * t2 + t) * (1.0 - KS)
+           + (-2.0 * t3 + 3.0 * t2);
+    }
+    return clamp(E2 * Ep, 0.0, 1.0);
+}
+
 void main() {
     vec4 lin_in = texture2D(tex, v_coords);
 #if defined(NO_ALPHA)
@@ -701,18 +765,23 @@ void main() {
 #endif
 
     float rw = max(reference_white, 1.0);
-    float cmax = max(content_max_nits, rw);
-    float white_rel = cmax / rw;
-    vec3 x = max(lin_in.rgb, vec3(0.0));
-    vec3 mapped = (x * (vec3(1.0) + x / (white_rel * white_rel))) / (vec3(1.0) + x);
-    mapped = clamp(mapped, 0.0, 1.0);
-    mapped = rec709_to_bt2020(mapped);
-
-    float scale = reference_white / 1000.0;
+    float peak = max(content_max_nits, rw);
+    vec3 c2020 = rec709_to_bt2020(max(lin_in.rgb, vec3(0.0)));
+    // EETF in PQ, then linear nits → HLG OETF (1000-nit system).
+    vec3 pq = vec3(
+        bt2390_eetf_pq(c2020.r, rw, peak),
+        bt2390_eetf_pq(c2020.g, rw, peak),
+        bt2390_eetf_pq(c2020.b, rw, peak)
+    );
+    vec3 nits = vec3(
+        pq_to_linear(pq.r),
+        pq_to_linear(pq.g),
+        pq_to_linear(pq.b)
+    ) * 10000.0;
     vec3 hlg = vec3(
-        linear_to_hlg(mapped.r * scale),
-        linear_to_hlg(mapped.g * scale),
-        linear_to_hlg(mapped.b * scale)
+        linear_to_hlg(nits.r / 1000.0),
+        linear_to_hlg(nits.g / 1000.0),
+        linear_to_hlg(nits.b / 1000.0)
     );
 
     vec4 color = vec4(hlg, lin_in.a) * alpha;
@@ -1187,6 +1256,46 @@ impl HdrEncodeRuntime {
             uniforms,
             opts.alpha,
             Kind::Unspecified,
+        )
+    }
+
+    /// Wrap an existing sRGB texture element with the SDR→linear lift shader.
+    pub fn wrap_lift_element(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        inner: TextureRenderElement<GlesTexture>,
+    ) -> Option<TextureShaderElement> {
+        self.ensure_lift_program(renderer);
+        let program = self.sdr_lift_program.clone()?;
+        Some(TextureShaderElement::new(inner, program, vec![]))
+    }
+
+    /// Wrap a MultiTexture with the SDR→linear lift shader (hybrid wallpaper).
+    #[allow(clippy::too_many_arguments)]
+    pub fn wrap_lift_hybrid(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        id: Id,
+        commit: CommitCounter,
+        geometry: Rectangle<i32, Physical>,
+        src: Rectangle<f64, Buffer>,
+        texture: smithay::backend::renderer::multigpu::MultiTexture,
+        alpha: f32,
+    ) -> Option<crate::hybrid_shader::HybridTexShaderElement> {
+        self.ensure_lift_program(renderer);
+        let program = self.sdr_lift_program.clone()?;
+        Some(
+            crate::hybrid_shader::HybridTexShaderElement::from_multi_texture(
+                id,
+                commit,
+                geometry,
+                src,
+                texture,
+                program,
+                vec![],
+                alpha,
+                Kind::Unspecified,
+            ),
         )
     }
 

@@ -889,11 +889,14 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   that env var. When a client advertises PQ/HLG via colour management (opt-in
   protocol), the compositor **pass-through** skips SDR→HDR re-encode for
   HDR-only / fullscreen outputs so that content is not double-transformed.
-  Mixed SDR+HDR on an HDR panel composites in scene-linear light (keeping
-  highlight headroom until encode) when the GPU supports float/10-bit
-  intermediates; otherwise it falls back to sRGB decode with a soft roll-off.
-  HDR on an SDR panel always decodes to sRGB. Scroll-column and minimize clips
-  still apply — clipped and unclipped mixed HDR should match.
+  Mixed SDR+HDR on an HDR panel composites in scene-linear light (HDR windows,
+  lifted SDR clients, wallpaper, titlebar chrome, and bar blur) when the GPU
+  supports float/10-bit intermediates, then applies a BT.2390-style highlight
+  shoulder at encode. Per-output ICC Stage-2 LUTs are skipped on that path
+  (they assume sRGB) until a linear-aware bake lands; Stage-1 CRTC gamma is
+  already skipped while HDR is active. Without float/10-bit, Metis falls back
+  to sRGB decode with a soft roll-off. HDR on an SDR panel always decodes to
+  sRGB. Scroll-column and minimize clips still apply.
   Rotation is still upcoming.
 - **Appearance** — Light/Dark style; accent, secondary, and semantic status
   colors; font. Edits write `themes/dark.json` / `themes/light.json` and survive

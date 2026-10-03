@@ -1855,6 +1855,7 @@ impl MetisState {
                 self.color_mgmt.profiles_dirty = true;
                 self.color_lut.invalidate_gl();
                 self.hdr_encode.invalidate_gl();
+                self.blur.program = None;
                 crate::output_gamma::apply_output_gamma(self);
                 crate::output_hdr::reapply_output_hdrs(self);
                 self.damaged = true;

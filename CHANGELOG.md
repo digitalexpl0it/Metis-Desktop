@@ -14,11 +14,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **HDR urgent #2 residuals** — float-scene encode uses a BT.2390-style EETF
+  shoulder; wallpaper/SSD/blur join the Rec.709 linear stack; Stage-2 sRGB ICC
+  is skipped while scene-linear. Default-on colour management and a linear-aware
+  ICC bake remain deferred.
 - **HDR float scene-linear composite** — mixed SDR+HDR on HDR outputs decodes
   HDR windows and lifts SDR clients to Rec.709 linear (prefer float/10-bit FBO),
   then tone-maps at encode so highlights keep headroom. Falls back to
-  display-referred sRGB decode without float/10-bit. Wallpaper/SSD/blur may stay
-  gamma-encoded; fuller BT.2390 and default-on colour management remain deferred.
+  display-referred sRGB decode without float/10-bit.
 - **HDR crop+decode + tone-map polish** — mixed SDR+HDR windows still decode
   under scroll-column / genie clip (GLES and hybrid Multi); decode tone-map uses
   an extended Reinhard shoulder keyed to content peak (output mastering when HDR

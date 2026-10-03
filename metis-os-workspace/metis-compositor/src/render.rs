@@ -105,6 +105,10 @@ impl MetisState {
         let wallpaper_origin: Point<f64, Physical> =
             Point::from((-render_origin.x as f64, -render_origin.y as f64));
 
+        let scene_linear = self.uses_float_scene_linear(target.output_name)
+            && self.hdr_encode.scene_linear_formats_ok(renderer);
+        self.decorations.set_scene_linear(scene_linear);
+
         self.wallpaper.poll_decode();
         let skip_underlay = self.output_has_fullscreen(target.output_name);
         let wallpaper_elems = if skip_underlay {
@@ -156,7 +160,7 @@ impl MetisState {
                 .filter_map(|r| {
                     let rect = self.blur.confine_to_pill(r);
                     let (tex, tex_size) = self.wallpaper.texture()?;
-                    self.blur.element(rect, tex, tex_size)
+                    self.blur.element(rect, tex, tex_size, scene_linear)
                 })
                 .collect()
         } else {
@@ -361,8 +365,6 @@ impl MetisState {
             // Mixed SDR+HDR: float scene-linear when formats allow (HDR decode to
             // linear + SDR lift); else display-referred decode. Scroll/genie clip
             // wraps the shader element like surfaces.
-            let scene_linear = self.uses_float_scene_linear(target.output_name)
-                && self.hdr_encode.scene_linear_formats_ok(renderer);
             let shader_elem = if self.should_decode_hdr_surfaces(target.output_name)
                 && let Some(tf) = self.window_hdr_transfer(window)
             {
@@ -435,7 +437,16 @@ impl MetisState {
         render_elements.extend(blur_elements.into_iter().map(OutputStack::Blur));
         if !wallpaper_elems.is_empty() {
             // Crossfade stacks incoming (with alpha) then outgoing beneath it.
-            render_elements.extend(wallpaper_elems.into_iter().map(OutputStack::Wallpaper));
+            // Float scene: lift wallpaper sRGB → Rec.709 linear via HdrEncode slot.
+            if scene_linear {
+                for elem in wallpaper_elems {
+                    if let Some(lifted) = self.hdr_encode.wrap_lift_element(renderer, elem) {
+                        render_elements.push(OutputStack::HdrEncode(lifted));
+                    }
+                }
+            } else {
+                render_elements.extend(wallpaper_elems.into_iter().map(OutputStack::Wallpaper));
+            }
         } else if !skip_underlay {
             // Clean boot / slow wallpaper decode: keep a dark fill so the splash
             // logo never sits on an empty/white framebuffer.

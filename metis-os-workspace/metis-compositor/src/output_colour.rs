@@ -47,7 +47,8 @@ pub fn apply_colour_post_pass(
     scene_linear: bool,
     content_max_nits: f32,
 ) -> Option<ColourPassResult> {
-    let wants_lut = lut_runtime.lut_owns_output(output_name);
+    // Stage-2 LUT bakes sRGB→display; skip it while the scene is Rec.709 linear.
+    let wants_lut = !scene_linear && lut_runtime.lut_owns_output(output_name);
     let wants_hdr_encode = hdr_active && !hdr_passthrough;
     if !wants_lut && !wants_hdr_encode {
         // HDR output with pass-through: still need a single fullscreen element if
@@ -93,7 +94,7 @@ pub fn apply_colour_post_pass_scene(
     scene_linear: bool,
     content_max_nits: f32,
 ) -> Option<ColourPassResult> {
-    let wants_lut = lut_runtime.lut_owns_output(output_name);
+    let wants_lut = !scene_linear && lut_runtime.lut_owns_output(output_name);
     let wants_hdr_encode = hdr_active && !hdr_passthrough;
     if !wants_lut && !wants_hdr_encode {
         return None;
@@ -167,7 +168,7 @@ pub fn apply_hybrid_colour_post_pass(
     scene_linear: bool,
     content_max_nits: f32,
 ) -> Option<(HybridColourPass, [f32; 4])> {
-    let wants_lut = lut_runtime.lut_owns_output(output_name);
+    let wants_lut = !scene_linear && lut_runtime.lut_owns_output(output_name);
     let wants_hdr_encode = hdr_active && !hdr_passthrough;
     if !wants_lut && !wants_hdr_encode {
         return None;

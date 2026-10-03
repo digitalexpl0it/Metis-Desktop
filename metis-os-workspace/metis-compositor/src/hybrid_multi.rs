@@ -14,7 +14,7 @@ use smithay::{
             Bind, Color32F, ImportMem, Offscreen, Renderer, Texture,
             damage::OutputDamageTracker,
             element::{
-                AsRenderElements, Kind,
+                AsRenderElements, Id, Kind,
                 memory::MemoryRenderBufferRenderElement,
                 solid::SolidColorRenderElement,
                 surface::WaylandSurfaceRenderElement,
@@ -23,6 +23,7 @@ use smithay::{
             },
             gles::{GlesRenderer, GlesTexture},
             multigpu::{MultiRenderer, MultiTexture, gbm::GbmGlesBackend},
+            utils::CommitCounter,
         },
     },
     desktop::layer_map_for_output,
@@ -385,10 +386,14 @@ fn build_hybrid_elements<'a>(
     }
 
     // Ensure blur / HDR decode programs on the primary GLES context.
-    {
+    let scene_linear = {
         let gles: &mut GlesRenderer = renderer.as_mut();
         state.blur.ensure_program(gles);
-    }
+        let scene_linear = state.uses_float_scene_linear(target.output_name)
+            && state.hdr_encode.scene_linear_formats_ok(gles);
+        state.decorations.set_scene_linear(scene_linear);
+        scene_linear
+    };
 
     let mut render_elements: Vec<HybridOutputStack<'a>> = Vec::new();
 
@@ -520,8 +525,6 @@ fn build_hybrid_elements<'a>(
 
         let content_max = state.hdr_decode_content_max_nits(target.output_name);
         let gles: &mut GlesRenderer = renderer.as_mut();
-        let scene_linear = state.uses_float_scene_linear(target.output_name)
-            && state.hdr_encode.scene_linear_formats_ok(gles);
         let shader_elem = if state.should_decode_hdr_surfaces(target.output_name)
             && let Some(tf) = state.window_hdr_transfer(window)
         {
@@ -632,20 +635,45 @@ fn build_hybrid_elements<'a>(
             if let Some(cache) = state.hybrid_wallpaper_cache.as_ref() {
                 let tex_size = cache.texture.size();
                 let texture = cache.texture.clone();
-                let radius = state.blur.radius;
-                let enabled = state.blur.enabled;
-                // Re-borrow mutably for hybrid_element after cloning texture.
-                let _ = (enabled, radius);
                 for r in bar_rects {
                     let rect = state.blur.confine_to_pill(r);
-                    if let Some(elem) = state.blur.hybrid_element(rect, texture.clone(), tex_size) {
+                    if let Some(elem) =
+                        state
+                            .blur
+                            .hybrid_element(rect, texture.clone(), tex_size, scene_linear)
+                    {
                         render_elements.push(HybridOutputStack::Shader(elem));
                     }
                 }
             }
         }
 
-        if let Some(wp) = wallpaper_element_from_cache(state, render_origin) {
+        if scene_linear {
+            if let Some(cache) = state.hybrid_wallpaper_cache.as_ref() {
+                let tex_size = cache.texture.size();
+                let texture = cache.texture.clone();
+                let geometry = Rectangle::new(
+                    Point::from((-render_origin.x, -render_origin.y)),
+                    Size::from((tex_size.w, tex_size.h)),
+                );
+                let src = Rectangle::<f64, Buffer>::new(
+                    Point::from((0.0, 0.0)),
+                    Size::from((tex_size.w as f64, tex_size.h as f64)),
+                );
+                let gles: &mut GlesRenderer = renderer.as_mut();
+                if let Some(elem) = state.hdr_encode.wrap_lift_hybrid(
+                    gles,
+                    Id::new(),
+                    CommitCounter::default(),
+                    geometry,
+                    src,
+                    texture,
+                    1.0,
+                ) {
+                    render_elements.push(HybridOutputStack::Shader(elem));
+                }
+            }
+        } else if let Some(wp) = wallpaper_element_from_cache(state, render_origin) {
             render_elements.push(HybridOutputStack::Wallpaper(wp));
         }
     }

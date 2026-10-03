@@ -49,6 +49,15 @@ uniform float blur_radius;
 uniform float tint;
 #endif
 
+uniform float lift_linear;
+
+float srgb_to_linear(float c) {
+    if (c <= 0.04045) {
+        return c / 12.92;
+    }
+    return pow((c + 0.055) / 1.055, 2.4);
+}
+
 void main() {
     vec2 px = (blur_radius / 3.0) / tex_size;
     vec4 sum = vec4(0.0);
@@ -57,7 +66,15 @@ void main() {
         for (int j = -3; j <= 3; j++) {
             float d2 = float(i * i + j * j);
             float w = exp(-d2 / 8.0);
-            sum += texture2D(tex, v_coords + vec2(float(i), float(j)) * px) * w;
+            vec4 s = texture2D(tex, v_coords + vec2(float(i), float(j)) * px);
+            if (lift_linear > 0.5) {
+                s.rgb = vec3(
+                    srgb_to_linear(s.r),
+                    srgb_to_linear(s.g),
+                    srgb_to_linear(s.b)
+                );
+            }
+            sum += s * w;
             wsum += w;
         }
     }
@@ -189,6 +206,7 @@ impl BlurRuntime {
             &[
                 UniformName::new("tex_size", UniformType::_2f),
                 UniformName::new("blur_radius", UniformType::_1f),
+                UniformName::new("lift_linear", UniformType::_1f),
             ],
         ) {
             Ok(program) => {
@@ -207,13 +225,14 @@ impl BlurRuntime {
         rect: Rectangle<i32, Physical>,
         texture: GlesTexture,
         tex_size: Size<i32, Buffer>,
+        scene_linear: bool,
     ) -> Option<BlurElement> {
         if !self.enabled || rect.size.is_empty() || tex_size.is_empty() {
             return None;
         }
         let program = self.program.clone()?;
 
-        let sig = signature(rect, self.radius, texture.tex_id(), tex_size);
+        let sig = signature(rect, self.radius, texture.tex_id(), tex_size, scene_linear);
         if sig != self.last_sig {
             self.last_sig = sig;
             self.commit.increment();
@@ -233,6 +252,7 @@ impl BlurRuntime {
             tex_w: tex_size.w as f32,
             tex_h: tex_size.h as f32,
             radius: self.radius,
+            lift_linear: scene_linear,
             program,
         })
     }
@@ -243,6 +263,7 @@ impl BlurRuntime {
         rect: Rectangle<i32, Physical>,
         texture: smithay::backend::renderer::multigpu::MultiTexture,
         tex_size: Size<i32, Buffer>,
+        scene_linear: bool,
     ) -> Option<crate::hybrid_shader::HybridTexShaderElement> {
         if !self.enabled || rect.size.is_empty() || tex_size.is_empty() {
             return None;
@@ -250,7 +271,7 @@ impl BlurRuntime {
         let program = self.program.clone()?;
 
         // MultiTexture has no GLES tex_id; hash size + geometry for damage.
-        let sig = signature(rect, self.radius, 0, tex_size);
+        let sig = signature(rect, self.radius, 0, tex_size, scene_linear);
         if sig != self.last_sig {
             self.last_sig = sig;
             self.commit.increment();
@@ -272,6 +293,7 @@ impl BlurRuntime {
                 vec![
                     Uniform::new("tex_size", [tex_size.w as f32, tex_size.h as f32]),
                     Uniform::new("blur_radius", self.radius),
+                    Uniform::new("lift_linear", if scene_linear { 1.0f32 } else { 0.0 }),
                 ],
                 1.0,
                 smithay::backend::renderer::element::Kind::Unspecified,
@@ -316,6 +338,7 @@ impl BlurRuntime {
             tex_w: tex_size.w as f32,
             tex_h: tex_size.h as f32,
             radius,
+            lift_linear: false,
             program,
         })
     }
@@ -353,6 +376,7 @@ fn signature(
     radius: f32,
     tex_id: u32,
     tex: Size<i32, Buffer>,
+    scene_linear: bool,
 ) -> u64 {
     let mut h = 1469598103934665603u64;
     let mut mix = |v: i64| {
@@ -367,6 +391,7 @@ fn signature(
     mix(tex_id as i64);
     mix(tex.w as i64);
     mix(tex.h as i64);
+    mix(i64::from(scene_linear));
     h
 }
 
@@ -381,6 +406,7 @@ pub struct BlurElement {
     tex_w: f32,
     tex_h: f32,
     radius: f32,
+    lift_linear: bool,
     program: GlesTexProgram,
 }
 
@@ -428,6 +454,7 @@ impl RenderElement<GlesRenderer> for BlurElement {
             &[
                 Uniform::new("tex_size", [self.tex_w, self.tex_h]),
                 Uniform::new("blur_radius", self.radius),
+                Uniform::new("lift_linear", if self.lift_linear { 1.0f32 } else { 0.0 }),
             ],
         )
     }
