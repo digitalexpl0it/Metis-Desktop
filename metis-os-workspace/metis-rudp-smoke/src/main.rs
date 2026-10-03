@@ -211,6 +211,11 @@ async fn smoke_session(
                     keyframes += 1;
                 }
             }
+            Ok(Some(
+                SessionEvent::AudioReady { .. }
+                | SessionEvent::AudioPacket { .. }
+                | SessionEvent::ClipboardSet { .. },
+            )) => {}
             Ok(Some(SessionEvent::Disconnected)) | Ok(None) => break,
             Err(_) => {}
         }

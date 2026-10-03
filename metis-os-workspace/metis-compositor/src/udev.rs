@@ -842,6 +842,9 @@ fn render_local_output_frame(
                 "HDR surfaces decoded into SDR composite before encode"
             );
         }
+        let scene_linear = state.uses_float_scene_linear(Some(output_name.as_str()))
+            && state.hdr_encode.scene_linear_formats_ok(renderer);
+        let content_max = state.hdr_decode_content_max_nits(Some(output_name.as_str()));
         match crate::output_colour::apply_colour_post_pass(
             &mut state.color_lut,
             &mut state.hdr_encode,
@@ -853,6 +856,8 @@ fn render_local_output_frame(
             hdr_active,
             hdr_transfer,
             passthrough,
+            scene_linear,
+            content_max,
         ) {
             Some(pass) => (pass.elements, pass.clear),
             _ => (elements, CLEAR_COLOR),

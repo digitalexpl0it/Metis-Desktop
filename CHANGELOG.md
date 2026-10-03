@@ -14,11 +14,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **HDR float scene-linear composite** — mixed SDR+HDR on HDR outputs decodes
+  HDR windows and lifts SDR clients to Rec.709 linear (prefer float/10-bit FBO),
+  then tone-maps at encode so highlights keep headroom. Falls back to
+  display-referred sRGB decode without float/10-bit. Wallpaper/SSD/blur may stay
+  gamma-encoded; fuller BT.2390 and default-on colour management remain deferred.
 - **HDR crop+decode + tone-map polish** — mixed SDR+HDR windows still decode
   under scroll-column / genie clip (GLES and hybrid Multi); decode tone-map uses
   an extended Reinhard shoulder keyed to content peak (output mastering when HDR
-  is active). Float scene-linear composite and default-on colour management remain
-  deferred.
+  is active).
 - **Hybrid MultiRenderer Wave A/B/C** — secondary GPUs present via Smithay
   `GpuManager::renderer` with textured SSD, bar blur, HDR decode/encode, and
   Stage-2 LUT on the Multi path; full-frame GBM dmabuf transfer is fail-fallback

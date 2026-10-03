@@ -7,11 +7,14 @@
 //! - **HdrOnly** (every mapped window on the output is HDR, or a fullscreen HDR
 //!   client covers it) → pass-through: skip SDR→HDR encode so client PQ/HLG is
 //!   not double-transformed.
-//! - **Mixed** (SDR chrome / windows alongside HDR) → decode each HDR window into
-//!   display-referred sRGB before compositing, then run the normal encode pass
-//!   so SDR content stays correct on the HDR panel.
+//! - **Mixed** (SDR chrome / windows alongside HDR) → float scene-linear path:
+//!   decode HDR windows to Rec.709 linear (1.0 = 203 nits), lift SDR client
+//!   windows to linear, composite (prefer float FBO), then tone-map + encode.
+//!   Falls back to display-referred sRGB decode when float/10-bit intermediates
+//!   are unavailable.
 //!
-//! On an SDR output, HDR windows are always decoded (there is no pass-through).
+//! On an SDR output, HDR windows are always decoded to sRGB (there is no
+//! pass-through / float scene).
 //!
 //! Requires `METIS_COLOR_MGMT=1` (or default-on after upstream wayland-rs fix)
 //! for clients to advertise descriptions.
@@ -123,6 +126,17 @@ impl MetisState {
         let mode = self.hdr_content_mode_for_output(output_name);
         let hdr_active = output_name.is_some_and(|n| query_hdr_active(self, n));
         mode.needs_surface_decode(hdr_active)
+    }
+
+    /// Mixed SDR+HDR on an HDR output: composite in Rec.709 scene-linear.
+    ///
+    /// Callers must also confirm the GLES context can allocate a float or 10-bit
+    /// intermediate ([`crate::hdr_encode::HdrEncodeRuntime::scene_linear_formats_ok`]);
+    /// otherwise keep the display-referred sRGB decode path.
+    pub fn uses_float_scene_linear(&self, output_name: Option<&str>) -> bool {
+        let mode = self.hdr_content_mode_for_output(output_name);
+        let hdr_active = output_name.is_some_and(|n| query_hdr_active(self, n));
+        hdr_active && matches!(mode, HdrContentMode::Mixed)
     }
 
     /// Content peak (nits) for the mixed-HDR decode tone-map shoulder.

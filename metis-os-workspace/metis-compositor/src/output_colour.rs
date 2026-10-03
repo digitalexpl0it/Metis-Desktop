@@ -8,8 +8,7 @@ use smithay::backend::drm::DrmDeviceFd;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
 use smithay::backend::renderer::element::{Id, Kind};
-use smithay::backend::renderer::gles::element::TextureShaderElement;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture, Uniform};
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::multigpu::{MultiTexture, gbm::GbmGlesBackend};
 use smithay::backend::renderer::{Bind, Offscreen, Renderer};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
@@ -17,7 +16,7 @@ use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, T
 type UdevGbm = GbmGlesBackend<GlesRenderer, DrmDeviceFd>;
 
 use crate::color_lut::ColorLutRuntime;
-use crate::hdr_encode::{HDR_CLEAR, HdrEncodeRuntime, HdrTransfer, REFERENCE_WHITE_NITS};
+use crate::hdr_encode::{HDR_CLEAR, HdrEncodeRuntime, HdrTransfer};
 use crate::render::{CLEAR_COLOR, OutputStack};
 
 /// Result of the colour post-pass ready for `render_frame`.
@@ -44,6 +43,9 @@ pub fn apply_colour_post_pass(
     hdr_transfer: HdrTransfer,
     // When true, skip SDR→HDR encode (client already provided PQ/HLG content).
     hdr_passthrough: bool,
+    // Scene is Rec.709 linear (mixed HDR float path); encode skips sRGB EOTF.
+    scene_linear: bool,
+    content_max_nits: f32,
 ) -> Option<ColourPassResult> {
     let wants_lut = lut_runtime.lut_owns_output(output_name);
     let wants_hdr_encode = hdr_active && !hdr_passthrough;
@@ -68,6 +70,8 @@ pub fn apply_colour_post_pass(
         hdr_active,
         hdr_transfer,
         hdr_passthrough,
+        scene_linear,
+        content_max_nits,
     )
 }
 
@@ -86,6 +90,8 @@ pub fn apply_colour_post_pass_scene(
     hdr_active: bool,
     hdr_transfer: HdrTransfer,
     hdr_passthrough: bool,
+    scene_linear: bool,
+    content_max_nits: f32,
 ) -> Option<ColourPassResult> {
     let wants_lut = lut_runtime.lut_owns_output(output_name);
     let wants_hdr_encode = hdr_active && !hdr_passthrough;
@@ -104,29 +110,14 @@ pub fn apply_colour_post_pass_scene(
     }
 
     if wants_hdr_encode {
-        hdr_runtime.ensure_program(renderer, hdr_transfer);
-        let program = match hdr_transfer {
-            HdrTransfer::Pq => hdr_runtime.pq_program.clone()?,
-            HdrTransfer::Hlg => hdr_runtime.hlg_program.clone()?,
-        };
-        let buffer = TextureBuffer::from_texture(renderer, scene, 1, Transform::Normal, None);
-        let src_rect = Rectangle::<f64, Logical>::new(
-            Point::from((0.0, 0.0)),
-            Size::from((size.w as f64, size.h as f64)),
-        );
-        let inner = TextureRenderElement::from_texture_buffer(
-            Point::<f64, Physical>::from((0.0, 0.0)),
-            &buffer,
-            None,
-            Some(src_rect),
-            Some(Size::from((size.w, size.h))),
-            Kind::Unspecified,
-        );
-        let encoded = TextureShaderElement::new(
-            inner,
-            program,
-            vec![Uniform::new("reference_white", REFERENCE_WHITE_NITS)],
-        );
+        let encoded = hdr_runtime.encode_scene_element(
+            renderer,
+            scene,
+            size,
+            hdr_transfer,
+            scene_linear,
+            content_max_nits,
+        )?;
         return Some(ColourPassResult {
             elements: vec![OutputStack::HdrEncode(encoded)],
             clear: HDR_CLEAR,
@@ -173,6 +164,8 @@ pub fn apply_hybrid_colour_post_pass(
     hdr_active: bool,
     hdr_transfer: HdrTransfer,
     hdr_passthrough: bool,
+    scene_linear: bool,
+    content_max_nits: f32,
 ) -> Option<(HybridColourPass, [f32; 4])> {
     let wants_lut = lut_runtime.lut_owns_output(output_name);
     let wants_hdr_encode = hdr_active && !hdr_passthrough;
@@ -192,27 +185,13 @@ pub fn apply_hybrid_colour_post_pass(
     }
 
     if wants_hdr_encode {
-        hdr_runtime.ensure_program(renderer, hdr_transfer);
-        let program = match hdr_transfer {
-            HdrTransfer::Pq => hdr_runtime.pq_program.clone()?,
-            HdrTransfer::Hlg => hdr_runtime.hlg_program.clone()?,
-        };
-        let geometry = Rectangle::new(Point::from((0, 0)), size);
-        let src = Rectangle::<f64, Buffer>::new(
-            Point::from((0.0, 0.0)),
-            Size::from((size.w as f64, size.h as f64)),
-        );
-        let elem = crate::hybrid_shader::HybridTexShaderElement::from_gles_texture(
+        let elem = hdr_runtime.encode_scene_hybrid(
             renderer,
-            Id::new(),
-            smithay::backend::renderer::utils::CommitCounter::default(),
-            geometry,
-            src,
             scene,
-            program,
-            vec![Uniform::new("reference_white", REFERENCE_WHITE_NITS)],
-            1.0,
-            Kind::Unspecified,
+            size,
+            hdr_transfer,
+            scene_linear,
+            content_max_nits,
         )?;
         return Some((HybridColourPass::Shader(elem), HDR_CLEAR));
     }

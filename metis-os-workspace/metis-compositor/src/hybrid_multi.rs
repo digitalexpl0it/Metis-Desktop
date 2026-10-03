@@ -241,6 +241,9 @@ fn present_with_colour_post(
 
         let multi_ctx = Renderer::context_id(&multi_same);
         let gles: &mut GlesRenderer = multi_same.as_mut();
+        let scene_linear = state.uses_float_scene_linear(Some(output_name.as_str()))
+            && state.hdr_encode.scene_linear_formats_ok(gles);
+        let content_max = state.hdr_decode_content_max_nits(Some(output_name.as_str()));
         apply_hybrid_colour_post_pass(
             &mut state.color_lut,
             &mut state.hdr_encode,
@@ -252,6 +255,8 @@ fn present_with_colour_post(
             hdr_active,
             hdr_transfer,
             passthrough,
+            scene_linear,
+            content_max,
         )
         .ok_or_else(|| {
             cross_gpu::record_multi_fail();
@@ -514,10 +519,12 @@ fn build_hybrid_elements<'a>(
         });
 
         let content_max = state.hdr_decode_content_max_nits(target.output_name);
-        let decoded = if state.should_decode_hdr_surfaces(target.output_name)
+        let gles: &mut GlesRenderer = renderer.as_mut();
+        let scene_linear = state.uses_float_scene_linear(target.output_name)
+            && state.hdr_encode.scene_linear_formats_ok(gles);
+        let shader_elem = if state.should_decode_hdr_surfaces(target.output_name)
             && let Some(tf) = state.window_hdr_transfer(window)
         {
-            let gles: &mut GlesRenderer = renderer.as_mut();
             state.hdr_encode.try_decode_window_hybrid(
                 gles,
                 window,
@@ -527,19 +534,30 @@ fn build_hybrid_elements<'a>(
                     alpha,
                     transfer: tf,
                     content_max_nits: content_max,
+                    scene_linear,
+                },
+            )
+        } else if scene_linear {
+            state.hdr_encode.try_lift_window_hybrid(
+                gles,
+                window,
+                crate::hdr_encode::HdrWindowLiftOpts {
+                    place_at: loc,
+                    scale: win_scale,
+                    alpha,
                 },
             )
         } else {
             None
         };
 
-        if let Some(decoded) = decoded {
+        if let Some(shader_elem) = shader_elem {
             if let Some(clip) = clip {
-                if let Some(c) = CropRenderElement::from_element(decoded, win_scale, clip) {
+                if let Some(c) = CropRenderElement::from_element(shader_elem, win_scale, clip) {
                     render_elements.push(HybridOutputStack::CropShader(c));
                 }
             } else {
-                render_elements.push(HybridOutputStack::Shader(decoded));
+                render_elements.push(HybridOutputStack::Shader(shader_elem));
             }
         } else {
             let elems = AsRenderElements::<UdevMultiRenderer<'a>>::render_elements::<

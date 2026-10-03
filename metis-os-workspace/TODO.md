@@ -55,14 +55,16 @@ Security items from the **2026-09-27 code review** sit above product stretch.
       fail-fallback only (ExportMem still available).
       → Wave 3a, Phase 3 multi-GPU notes, Phase 18 §E.
       *(dmabuf transfer 2026-09-27; MultiRenderer Wave A/B/C 2026-10-03)*
-- [ ] **2. True per-surface HDR decode** — mixed SDR+HDR decodes PQ/HLG windows
-      to sRGB (extended Reinhard @ 203 nits reference white + content-peak
-      shoulder) before the encode pass, including scroll/genie crop on GLES and
-      hybrid Multi; HDR-only / fullscreen still pass-through.
-      **Residual:** float scene-linear composite (preserve highlight headroom),
-      fuller BT.2390 tone-map, default-on `wp_color_management_v1`.
-      → Phase 5 §B residual. *(decode 2026-09-27; crop+decode + tone-map polish
-      2026-10-03)*
+- [ ] **2. True per-surface HDR decode** — mixed SDR+HDR on HDR outputs uses a
+      Rec.709 **scene-linear** composite (HDR decode + SDR client lift; prefer
+      float/10-bit FBO) with tone-map at encode; scroll/genie crop supported on
+      GLES and hybrid Multi. Falls back to display-referred sRGB decode when
+      float/10-bit is unavailable or the panel is SDR. HDR-only / fullscreen
+      still pass-through.
+      **Residual:** fuller BT.2390 tone-map, linear wallpaper/SSD/blur + ICC,
+      default-on `wp_color_management_v1`.
+      → Phase 5 §B residual. *(decode 2026-09-27; crop+decode + tone-map 2026-10-03;
+      float scene-linear 2026-10-03)*
 - [x] **3. Metis-native remote host** — **Partial→landed core (2026-10-03):**
       **RUDP** Phases 1–8 + clipboard/audio/HW decode/AV1/packet queue;
       **Metis native RDP** via `metis-rdp-host` (portal ScreenCast + FreeRDP;
@@ -76,9 +78,9 @@ Security items from the **2026-09-27 code review** sit above product stretch.
       still uses `gamescope_big_picture`.
       → Phase 19 §C. *(landed 2026-09-27)*
 
-**Suggested order:** S1–S3 + MultiRenderer **1** done → **2** (HDR decode
-residuals) next; Gamescope **4** and native remote **3** landed. Broader review
-follow-ups: **Engineering review backlog** below.
+**Suggested order:** S1–S3 + MultiRenderer **1** + HDR float scene **2** (core)
+done → **2** residuals (BT.2390 / colour protocol) or engineering backlog next;
+Gamescope **4** and native remote **3** landed.
 
 ---
 
@@ -179,10 +181,10 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       ([docs/upstream/](../docs/upstream/README.md))
 - [x] **3c** Per-surface HDR **pass-through** into encode path (PQ/HLG hints;
       mixed SDR+HDR approximate). **Partial (2026-09-27 / 2026-10-03):**
-      per-window PQ/HLG decode into the SDR composite (incl. scroll/genie crop
-      on GLES + hybrid Multi) + content-peak tone-map shoulder + HDR-only
-      pass-through. **Residual:** float scene-linear path + fuller BT.2390 —
-      see **Urgent priorities**.
+      per-window PQ/HLG decode (scroll/genie crop) + float scene-linear on HDR
+      outputs when formats allow + content-peak tone-map at encode + HDR-only
+      pass-through. **Residual:** fuller BT.2390 + linear chrome/ICC — see
+      **Urgent priorities**.
 
 ### Wave 4 — Remote
 - [x] **4a** `metis-remote rustdesk status|enable|disable` + firewall/Polkit +
@@ -717,10 +719,10 @@ Phase 3) — none of these are possible under the nested winit dev session.
       (hardware QA still welcome). **Still deferred (upstream):** default-on
       colour protocol
       ([wayland-rs#949](https://github.com/Smithay/wayland-rs/issues/949)).
-      **Urgent residual:** float scene-linear HDR composite (crop+decode +
-      content-peak tone-map polish landed 2026-10-03; per-window PQ/HLG→sRGB
-      decode + smarter pass-through landed 2026-09-27; see **Urgent
-      priorities**).
+      **Urgent residual:** fuller BT.2390 + linear chrome/ICC + default-on
+      colour protocol (float scene-linear + crop+decode + tone-map polish
+      landed 2026-10-03; per-window decode + pass-through landed 2026-09-27;
+      see **Urgent priorities**).
 ---
 
 ## Phase 6 — Flatpak, Steam & gaming

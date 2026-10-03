@@ -358,10 +358,12 @@ impl MetisState {
                         .map(|c| Rectangle::new(c.loc - render_origin, c.size))
                 }
             });
-            // Mixed SDR+HDR (or HDR on an SDR panel): decode PQ/HLG→sRGB before
-            // the window joins the stack. When scroll/genie clip is active, wrap
-            // the decode element in CropRenderElement (same as surfaces).
-            let decoded = if self.should_decode_hdr_surfaces(target.output_name)
+            // Mixed SDR+HDR: float scene-linear when formats allow (HDR decode to
+            // linear + SDR lift); else display-referred decode. Scroll/genie clip
+            // wraps the shader element like surfaces.
+            let scene_linear = self.uses_float_scene_linear(target.output_name)
+                && self.hdr_encode.scene_linear_formats_ok(renderer);
+            let shader_elem = if self.should_decode_hdr_surfaces(target.output_name)
                 && let Some(tf) = self.window_hdr_transfer(window)
             {
                 self.hdr_encode.try_decode_window_element(
@@ -373,18 +375,29 @@ impl MetisState {
                         alpha,
                         transfer: tf,
                         content_max_nits: self.hdr_decode_content_max_nits(target.output_name),
+                        scene_linear,
+                    },
+                )
+            } else if scene_linear {
+                self.hdr_encode.try_lift_window_element(
+                    renderer,
+                    window,
+                    crate::hdr_encode::HdrWindowLiftOpts {
+                        place_at: loc,
+                        scale: win_scale,
+                        alpha,
                     },
                 )
             } else {
                 None
             };
-            if let Some(decoded) = decoded {
+            if let Some(shader_elem) = shader_elem {
                 if let Some(clip) = clip {
-                    if let Some(c) = CropRenderElement::from_element(decoded, win_scale, clip) {
+                    if let Some(c) = CropRenderElement::from_element(shader_elem, win_scale, clip) {
                         render_elements.push(OutputStack::CropHdrDecode(c));
                     }
                 } else {
-                    render_elements.push(OutputStack::HdrEncode(decoded));
+                    render_elements.push(OutputStack::HdrEncode(shader_elem));
                 }
             } else {
                 let elems = AsRenderElements::<GlesRenderer>::render_elements::<

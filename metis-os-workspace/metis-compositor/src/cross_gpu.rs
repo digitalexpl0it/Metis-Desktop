@@ -186,6 +186,9 @@ pub fn try_transfer_frame(
         let (frame_elements, clear): (Vec<OutputStack>, [f32; 4]) = {
             let mode = state.hdr_content_mode_for_output(Some(output_name.as_str()));
             let passthrough = mode.allows_passthrough(hdr_active);
+            let scene_linear = state.uses_float_scene_linear(Some(output_name.as_str()))
+                && state.hdr_encode.scene_linear_formats_ok(renderer);
+            let content_max = state.hdr_decode_content_max_nits(Some(output_name.as_str()));
             match crate::output_colour::apply_colour_post_pass(
                 &mut state.color_lut,
                 &mut state.hdr_encode,
@@ -197,6 +200,8 @@ pub fn try_transfer_frame(
                 hdr_active,
                 hdr_transfer,
                 passthrough,
+                scene_linear,
+                content_max,
             ) {
                 Some(pass) => (pass.elements, pass.clear),
                 _ => (elements, CLEAR_COLOR),
