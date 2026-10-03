@@ -1108,7 +1108,7 @@ fn build_about_page() -> gtk::Widget {
 
     let blurb = gtk::Label::new(Some(&tr(
         "First-party RDP client for Metis. Connects to GNOME Remote Desktop or \
-         the experimental Metis-native FreeRDP host using wlfreerdp / xfreerdp.",
+         the Metis-native RDP host (metis-rdp-host) using wlfreerdp / xfreerdp.",
     )));
     blurb.set_xalign(0.0);
     blurb.set_wrap(true);

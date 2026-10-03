@@ -32,6 +32,7 @@ depends=(
   tesseract
   tesseract-data-eng
   ffmpeg
+  freerdp
 )
 optdepends=(
   'gnome-keyring: Secret Service provider'
@@ -82,6 +83,7 @@ build() {
     -p metis-settings \
     -p metis-portal \
     -p metis-remote \
+    -p metis-rdp-host \
     -p metis-viewer \
     -p metis-screenshot \
     -p metis-gaming \

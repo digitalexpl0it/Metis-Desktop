@@ -174,7 +174,7 @@ off by default (`xwayland_abstract_socket: false`).
 | Tool | Status | Capture / input | Notes |
 |------|--------|-----------------|-------|
 | **gnome-remote-desktop (RDP)** | **Supported (v1)** | Portal / PipeWire via `metis-portal`; EIS remote input | Settings toggle; text+image clipboard; LAN-only defaults; multi-monitor `RecordMonitor` selects by connector name |
-| **Metis native (FreeRDP shadow)** | **Experimental** | FreeRDP `freerdp-shadow-cli` (`freerdp-shadow-x11`) | Settings **Install FreeRDP shadow** / `metis-remote native enable`; X11-oriented capture — may not mirror pure Wayland Metis; GRD remains default |
+| **Metis native (`metis-rdp-host`)** | **Supported (opt-in)** | Portal ScreenCast / PipeWire via `metis-portal` + FreeRDP shadow server | Settings **Metis native RDP** / `metis-remote native enable`; GRD remains default; build needs `freerdp3-dev` |
 | **Metis Viewer (`metis-viewer`)** | **Supported (v1 client)** | FreeRDP → GRD or Metis native RDP | GTK connect UI; Remmina-style Advanced Desktop Settings; saved-host card grid in `viewer.json` (no passwords); FreeRDP placement dedicated workspace or window |
 | **RustDesk** | **Settings preset (detect/open)** | Prefer portal/PipeWire on Wayland; own capture may fail | Settings → Remote access card; not in `metis-remote` — see below |
 | **wayvnc** | **Spike / unsupported** | Needs compositor screencopy or portal consumer | No Metis integration; Smithay capture path TBD |

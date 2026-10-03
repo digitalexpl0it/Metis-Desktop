@@ -60,14 +60,11 @@ Security items from the **2026-09-27 code review** sit above product stretch.
       (preserve highlight headroom), scroll-column crop+decode, fuller tone-map
       / mastering metadata, default-on `wp_color_management_v1`.
       → Phase 5 §B residual. *(decode path landed 2026-09-27)*
-- [ ] **3. Metis-native remote host** — **Partial (2026-09-27 / 2026-09-30):**
-      experimental FreeRDP shadow + Viewer host grid; **RUDP Phases 1–7** +
-      **Settings → Metis Remote** (`rudp.json`, encode, PAM/TOFU, UDP firewall,
-      control-stream input, Viewer client). **Residual:** AV1 encode;
-      Wayland/portal capture for shadow; promote past experimental
-      (GRD remains on **Remote access**). Text clipboard (2026-10-03),
-      host→client Opus audio (2026-10-03), and Viewer HW decode
-      VAAPI→NVDEC→soft (2026-10-03) landed.
+- [x] **3. Metis-native remote host** — **Partial→landed core (2026-10-03):**
+      **RUDP** Phases 1–8 + clipboard/audio/HW decode/AV1/packet queue;
+      **Metis native RDP** via `metis-rdp-host` (portal ScreenCast + FreeRDP;
+      GRD remains default on **Remote access**). Residual: multi-monitor /
+      credential parity before flipping default away from GRD; AV1 soft encode.
       → Wave 4c, Phase 7 §B RUDP-Stream, Phase 15 §F,
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 - [x] **4. Per-Steam-appid Gamescope profile UI** — Settings → Gaming editor for
@@ -187,12 +184,10 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       Settings; GRD remains default until native host ships
 - [x] **4b** Decision doc:
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md)
-- [ ] **4c** **Urgent residual:** Wayland/portal-backed FreeRDP host + GA
-      criteria — experimental FreeRDP shadow + Viewer polish landed 2026-09-27;
-      RUDP Phases 1–4 (export + Quinn + encode + PAM/TOFU) landed 2026-09-30;
-      Phase 5 damage-aware encode 2026-10-01; Phase 6 datagram+FEC 2026-10-01;
-      Phase 7 native input 2026-10-01; Phase 8 Viewer client 2026-10-01.
-      GRD stays default; see **Urgent priorities**.
+- [x] **4c** Wayland/portal-backed FreeRDP host — `metis-rdp-host` (ScreenCast +
+      PipeWire + FreeRDP) landed 2026-10-03; Viewer polish 2026-09-27; RUDP
+      Phases 1–8 + residuals. GRD stays default; GA default-flip criteria remain
+      in [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 
 ### Wave 5 — Session startup
 - [x] `startup.json` — global enable + ordered desktop ids + per-entry enable/delay
@@ -921,9 +916,9 @@ Mode. Track compatibility either way:
 **Status: complete for the GNOME RDP path (2026-07-25 security closeout).** Metis
 hardens session sharing via `metis-remote` + `gnome-remote-desktop` + portal
 clipboard/input. **Phase 15 §F:** first-party **viewer** + RustDesk Settings
-preset shipped; host remains GRD by default. **2026-09-27:** experimental
-Metis-native FreeRDP shadow host + Viewer host grid / dedicated workspace
-(see **Urgent priorities** / Wave 4c). Deep per-app X11 isolation shipped as
+preset shipped; host remains GRD by default. **2026-09-27 / 2026-10-03:**
+Metis-native portal RDP host (`metis-rdp-host`) + Viewer host grid /
+dedicated workspace (Wave 4c). Deep per-app X11 isolation shipped as
 Phase 15 §E opt-in.
 
 Let you **remote into a Metis machine from another device** (laptop, tablet,
@@ -1042,8 +1037,8 @@ latency and clear setup docs.
       (FFmpeg H.264/HEVC → RGBA); `metis-rudp-client` lib; Metis Viewer
       Metis Remote mode (TOFU UI, video present, PointerLock input switching);
       Settings bind address + **Connect with Metis Viewer…**; host relative
-      inject when locked. Residual: promote past experimental (GRD remains
-      default under **Remote access**).
+      inject when locked. GRD remains default under **Remote access**; Metis
+      native RDP promoted past experimental via portal host (2026-10-03).
 - [x] **RUDP Viewer HW decode** (2026-10-03) — `metis-decode` Auto ladder
       VAAPI → NVDEC/cuvid → software; HW surfaces downloaded to CPU RGBA for
       GTK `MemoryTexture` (no dmabuf/GL zero-copy yet); Viewer status shows
@@ -1073,8 +1068,16 @@ latency and clear setup docs.
       crash-loop guard marker auto-disables the host with a Settings notice;
       Auto backend = render-GPU encoder first, cross-vendor fallback.
       Residual: zero-copy VAAPI import via VPP (RGB→NV12) once it can be
-      proven safe inside the worker; per-packet queue instead of latest-wins
-      slot so deltas are never skipped under a slow keyframe write.
+      proven safe inside the worker.
+- [x] **RUDP encoded-packet queue** (2026-10-03) — bounded keyframe-aware
+      outbox replaces latest-wins `EncodedPacket` slot so deltas survive slow
+      keyframe uni-stream writes (export hub stays latest-wins).
+- [x] **RUDP AV1 codec** (2026-10-03) — `RudpCodec::Av1` / Settings preference;
+      `av1_vaapi`/`av1_nvenc` encode ladder; Viewer soft+HW decode (`av1` /
+      `av1_vaapi` / `av1_nvdec`/`av1_cuvid`); wire `CODEC_AV1=3`.
+- [x] **Metis native portal RDP host** (2026-10-03) — `metis-rdp-host` ScreenCast
+      client → PipeWire → FreeRDP shadow subsystem; `metis-remote native` spawn;
+      Settings **Metis native RDP** (GRD stays default).
 
 ### C. Security & session policy
 

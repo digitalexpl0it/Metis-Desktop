@@ -49,10 +49,27 @@ pub fn display_app_label(app_id: Option<&ashpd::MaybeAppID>) -> String {
     }
 }
 
+fn trusted_rdp_host(app_label: &str) -> bool {
+    let lower = app_label.to_ascii_lowercase();
+    if !(lower.contains("metis-rdp-host") || lower.contains("io.metis.rdp")) {
+        return false;
+    }
+    // Settings → Remote access Metis native enable sets remote.json.enabled.
+    metis_config::load_remote_config().enabled
+}
+
 /// Ask the user whether `app_label` may capture. Returns `true` when allowed.
 pub async fn request_capture_consent(kind: CaptureKind, app_label: &str) -> bool {
     if auto_approve_env() {
         tracing::debug!(?kind, app = %app_label, "capture consent auto-approved (env)");
+        return true;
+    }
+    if trusted_rdp_host(app_label) {
+        tracing::debug!(
+            ?kind,
+            app = %app_label,
+            "capture consent auto-approved (Metis native RDP host)"
+        );
         return true;
     }
 

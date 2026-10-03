@@ -24,6 +24,7 @@ pub enum RudpCodec {
     #[default]
     H264,
     Hevc,
+    Av1,
 }
 
 impl RudpCodec {
@@ -31,6 +32,7 @@ impl RudpCodec {
         match self {
             Self::Hevc => "hevc",
             Self::H264 => "h264",
+            Self::Av1 => "av1",
         }
     }
 }

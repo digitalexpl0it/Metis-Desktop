@@ -12,8 +12,8 @@ pub enum RemoteBackend {
     #[default]
     GnomeRdp,
     RustDesk,
-    /// Experimental FreeRDP shadow server (`freerdp-shadow-cli`), RDP-compatible
-    /// with Metis Viewer. GRD stays the supported default until this is GA.
+    /// Metis-native RDP host (`metis-rdp-host`: portal ScreenCast + FreeRDP).
+    /// GRD stays the supported default.
     MetisNative,
 }
 

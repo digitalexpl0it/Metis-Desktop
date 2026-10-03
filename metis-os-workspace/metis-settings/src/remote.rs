@@ -494,29 +494,6 @@ pub fn native_disable() -> Result<(), String> {
     run_remote(&["native", "disable"]).map(|_| ())
 }
 
-pub fn native_install_hint() -> &'static str {
-    "sudo apt install freerdp-shadow-x11"
-}
-
-/// Install FreeRDP shadow via Polkit (`pkexec metis-remote pk-apt-install`).
-pub fn native_install_shadow() -> Result<(), String> {
-    let bin = metis_remote_bin();
-    let status = Command::new("pkexec")
-        .arg(&bin)
-        .arg("pk-apt-install")
-        .arg("freerdp-shadow-x11")
-        .status()
-        .map_err(|e| format!("failed to start pkexec: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Could not install freerdp-shadow-x11 (auth cancelled?). Run: {}",
-            native_install_hint()
-        ))
-    }
-}
-
 /// Desktop notification for sharing state changes.
 ///
 /// Uses `notify-send` so Metis's `org.freedesktop.Notifications` daemon (Notification

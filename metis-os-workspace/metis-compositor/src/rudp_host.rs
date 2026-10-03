@@ -13,13 +13,13 @@
 //!   while it was running, so a crash can never become a login crash loop.
 //!
 //! Frame path: wake → `take_latest` → bounded fence wait → worker encode →
-//! latest-wins outbound packet slot. Phase 6 fans packets to authenticated
+//! bounded outbound packet queue. Phase 6 fans packets to authenticated
 //! sessions (keyframes on uni-stream, deltas as FEC'd datagrams). Phase 7 maps
 //! control-stream input onto calloop → [`crate::remote_input`] and advertises
 //! Wayland pointer lock.
 
-use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -71,6 +71,74 @@ const ENCODER_BACKOFF: [Duration; 3] = [
 const ENCODER_HEALTHY_RESET: Duration = Duration::from_secs(60);
 /// Keep a warm worker this long after the last client leaves.
 const ENCODER_IDLE_CLOSE: Duration = Duration::from_secs(15);
+/// Encoded AU outbox depth — absorbs keyframe write stalls without dropping
+/// every intervening delta (latest-wins would).
+const PACKET_OUTBOX_CAP: usize = 16;
+
+/// Bounded encoded-packet queue between the frame thread and the Quinn pump.
+///
+/// Push never blocks. Under pressure, oldest non-keyframes are dropped first;
+/// an incoming keyframe always gets a slot (dropping the oldest packet if the
+/// queue is all keyframes). An incoming delta is dropped only when the queue is
+/// full of keyframes.
+pub struct PacketOutbox {
+    inner: Mutex<VecDeque<EncodedPacket>>,
+}
+
+impl PacketOutbox {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(VecDeque::with_capacity(PACKET_OUTBOX_CAP)),
+        }
+    }
+
+    fn push(&self, pkt: EncodedPacket) {
+        let Ok(mut q) = self.inner.lock() else {
+            return;
+        };
+        if q.len() < PACKET_OUTBOX_CAP {
+            q.push_back(pkt);
+            return;
+        }
+        if pkt.is_keyframe {
+            if let Some(idx) = q.iter().position(|p| !p.is_keyframe) {
+                q.remove(idx);
+            } else {
+                let _ = q.pop_front();
+            }
+            q.push_back(pkt);
+            return;
+        }
+        if let Some(idx) = q.iter().position(|p| !p.is_keyframe) {
+            q.remove(idx);
+            q.push_back(pkt);
+        }
+        // else: all keyframes — drop the incoming delta
+    }
+
+    fn pop(&self) -> Option<EncodedPacket> {
+        self.inner.lock().ok()?.pop_front()
+    }
+
+    fn clear(&self) {
+        if let Ok(mut q) = self.inner.lock() {
+            q.clear();
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.inner.lock().map(|q| q.len()).unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    fn seqs(&self) -> Vec<u64> {
+        self.inner
+            .lock()
+            .map(|q| q.iter().map(|p| p.seq).collect())
+            .unwrap_or_default()
+    }
+}
 
 /// Latest-wins outbound clipboard payload for authenticated sessions.
 #[derive(Debug, Clone)]
@@ -219,8 +287,8 @@ pub struct RudpHostSystem {
     pub frames_encoded: Arc<AtomicU64>,
     /// Bytes produced by encode drain (approx outbound payload size).
     pub bytes_encoded: Arc<AtomicU64>,
-    /// Latest encoded packet for Phase 6 datagram send (latest-wins).
-    pub latest_packet: Arc<Mutex<Option<EncodedPacket>>>,
+    /// Bounded encoded-packet outbox for Phase 6 fan-out.
+    pub packet_outbox: Arc<PacketOutbox>,
     /// Last encoder open error (status / Settings).
     pub encode_error: Arc<Mutex<Option<String>>>,
     /// Active encoder backend/codec label after open (best-effort).
@@ -263,7 +331,7 @@ impl RudpHostSystem {
         let stop = Arc::new(AtomicBool::new(false));
         let frames_encoded = Arc::new(AtomicU64::new(0));
         let bytes_encoded = Arc::new(AtomicU64::new(0));
-        let latest_packet = Arc::new(Mutex::new(None));
+        let packet_outbox = Arc::new(PacketOutbox::new());
         let encode_error = Arc::new(Mutex::new(None));
         let encode_status = Arc::new(Mutex::new(None));
         let wake = hub.arm();
@@ -275,7 +343,7 @@ impl RudpHostSystem {
         let active_sessions = Arc::new(AtomicUsize::new(0));
         let audio = Arc::new(RudpAudioShared::new());
         let video = Arc::new(VideoShared {
-            latest_packet: Arc::clone(&latest_packet),
+            packet_outbox: Arc::clone(&packet_outbox),
             width: AtomicU32::new(0),
             height: AtomicU32::new(0),
             codec: AtomicU8::new(codec_to_u8(to_encode_codec(encode_prefs.codec))),
@@ -365,7 +433,7 @@ impl RudpHostSystem {
             audio_join,
             frames_encoded,
             bytes_encoded,
-            latest_packet,
+            packet_outbox,
             encode_error,
             encode_status,
             bind: config.bind,
@@ -430,6 +498,82 @@ impl Drop for RudpHostSystem {
     }
 }
 
+/// Suppress reconnect-storm spam for the same PAM user + peer IP.
+const CONNECT_NOTIFY_DEBOUNCE: Duration = Duration::from_secs(5);
+
+fn sanitize_notify_user(username: &str) -> String {
+    let trimmed: String = username
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(64)
+        .collect();
+    let trimmed = trimmed.trim();
+    if trimmed.is_empty() {
+        "remote user".into()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn should_notify_connect(username: &str, peer: SocketAddr) -> bool {
+    static LAST: Mutex<Option<(String, IpAddr, Instant)>> = Mutex::new(None);
+    let Ok(mut guard) = LAST.lock() else {
+        return true;
+    };
+    let now = Instant::now();
+    let ip = peer.ip();
+    if let Some((prev_user, prev_ip, at)) = guard.as_ref()
+        && prev_user == username
+        && *prev_ip == ip
+        && now.duration_since(*at) < CONNECT_NOTIFY_DEBOUNCE
+    {
+        return false;
+    }
+    *guard = Some((username.to_string(), ip, now));
+    true
+}
+
+/// Desktop notification via `notify-send` so Metis Notification Center picks it up.
+/// Runs off-thread so Quinn/auth never blocks on D-Bus.
+fn notify_rudp_client(username: &str, peer: SocketAddr, connected: bool) {
+    let user = sanitize_notify_user(username);
+    let peer_s = peer.to_string();
+    let title = "Metis Remote".to_string();
+    let body = if connected {
+        format!("{user} connected from {peer_s}")
+    } else {
+        format!("{user} disconnected ({peer_s})")
+    };
+    let _ = std::thread::Builder::new()
+        .name("metis-rudp-notify".into())
+        .spawn(move || {
+            use std::process::{Command, Stdio};
+            let ok = Command::new("notify-send")
+                .args([
+                    "-a",
+                    "Metis Remote",
+                    "-u",
+                    "normal",
+                    "--icon=network-transmit-receive",
+                    "--hint=string:desktop-entry:metis-settings",
+                    &title,
+                    &body,
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok {
+                tracing::debug!(
+                    %body,
+                    "rudp host: notify-send failed (Notification Center may be unavailable)"
+                );
+            }
+        });
+}
+
 fn ensure_rustls_provider() {
     if rustls::crypto::ring::default_provider()
         .install_default()
@@ -441,21 +585,27 @@ fn ensure_rustls_provider() {
 
 const CODEC_H264: u8 = 0;
 const CODEC_HEVC: u8 = 1;
+const CODEC_AV1: u8 = 2;
 
 fn codec_to_u8(codec: RudpCodec) -> u8 {
     match codec {
         RudpCodec::H264 => CODEC_H264,
         RudpCodec::Hevc => CODEC_HEVC,
+        RudpCodec::Av1 => CODEC_AV1,
     }
 }
 
 fn codec_wire_name(raw: u8) -> &'static str {
-    if raw == CODEC_HEVC { "hevc" } else { "h264" }
+    match raw {
+        CODEC_HEVC => "hevc",
+        CODEC_AV1 => "av1",
+        _ => "h264",
+    }
 }
 
 /// State shared by the frame pipeline thread and the Quinn runtime.
 struct VideoShared {
-    latest_packet: Arc<Mutex<Option<EncodedPacket>>>,
+    packet_outbox: Arc<PacketOutbox>,
     /// Current encode size (0 until the first frame is encoded).
     width: AtomicU32,
     height: AtomicU32,
@@ -581,10 +731,13 @@ async fn connection_broker_loop(
                                 %username,
                                 "rudp host: session authenticated"
                             );
+                            if should_notify_connect(&username, peer) {
+                                notify_rudp_client(&username, peer, true);
+                            }
                             // Unlock Metis PAM lock on calloop when this user owns the session.
-                            let _ = bridge
-                                .input_tx
-                                .send(RudpInputEvent::UnlockPamSession { username });
+                            let _ = bridge.input_tx.send(RudpInputEvent::UnlockPamSession {
+                                username: username.clone(),
+                            });
                             // Advertise current pointer-lock so the client can pick
                             // absolute vs relative before the next pump tick.
                             let locked = bridge.pointer_locked.load(Ordering::Relaxed);
@@ -632,7 +785,13 @@ async fn connection_broker_loop(
                             });
                             conn.closed().await;
                             sessions.write().await.remove(&session_id);
-                            tracing::info!(%peer, %session_id, "rudp host: client disconnected");
+                            tracing::info!(
+                                %peer,
+                                %session_id,
+                                %username,
+                                "rudp host: client disconnected"
+                            );
+                            notify_rudp_client(&username, peer, false);
                         }
                         Err(err) => {
                             tracing::warn!(%peer, %err, "rudp host: auth failed");
@@ -660,7 +819,6 @@ async fn video_pump_loop(
     pointer_locked: Arc<AtomicBool>,
 ) {
     tracing::info!("rudp host: video pump started");
-    let mut last_seq: Option<u64> = None;
     let mut last_audio_seq: Option<u32> = None;
     let mut last_ready = (0u32, 0u32, CODEC_H264);
     let mut last_pointer_lock: Option<bool> = None;
@@ -668,6 +826,10 @@ async fn video_pump_loop(
 
     while !stop.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(4)).await;
+
+        if video.active_sessions.load(Ordering::Relaxed) == 0 {
+            video.packet_outbox.clear();
+        }
 
         let locked = pointer_locked.load(Ordering::Relaxed);
         if last_pointer_lock != Some(locked) {
@@ -784,20 +946,6 @@ async fn video_pump_loop(
             }
         }
 
-        let packet = {
-            let Ok(guard) = video.latest_packet.lock() else {
-                continue;
-            };
-            guard.clone()
-        };
-        let Some(pkt) = packet else {
-            continue;
-        };
-        if last_seq == Some(pkt.seq) {
-            continue;
-        }
-        last_seq = Some(pkt.seq);
-
         let snap: Vec<Arc<VideoSession>> = {
             let guard = sessions.read().await;
             guard.values().cloned().collect()
@@ -806,91 +954,98 @@ async fn video_pump_loop(
             continue;
         }
 
-        let codec = match pkt.codec {
-            RudpCodec::H264 => codec_from_str("h264"),
-            RudpCodec::Hevc => codec_from_str("hevc"),
-        };
-
-        if pkt.is_keyframe {
-            let au = ReliableAccessUnit {
-                frame_seq: pkt.seq,
-                pts_us: pkt.pts_us,
-                codec,
-                damage_full: pkt.damage_full,
-                width: w,
-                height: h,
-                damage: pkt
-                    .damage
-                    .iter()
-                    .map(|r| RudpDamageRect {
-                        x: r.x,
-                        y: r.y,
-                        w: r.w,
-                        h: r.h,
-                    })
-                    .collect(),
-                data: pkt.data.clone(),
+        // Drain the outbox — keyframe writes may take hundreds of ms, so the
+        // frame thread must be able to queue deltas without overwriting.
+        while let Some(pkt) = video.packet_outbox.pop() {
+            let codec = match pkt.codec {
+                RudpCodec::H264 => codec_from_str("h264"),
+                RudpCodec::Hevc => codec_from_str("hevc"),
+                RudpCodec::Av1 => codec_from_str("av1"),
             };
-            let framed = au.encode_framed();
-            for session in &snap {
-                let mut send = session.video_send.lock().await;
-                // A client that stops reading must not stall the pump for everyone.
-                match tokio::time::timeout(PUMP_WRITE_TIMEOUT, send.write_all(&framed)).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(err)) => tracing::debug!(%err, "rudp host: keyframe write failed"),
-                    Err(_) => {
-                        tracing::warn!("rudp host: keyframe write timed out — closing slow client");
-                        session.conn.close(0u32.into(), b"client too slow");
-                    }
-                }
-            }
-            continue;
-        }
 
-        for session in &snap {
-            let max_dg = session
-                .conn
-                .max_datagram_size()
-                .unwrap_or(RUDP_DEFAULT_DATAGRAM_BUDGET);
-            let stats = session.conn.stats();
-            let sent = stats.path.sent_packets.max(1);
-            let loss_ratio = stats.path.lost_packets as f64 / sent as f64;
-            let dgrams = match build_media_datagrams(
-                &pkt.data,
-                pkt.seq,
-                pkt.pts_us,
-                codec,
-                pkt.damage_full,
-                max_dg,
-                loss_ratio,
-            ) {
-                Ok(d) => d,
-                Err(err) => {
-                    tracing::warn!(%err, "rudp host: shard/FEC failed");
-                    continue;
-                }
-            };
-            for d in dgrams {
-                if session.conn.datagram_send_buffer_space() == 0 {
-                    break;
-                }
-                match session.conn.send_datagram(Bytes::from(d)) {
-                    Ok(()) => {}
-                    Err(quinn::SendDatagramError::UnsupportedByPeer) => {
-                        if !session.warned_no_dgram.swap(true, Ordering::Relaxed) {
+            if pkt.is_keyframe {
+                let au = ReliableAccessUnit {
+                    frame_seq: pkt.seq,
+                    pts_us: pkt.pts_us,
+                    codec,
+                    damage_full: pkt.damage_full,
+                    width: w,
+                    height: h,
+                    damage: pkt
+                        .damage
+                        .iter()
+                        .map(|r| RudpDamageRect {
+                            x: r.x,
+                            y: r.y,
+                            w: r.w,
+                            h: r.h,
+                        })
+                        .collect(),
+                    data: pkt.data.clone(),
+                };
+                let framed = au.encode_framed();
+                for session in &snap {
+                    let mut send = session.video_send.lock().await;
+                    // A client that stops reading must not stall the pump for everyone.
+                    match tokio::time::timeout(PUMP_WRITE_TIMEOUT, send.write_all(&framed)).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => tracing::debug!(%err, "rudp host: keyframe write failed"),
+                        Err(_) => {
                             tracing::warn!(
-                                "rudp host: peer does not support datagrams — video deltas dropped"
+                                "rudp host: keyframe write timed out — closing slow client"
                             );
+                            session.conn.close(0u32.into(), b"client too slow");
                         }
-                        break;
                     }
-                    Err(quinn::SendDatagramError::Disabled) => break,
-                    Err(quinn::SendDatagramError::TooLarge) => {
-                        tracing::debug!("rudp host: datagram too large — skip shard");
-                    }
+                }
+                continue;
+            }
+
+            for session in &snap {
+                let max_dg = session
+                    .conn
+                    .max_datagram_size()
+                    .unwrap_or(RUDP_DEFAULT_DATAGRAM_BUDGET);
+                let stats = session.conn.stats();
+                let sent = stats.path.sent_packets.max(1);
+                let loss_ratio = stats.path.lost_packets as f64 / sent as f64;
+                let dgrams = match build_media_datagrams(
+                    &pkt.data,
+                    pkt.seq,
+                    pkt.pts_us,
+                    codec,
+                    pkt.damage_full,
+                    max_dg,
+                    loss_ratio,
+                ) {
+                    Ok(d) => d,
                     Err(err) => {
-                        tracing::debug!(%err, "rudp host: send_datagram failed");
+                        tracing::warn!(%err, "rudp host: shard/FEC failed");
+                        continue;
+                    }
+                };
+                for d in dgrams {
+                    if session.conn.datagram_send_buffer_space() == 0 {
                         break;
+                    }
+                    match session.conn.send_datagram(Bytes::from(d)) {
+                        Ok(()) => {}
+                        Err(quinn::SendDatagramError::UnsupportedByPeer) => {
+                            if !session.warned_no_dgram.swap(true, Ordering::Relaxed) {
+                                tracing::warn!(
+                                    "rudp host: peer does not support datagrams — video deltas dropped"
+                                );
+                            }
+                            break;
+                        }
+                        Err(quinn::SendDatagramError::Disabled) => break,
+                        Err(quinn::SendDatagramError::TooLarge) => {
+                            tracing::debug!("rudp host: datagram too large — skip shard");
+                        }
+                        Err(err) => {
+                            tracing::debug!(%err, "rudp host: send_datagram failed");
+                            break;
+                        }
                     }
                 }
             }
@@ -1052,6 +1207,7 @@ fn to_encode_codec(c: RudpVideoCodec) -> RudpCodec {
     match c {
         RudpVideoCodec::Hevc => RudpCodec::Hevc,
         RudpVideoCodec::H264 => RudpCodec::H264,
+        RudpVideoCodec::Av1 => RudpCodec::Av1,
     }
 }
 
@@ -1244,6 +1400,7 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
         }
 
         if sessions == 0 {
+            ctx.video.packet_outbox.clear();
             let since = *idle_since.get_or_insert(now);
             if encoder.is_some() && now.duration_since(since) >= ENCODER_IDLE_CLOSE {
                 tracing::info!("rudp encode: no clients — stopping encode worker");
@@ -1481,9 +1638,7 @@ fn encode_frame(
     video.height.store(frame.height, Ordering::Relaxed);
     for pkt in packets {
         bytes_encoded.fetch_add(pkt.data.len() as u64, Ordering::Relaxed);
-        if let Ok(mut slot) = video.latest_packet.lock() {
-            *slot = Some(pkt);
-        }
+        video.packet_outbox.push(pkt);
     }
     Ok(())
 }
@@ -1597,7 +1752,7 @@ mod tests {
     #[test]
     fn session_guard_counts_and_releases() {
         let video = Arc::new(VideoShared {
-            latest_packet: Arc::new(Mutex::new(None)),
+            packet_outbox: Arc::new(PacketOutbox::new()),
             width: AtomicU32::new(0),
             height: AtomicU32::new(0),
             codec: AtomicU8::new(CODEC_H264),
@@ -1616,10 +1771,65 @@ mod tests {
         assert_eq!(video.session_joins.load(Ordering::SeqCst), 2);
     }
 
+    fn test_pkt(seq: u64, key: bool) -> EncodedPacket {
+        EncodedPacket {
+            seq,
+            codec: RudpCodec::H264,
+            is_keyframe: key,
+            data: vec![seq as u8],
+            pts_us: seq as i64,
+            damage_full: key,
+            damage: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn packet_outbox_preserves_deltas_under_backpressure() {
+        let box_ = PacketOutbox::new();
+        box_.push(test_pkt(1, true));
+        for seq in 2..=16 {
+            box_.push(test_pkt(seq, false));
+        }
+        assert_eq!(box_.len(), PACKET_OUTBOX_CAP);
+        // Consumer still blocked — more deltas must not wipe the IDR.
+        box_.push(test_pkt(17, false));
+        let seqs = box_.seqs();
+        assert_eq!(seqs[0], 1, "keyframe must remain at head");
+        assert!(seqs.contains(&17), "newest delta kept after drop");
+        assert_eq!(seqs.len(), PACKET_OUTBOX_CAP);
+        // Pop all — IDR then remaining deltas in order.
+        let first = box_.pop().expect("idr");
+        assert!(first.is_keyframe);
+        assert_eq!(first.seq, 1);
+        let mut rest = Vec::new();
+        while let Some(p) = box_.pop() {
+            rest.push(p.seq);
+        }
+        assert!(!rest.is_empty());
+        assert!(rest.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn packet_outbox_keyframe_evicts_delta_when_full() {
+        let box_ = PacketOutbox::new();
+        for seq in 1..=PACKET_OUTBOX_CAP as u64 {
+            box_.push(test_pkt(seq, false));
+        }
+        box_.push(test_pkt(99, true));
+        let seqs = box_.seqs();
+        assert_eq!(seqs.len(), PACKET_OUTBOX_CAP);
+        assert!(seqs.contains(&99));
+        assert!(seqs.iter().any(|&s| {
+            // One of the original deltas was dropped to make room.
+            (1..=PACKET_OUTBOX_CAP as u64).contains(&s)
+        }));
+    }
+
     #[test]
     fn codec_wire_names() {
         assert_eq!(codec_wire_name(codec_to_u8(RudpCodec::H264)), "h264");
         assert_eq!(codec_wire_name(codec_to_u8(RudpCodec::Hevc)), "hevc");
+        assert_eq!(codec_wire_name(codec_to_u8(RudpCodec::Av1)), "av1");
     }
 
     #[test]
@@ -1673,5 +1883,13 @@ mod tests {
         unsafe {
             std::env::remove_var("METIS_ENCODE_NULL");
         }
+    }
+
+    #[test]
+    fn sanitize_notify_user_strips_controls() {
+        assert_eq!(sanitize_notify_user("alice"), "alice");
+        assert_eq!(sanitize_notify_user("\0bob\n"), "bob");
+        assert_eq!(sanitize_notify_user("   "), "remote user");
+        assert_eq!(sanitize_notify_user(&"x".repeat(80)).len(), 64);
     }
 }

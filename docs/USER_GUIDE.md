@@ -1144,16 +1144,18 @@ Client pins: `~/.config/metis/rudp/known_hosts`.
 and an FFmpeg build that exposes `*_nvenc`. If the chosen encode backend cannot
 open, the host logs a clear error and does not fall back to software x264/x265.
 Viewer decode tries FFmpeg **VAAPI** then **NVDEC/cuvid**, then software
-H.264/HEVC, always downloading to CPU RGBA for GTK (no zero-copy yet). Needs an
+H.264/HEVC/AV1, always downloading to CPU RGBA for GTK (no zero-copy yet). Needs an
 FFmpeg build with those decoders plus a working `libva` stack (Intel/AMD) or
 NVIDIA driver/CUDA for NVDEC; without them the Viewer falls back to software
-automatically. Build also needs `libopus-dev` (and runtime `libopus0`) for Metis
-Remote audio.
+automatically. Preferred codec may be **AV1** when the GPU exposes `av1_vaapi` /
+`av1_nvenc` (otherwise the host ladder falls back). Build also needs
+`libopus-dev` (and runtime `libopus0`) for Metis Remote audio, and
+`freerdp3-dev` / `libwinpr3-dev` to build the Metis native RDP host.
 
 Use a DRM Metis session (not nested winit) for the host.
 
-Classic **RDP** (GNOME Remote Desktop), FreeRDP shadow, and third-party tools
-remain under **Settings → Remote access**.
+Classic **RDP** (GNOME Remote Desktop), Metis native RDP (`metis-rdp-host`), and
+third-party tools remain under **Settings → Remote access**.
 
 ### Remote desktop (RDP)
 
@@ -1195,12 +1197,11 @@ printf '%s\n' 'your-password' | metis-remote set-credentials YOUR_USER
 dialog that spawns FreeRDP (`wlfreerdp3` → `wlfreerdp` → `xfreerdp3` →
 `xfreerdp`, searched under `/usr/bin` only; argv spawn, no shell). Host sharing
 defaults to **Settings → Remote access** + `gnome-remote-desktop` / `metis-remote`.
-An experimental **Metis native** host (`metis-remote native enable`, FreeRDP
-shadow / `freerdp-shadow-x11`) is also RDP-compatible with this viewer; GRD
-remains the supported default (shadow is X11-oriented and may not capture a
-pure Wayland Metis session). In **Settings → Remote access → Metis native
-(experimental)**, use **Install FreeRDP shadow** for one-click apt install via
-PolicyKit (or **Enable**, which installs first when the package is missing).
+A **Metis native** RDP host (`metis-remote native enable` → `metis-rdp-host`) is
+also RDP-compatible with this viewer: it captures the Wayland session via the
+portal (PipeWire) and serves RDP on port 3389. GRD remains the supported default
+under **Settings → Remote access**. Enable **Metis native RDP** there after
+installing Metis with `metis-rdp-host` present.
 
 1. Install a FreeRDP client on the machine that will connect (Ubuntu):
    `sudo apt install freerdp3-wayland`  

@@ -568,6 +568,7 @@ fn apply_event(
             let codec_label = codec.clone();
             let codec = match codec.as_str() {
                 "h264" => RudpCodec::H264,
+                "av1" => RudpCodec::Av1,
                 _ => RudpCodec::Hevc,
             };
             if let Ok(dec) = open_decoder(codec, *width, *height)
@@ -637,6 +638,7 @@ fn apply_event(
                 }
                 let codec = match au.codec.as_str() {
                     "h264" => RudpCodec::H264,
+                    "av1" => RudpCodec::Av1,
                     _ => RudpCodec::Hevc,
                 };
                 if let Ok(d) = open_decoder(codec, w, h) {

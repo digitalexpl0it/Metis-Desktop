@@ -23,7 +23,7 @@ pub use rudp_ctrl::{
     RudpRejectReason, encode_rudp_frame, truncate_clipboard_text, try_decode_rudp_frame,
 };
 pub use rudp_video::{
-    CODEC_H264, CODEC_HEVC, DatagramHeader, FLAG_DAMAGE_FULL, FLAG_FEC, FLAG_KEY,
+    CODEC_AV1, CODEC_H264, CODEC_HEVC, DatagramHeader, FLAG_DAMAGE_FULL, FLAG_FEC, FLAG_KEY,
     RUDP_DATAGRAM_HEADER_LEN, RUDP_DEFAULT_DATAGRAM_BUDGET, RUDP_VIDEO_MAGIC, ReassembledFrame,
     ReliableAccessUnit, RudpDamageRect, apply_fec, build_media_datagrams, codec_from_str,
     codec_to_str, datagram_payload_budget, fec_parity_count, shard_payload, try_reassemble_media,

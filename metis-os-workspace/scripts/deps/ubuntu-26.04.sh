@@ -45,6 +45,8 @@ METIS_APT_PACKAGES=(
   tesseract-ocr-eng
   ffmpeg
   libavcodec-dev
+  freerdp3-dev
+  libwinpr3-dev
   libavformat-dev
   libavutil-dev
   libswscale-dev

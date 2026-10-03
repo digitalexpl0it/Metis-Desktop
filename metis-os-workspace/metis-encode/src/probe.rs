@@ -143,17 +143,18 @@ pub fn probe_encoder_open(cfg: &EncoderConfig, drm_render_node: &str) -> bool {
 
 /// Codec try order. VAAPI prefers H.264 first — many Intel iGPUs lack HEVC
 /// encode entrypoints and libva/ffmpeg have aborted the process on open.
-pub fn codec_ladder(preferred: RudpCodec, backend: EncoderBackend) -> [RudpCodec; 2] {
+pub fn codec_ladder(preferred: RudpCodec, backend: EncoderBackend) -> Vec<RudpCodec> {
     match backend {
         EncoderBackend::Vaapi | EncoderBackend::Auto => match preferred {
-            RudpCodec::H264 => [RudpCodec::H264, RudpCodec::Hevc],
-            // Still honour an explicit HEVC preference *second* only after H.264
-            // has been probed — never open HEVC first on VAAPI.
-            RudpCodec::Hevc => [RudpCodec::H264, RudpCodec::Hevc],
+            // Always probe H.264 before HEVC on VAAPI; AV1 after H.264 when preferred.
+            RudpCodec::H264 => vec![RudpCodec::H264, RudpCodec::Av1, RudpCodec::Hevc],
+            RudpCodec::Hevc => vec![RudpCodec::H264, RudpCodec::Hevc, RudpCodec::Av1],
+            RudpCodec::Av1 => vec![RudpCodec::H264, RudpCodec::Av1, RudpCodec::Hevc],
         },
         EncoderBackend::Nvenc => match preferred {
-            RudpCodec::Hevc => [RudpCodec::Hevc, RudpCodec::H264],
-            RudpCodec::H264 => [RudpCodec::H264, RudpCodec::Hevc],
+            RudpCodec::H264 => vec![RudpCodec::H264, RudpCodec::Av1, RudpCodec::Hevc],
+            RudpCodec::Hevc => vec![RudpCodec::Hevc, RudpCodec::Av1, RudpCodec::H264],
+            RudpCodec::Av1 => vec![RudpCodec::Av1, RudpCodec::H264, RudpCodec::Hevc],
         },
     }
 }
@@ -165,20 +166,32 @@ mod tests {
     #[test]
     fn vaapi_always_h264_first() {
         assert_eq!(
-            codec_ladder(RudpCodec::Hevc, EncoderBackend::Vaapi),
-            [RudpCodec::H264, RudpCodec::Hevc]
+            codec_ladder(RudpCodec::Hevc, EncoderBackend::Vaapi)[0],
+            RudpCodec::H264
         );
         assert_eq!(
-            codec_ladder(RudpCodec::H264, EncoderBackend::Vaapi),
-            [RudpCodec::H264, RudpCodec::Hevc]
+            codec_ladder(RudpCodec::Av1, EncoderBackend::Vaapi)[0],
+            RudpCodec::H264
+        );
+        assert_eq!(
+            codec_ladder(RudpCodec::H264, EncoderBackend::Vaapi)[0],
+            RudpCodec::H264
         );
     }
 
     #[test]
-    fn nvenc_honours_preference() {
+    fn nvenc_honours_av1_preference() {
         assert_eq!(
-            codec_ladder(RudpCodec::Hevc, EncoderBackend::Nvenc),
-            [RudpCodec::Hevc, RudpCodec::H264]
+            codec_ladder(RudpCodec::Av1, EncoderBackend::Nvenc),
+            vec![RudpCodec::Av1, RudpCodec::H264, RudpCodec::Hevc]
+        );
+    }
+
+    #[test]
+    fn nvenc_honours_hevc_preference() {
+        assert_eq!(
+            codec_ladder(RudpCodec::Hevc, EncoderBackend::Nvenc)[0],
+            RudpCodec::Hevc
         );
     }
 }

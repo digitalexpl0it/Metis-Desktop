@@ -391,9 +391,9 @@ fn print_help() {
   rustdesk status     Print RustDesk install/running JSON
   rustdesk enable     Start RustDesk + optional LAN firewall (GRD stays default host)
   rustdesk disable    Clear RustDesk backend preference ([--kill] stops process)
-  native status       Print Metis-native FreeRDP shadow status JSON
-  native enable       Start freerdp-shadow-cli (experimental; GRD remains default)
-  native disable      Stop shadow + restore GNOME RDP backend ([--keep-process])
+  native status       Print Metis-native RDP host (metis-rdp-host) status JSON
+  native enable       Start metis-rdp-host (portal capture; GRD remains default)
+  native disable      Stop metis-rdp-host + restore GNOME RDP backend ([--keep-process])
   pk-apt-install …    Polkit: install allowlisted apt packages
   pk-ubuntu-drivers-install  Polkit: ubuntu-drivers install (NVIDIA consent path)
   pk-updates-refresh / apply / configure  Polkit: refresh / upgrade / finish conffile prompts

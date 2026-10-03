@@ -36,6 +36,7 @@ fn decoder_name(codec: RudpCodec) -> &'static str {
     match codec {
         RudpCodec::H264 => "h264",
         RudpCodec::Hevc => "hevc",
+        RudpCodec::Av1 => "av1",
     }
 }
 

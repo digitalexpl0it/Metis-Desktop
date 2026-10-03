@@ -141,11 +141,15 @@ pub fn build() -> gtk::Widget {
     encoder_dd.set_halign(gtk::Align::End);
     enc_body.append(&ui::row(&tr("Encoder"), &encoder_dd));
 
-    let codec_labels = [tr("H.264"), tr("HEVC (H.265)")];
+    let codec_labels = [tr("H.264"), tr("HEVC (H.265)"), tr("AV1")];
     let codec_refs: Vec<&str> = codec_labels.iter().map(|s| s.as_str()).collect();
     let codec_dd = gtk::DropDown::from_strings(&codec_refs);
     codec_dd.set_selected(codec_index(cfg.borrow().codec));
     codec_dd.set_halign(gtk::Align::End);
+    codec_dd.set_tooltip_text(Some(&tr(
+        "Preferred codec — VAAPI still probes H.264 before HEVC. AV1 needs \
+         FFmpeg av1_vaapi/av1_nvenc and a capable GPU; otherwise the host falls back.",
+    )));
     enc_body.append(&ui::row(&tr("Preferred codec"), &codec_dd));
 
     let bitrate = gtk::SpinButton::with_range(500.0, 200_000.0, 500.0);
@@ -385,12 +389,14 @@ fn codec_index(codec: RudpVideoCodec) -> u32 {
     match codec {
         RudpVideoCodec::H264 => 0,
         RudpVideoCodec::Hevc => 1,
+        RudpVideoCodec::Av1 => 2,
     }
 }
 
 fn codec_from_index(idx: u32) -> RudpVideoCodec {
     match idx {
         1 => RudpVideoCodec::Hevc,
+        2 => RudpVideoCodec::Av1,
         _ => RudpVideoCodec::H264,
     }
 }
@@ -404,6 +410,7 @@ fn encode_plan_text(cfg: &RudpConfig) -> String {
     let codec = match cfg.codec {
         RudpVideoCodec::H264 => tr("prefer H.264 (VAAPI probes H.264 before HEVC)"),
         RudpVideoCodec::Hevc => tr("prefer HEVC (VAAPI still probes H.264 first)"),
+        RudpVideoCodec::Av1 => tr("prefer AV1 (VAAPI still probes H.264 first)"),
     };
     format!("{backend}; {codec}; {} kbps", cfg.bitrate_kbps)
 }

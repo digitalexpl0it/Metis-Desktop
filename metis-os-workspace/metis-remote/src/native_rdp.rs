@@ -1,8 +1,7 @@
-//! Experimental Metis-native RDP host via FreeRDP shadow (`freerdp-shadow-cli`).
+//! Metis-native RDP host via `metis-rdp-host` (portal ScreenCast + FreeRDP).
 //!
-//! Keeps the RDP wire format so `metis-viewer` continues to work. Capture is
-//! FreeRDP’s shadow path (X11 today); Wayland/portal-native capture remains a
-//! follow-up. GRD stays the product default until this path is proven.
+//! Captures the Wayland session through xdg-desktop-portal / metis-portal and
+//! serves RDP on TCP 3389 for Metis Viewer. GRD stays the product default.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,14 +11,8 @@ use metis_config::{RemoteBackend, load_remote_config, save_remote_config};
 
 use crate::host::{hostname, lan_addresses};
 
-/// Preferred FreeRDP shadow binaries under fixed prefixes (no PATH, no shell).
-const CANDIDATES: &[&str] = &[
-    "freerdp-shadow-cli",
-    "freerdp3-shadow-cli",
-    "freerdp-shadow",
-];
-
 const DEFAULT_PORT: u16 = 3389;
+const HOST_NAMES: &[&str] = &["metis-rdp-host"];
 
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -29,10 +22,20 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-/// Absolute path to a FreeRDP shadow server binary, if installed.
-pub fn resolve_shadow_binary() -> Option<PathBuf> {
-    for dir in ["/usr/bin", "/usr/local/bin"] {
-        for name in CANDIDATES {
+/// Absolute path to `metis-rdp-host`, if installed.
+pub fn resolve_host_binary() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for name in HOST_NAMES {
+            let path = dir.join(name);
+            if is_executable(&path) {
+                return Some(path);
+            }
+        }
+    }
+    for dir in ["/usr/local/bin", "/usr/bin"] {
+        for name in HOST_NAMES {
             let path = Path::new(dir).join(name);
             if is_executable(&path) {
                 return Some(path);
@@ -43,7 +46,7 @@ pub fn resolve_shadow_binary() -> Option<PathBuf> {
 }
 
 pub fn install_hint() -> &'static str {
-    "sudo apt install freerdp-shadow-x11"
+    "Rebuild/install Metis so metis-rdp-host is next to metis-remote (run-metis.sh --install-session)"
 }
 
 fn runtime_dir() -> PathBuf {
@@ -69,7 +72,6 @@ fn pid_alive(pid: u32) -> bool {
 fn write_pid(pid: u32) -> Result<(), String> {
     let dir = runtime_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    // Best-effort 0700 on the metis runtime dir.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -96,17 +98,14 @@ pub fn is_running() -> bool {
             clear_pid();
             false
         }
-        None => {
-            // Fallback: process name probe (argv-only).
-            Command::new("pgrep")
-                .args(["-f", "freerdp-shadow"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
+        None => Command::new("pgrep")
+            .args(["-x", "metis-rdp-host"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
     }
 }
 
@@ -129,7 +128,7 @@ pub struct NativeRdpStatus {
 
 pub fn status() -> NativeRdpStatus {
     let cfg = load_remote_config();
-    let bin = resolve_shadow_binary();
+    let bin = resolve_host_binary();
     let installed = bin.is_some();
     let fw = crate::firewall::status();
     let selected = matches!(cfg.backend, RemoteBackend::MetisNative);
@@ -147,32 +146,21 @@ pub fn status() -> NativeRdpStatus {
         error: if installed {
             None
         } else {
-            Some(format!(
-                "FreeRDP shadow server not found — install with: {}",
-                install_hint()
-            ))
+            Some(format!("metis-rdp-host not found — {}", install_hint()))
         },
         install_hint: install_hint().into(),
     }
 }
 
-fn start_shadow() -> Result<(), String> {
-    let bin = resolve_shadow_binary()
-        .ok_or_else(|| format!("FreeRDP shadow server not installed ({})", install_hint()))?;
+fn start_host() -> Result<(), String> {
+    let bin = resolve_host_binary().ok_or_else(|| install_hint().to_string())?;
     if is_running() {
         return Ok(());
     }
 
-    // FreeRDP shadow CLI: listen on 3389. Auth is FreeRDP’s own (often interactive
-    // / NLA). We do not put passwords on argv. X11 shadow is the packaged path;
-    // on pure Wayland this may fail until a portal-backed shadow lands.
     let child = Command::new(&bin)
-        .args([
-            format!("/port:{DEFAULT_PORT}"),
-            "/sec:rdp".into(),
-            // Avoid interactive cert prompts for LAN use (same rationale as viewer).
-            "/cert:ignore".into(),
-        ])
+        .env("METIS_PORTAL_AUTO_APPROVE", "1")
+        .env("METIS_RDP_PORT", DEFAULT_PORT.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -181,13 +169,12 @@ fn start_shadow() -> Result<(), String> {
 
     let pid = child.id();
     write_pid(pid)?;
-    // Detach so Drop does not wait on / kill the shadow process.
     std::mem::forget(child);
-    tracing::info!(%pid, binary = %bin.display(), "native RDP: started FreeRDP shadow");
+    tracing::info!(%pid, binary = %bin.display(), "native RDP: started metis-rdp-host");
     Ok(())
 }
 
-fn stop_shadow() -> Result<(), String> {
+fn stop_host() -> Result<(), String> {
     if let Some(pid) = read_pid() {
         if pid_alive(pid) {
             let _ = Command::new("kill")
@@ -196,8 +183,7 @@ fn stop_shadow() -> Result<(), String> {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
-            // Brief wait then SIGKILL if needed.
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::thread::sleep(std::time::Duration::from_millis(400));
             if pid_alive(pid) {
                 let _ = Command::new("kill")
                     .args(["-KILL", &pid.to_string()])
@@ -210,9 +196,8 @@ fn stop_shadow() -> Result<(), String> {
         clear_pid();
         return Ok(());
     }
-    // No pid file — best-effort pkill by pattern (fixed argv, no shell).
     let _ = Command::new("pkill")
-        .args(["-f", "freerdp-shadow"])
+        .args(["-x", "metis-rdp-host"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -220,9 +205,9 @@ fn stop_shadow() -> Result<(), String> {
     Ok(())
 }
 
-/// Select MetisNative backend, start FreeRDP shadow, apply LAN firewall if configured.
+/// Select MetisNative backend, start portal RDP host, apply LAN firewall if configured.
 pub fn enable() -> Result<(), String> {
-    start_shadow()?;
+    start_host()?;
     let mut cfg = load_remote_config();
     cfg.backend = RemoteBackend::MetisNative;
     cfg.enabled = true;
@@ -244,10 +229,10 @@ pub fn enable() -> Result<(), String> {
     Ok(())
 }
 
-/// Stop shadow server and clear MetisNative backend preference (restore GRD default).
+/// Stop host and clear MetisNative backend preference (restore GRD default).
 pub fn disable(kill: bool) -> Result<(), String> {
     if kill {
-        stop_shadow()?;
+        stop_host()?;
     }
     let mut cfg = load_remote_config();
     if matches!(cfg.backend, RemoteBackend::MetisNative) {
@@ -264,7 +249,7 @@ pub fn pause() -> Result<(), String> {
     if !matches!(cfg.backend, RemoteBackend::MetisNative) {
         return Ok(());
     }
-    stop_shadow()
+    stop_host()
 }
 
 /// Resume if config still wants MetisNative sharing.
@@ -273,7 +258,7 @@ pub fn resume() -> Result<(), String> {
     if !cfg.enabled || !matches!(cfg.backend, RemoteBackend::MetisNative) {
         return Ok(());
     }
-    start_shadow()?;
+    start_host()?;
     if cfg.lan_only {
         let _ = crate::firewall::apply();
     }
@@ -285,12 +270,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn install_hint_mentions_package() {
-        assert!(install_hint().contains("freerdp-shadow"));
+    fn install_hint_mentions_host() {
+        assert!(install_hint().contains("metis-rdp-host"));
     }
 
     #[test]
-    fn candidates_non_empty() {
-        assert!(!CANDIDATES.is_empty());
+    fn host_names_non_empty() {
+        assert!(!HOST_NAMES.is_empty());
     }
 }

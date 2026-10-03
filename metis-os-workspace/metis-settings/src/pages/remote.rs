@@ -187,17 +187,16 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     sec_body.append(&hint_label);
     content.append(&sec_card);
 
-    // Experimental Metis-native FreeRDP shadow host (RDP-compatible with Metis Viewer).
-    let (native_card, native_body) = ui::section(&tr("Metis native (experimental)"));
+    // Metis-native RDP host (portal ScreenCast + FreeRDP). GRD remains default.
+    let (native_card, native_body) = ui::section(&tr("Metis native RDP"));
     let native_status = gtk::Label::new(None);
     native_status.set_xalign(0.0);
     native_status.add_css_class("metis-settings-value");
     native_body.append(&readout_row(&tr("Status"), &native_status));
     let native_hint = gtk::Label::new(Some(&tr(
-        "Starts FreeRDP’s shadow server (freerdp-shadow-cli) so Metis Viewer can \
-         connect over RDP without gnome-remote-desktop. Experimental: packaged \
-         shadow is X11-oriented and may not capture a pure Wayland Metis session. \
-         GNOME Remote Desktop remains the supported default.",
+        "Starts metis-rdp-host: captures this Wayland session via the portal \
+         (PipeWire) and serves RDP on port 3389 for Metis Viewer. GNOME Remote \
+         Desktop remains the supported default for classic RDP.",
     )));
     native_hint.set_xalign(0.0);
     native_hint.set_wrap(true);
@@ -209,16 +208,10 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     native_enable_btn.add_css_class("suggested-action");
     let native_disable_btn = gtk::Button::with_label(&tr("Disable Metis native host"));
     native_disable_btn.set_halign(gtk::Align::Start);
-    let native_install_btn = gtk::Button::with_label(&tr("Install FreeRDP shadow"));
-    native_install_btn.set_halign(gtk::Align::Start);
-    native_install_btn.set_tooltip_text(Some(&tr(
-        "Installs freerdp-shadow-x11 via apt (asks for your password).",
-    )));
     let native_actions = gtk::Box::new(gtk::Orientation::Vertical, 8);
     native_actions.add_css_class("metis-settings-actions");
     native_actions.append(&native_enable_btn);
     native_actions.append(&native_disable_btn);
-    native_actions.append(&native_install_btn);
     native_body.append(&native_actions);
     content.append(&native_card);
 
@@ -647,12 +640,11 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     let refresh_native = {
         let native_status = native_status.clone();
         let native_enable_btn = native_enable_btn.clone();
-        let native_install_btn = native_install_btn.clone();
         Rc::new(move || {
             let snap = remote::native_backend_status();
             let label = match &snap {
                 Some(s) if s.backend_selected && s.running => {
-                    tr("FreeRDP shadow running — Metis native backend active").to_string()
+                    tr("metis-rdp-host running — portal capture active").to_string()
                 }
                 Some(s) if s.backend_selected && s.installed => {
                     tr("Metis native backend selected (not running)").to_string()
@@ -660,100 +652,44 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
                 Some(s) if s.installed => {
                     format!(
                         "{} ({})",
-                        tr("FreeRDP shadow installed"),
-                        s.binary.as_deref().unwrap_or("freerdp-shadow-cli")
+                        tr("metis-rdp-host installed"),
+                        s.binary.as_deref().unwrap_or("metis-rdp-host")
                     )
                 }
                 Some(s) => s
                     .error
                     .clone()
-                    .unwrap_or_else(|| tr("FreeRDP shadow not installed").to_string()),
+                    .unwrap_or_else(|| tr("metis-rdp-host not installed").to_string()),
                 None => tr("Could not query Metis native status").to_string(),
             };
             native_status.set_text(&label);
             let installed = snap.as_ref().is_some_and(|s| s.installed);
-            native_install_btn.set_sensitive(!installed);
-            native_install_btn.set_visible(!installed);
+            native_enable_btn.set_sensitive(installed);
             if installed {
-                native_enable_btn.set_sensitive(true);
                 native_enable_btn.set_tooltip_text(None);
             } else {
-                // Still allow Enable — it will offer install first.
-                native_enable_btn.set_sensitive(true);
                 native_enable_btn.set_tooltip_text(Some(&tr(
-                    "FreeRDP shadow is missing — Enable will install freerdp-shadow-x11 first.",
+                    "Install Metis with run-metis.sh --install-session so metis-rdp-host is available.",
                 )));
             }
         })
     };
     refresh_native();
 
-    let (native_install_tx, native_install_rx) = mpsc::channel::<Result<&'static str, String>>();
     {
         let sections_n = sections.clone();
         let refresh_native = refresh_native.clone();
-        let native_install_btn = native_install_btn.clone();
-        glib::timeout_add_local(Duration::from_millis(200), move || {
-            while let Ok(result) = native_install_rx.try_recv() {
-                native_install_btn.set_sensitive(true);
-                match result {
-                    Ok(msg) => {
-                        sections_n.hint_label.set_text(&tr(msg));
-                        refresh_native();
-                    }
-                    Err(err) => {
-                        *sections_n.action_error.borrow_mut() = Some(err.clone());
-                        sections_n.error_label.set_text(&err);
-                        sections_n.error_label.set_visible(true);
-                    }
-                }
-            }
-            glib::ControlFlow::Continue
-        });
-    }
-
-    {
-        let sections_n = sections.clone();
-        let refresh_native = refresh_native.clone();
-        let native_install_tx = native_install_tx.clone();
-        native_enable_btn.connect_clicked(move |_| {
-            let snap = remote::native_backend_status();
-            let installed = snap.as_ref().is_some_and(|s| s.installed);
-            if !installed {
+        native_enable_btn.connect_clicked(move |_| match remote::native_enable() {
+            Ok(()) => {
                 sections_n.hint_label.set_text(&tr(
-                    "Installing FreeRDP shadow… authenticate if prompted.",
+                    "Metis native RDP host enabled (portal capture). Connect with Metis Viewer.",
                 ));
-                let tx = native_install_tx.clone();
-                std::thread::spawn(move || {
-                    if let Err(err) = remote::native_install_shadow() {
-                        let _ = tx.send(Err(err));
-                        return;
-                    }
-                    match remote::native_enable() {
-                        Ok(()) => {
-                            let _ = tx.send(Ok(
-                                "FreeRDP shadow installed and Metis native host enabled (experimental).",
-                            ));
-                        }
-                        Err(err) => {
-                            let _ = tx.send(Err(err));
-                        }
-                    }
-                });
-                return;
+                refresh_native();
             }
-            match remote::native_enable() {
-                Ok(()) => {
-                    sections_n.hint_label.set_text(&tr(
-                        "Metis native FreeRDP host enabled (experimental). Connect with Metis Viewer.",
-                    ));
-                    refresh_native();
-                }
-                Err(err) => {
-                    *sections_n.action_error.borrow_mut() = Some(err.clone());
-                    sections_n.error_label.set_text(&err);
-                    sections_n.error_label.set_visible(true);
-                }
+            Err(err) => {
+                *sections_n.action_error.borrow_mut() = Some(err.clone());
+                sections_n.error_label.set_text(&err);
+                sections_n.error_label.set_visible(true);
             }
         });
     }
@@ -772,28 +708,6 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
                 sections_n.error_label.set_text(&err);
                 sections_n.error_label.set_visible(true);
             }
-        });
-    }
-    {
-        let sections_n = sections.clone();
-        let native_install_btn = native_install_btn.clone();
-        let native_install_tx = native_install_tx.clone();
-        native_install_btn.connect_clicked(move |btn| {
-            btn.set_sensitive(false);
-            sections_n
-                .hint_label
-                .set_text(&tr("Installing FreeRDP shadow… authenticate if prompted."));
-            let tx = native_install_tx.clone();
-            std::thread::spawn(move || match remote::native_install_shadow() {
-                Ok(()) => {
-                    let _ = tx.send(Ok(
-                        "FreeRDP shadow installed. You can Enable the Metis native host.",
-                    ));
-                }
-                Err(err) => {
-                    let _ = tx.send(Err(err));
-                }
-            });
         });
     }
     {

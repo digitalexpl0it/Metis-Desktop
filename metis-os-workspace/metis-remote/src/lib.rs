@@ -91,7 +91,7 @@ pub fn status() -> RemoteStatus {
             running: n.running,
             rdp_enabled: n.running && cfg.enabled,
             port: n.port,
-            password_set: true, // FreeRDP shadow manages its own auth
+            password_set: true, // metis-rdp-host manages its own auth
             username: None,
             hostname: n.hostname,
             addresses: n.addresses,
@@ -189,7 +189,7 @@ pub fn disable() -> Result<(), String> {
         let _ = native_rdp::pause();
         let mut cfg = cfg;
         cfg.enabled = false;
-        // Keep MetisNative selected so the experimental card still reflects intent;
+        // Keep MetisNative selected so Settings still reflects intent;
         // use `native disable` to restore GRD as the preferred backend.
         save_remote_config(&cfg).map_err(|e| e.to_string())?;
         std::thread::Builder::new()

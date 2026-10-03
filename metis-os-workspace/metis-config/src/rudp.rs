@@ -43,6 +43,9 @@ pub enum RudpVideoCodec {
     #[default]
     H264,
     Hevc,
+    /// Requires FFmpeg `av1_vaapi` / `av1_nvenc` and a capable GPU; ladder
+    /// falls back to H.264/HEVC when open fails.
+    Av1,
 }
 
 impl RudpVideoCodec {
@@ -50,6 +53,7 @@ impl RudpVideoCodec {
         match self {
             Self::Hevc => "hevc",
             Self::H264 => "h264",
+            Self::Av1 => "av1",
         }
     }
 }

@@ -15,6 +15,7 @@ members = [
     "metis-settings",
     "metis-portal",
     "metis-remote",
+    "metis-rdp-host",
     "metis-polkit-agent",
     "metis-viewer",
     "metis-gaming",

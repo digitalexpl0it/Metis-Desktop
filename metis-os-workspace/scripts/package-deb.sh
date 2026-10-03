@@ -94,6 +94,7 @@ build_binaries() {
       -p metis-settings \
       -p metis-portal \
       -p metis-remote \
+      -p metis-rdp-host \
       -p metis-polkit-agent \
       -p metis-viewer \
       -p metis-screenshot \
@@ -109,7 +110,7 @@ write_control() {
   case "$CONTROL_PROFILE" in
     ubuntu26.04)
       # Ubuntu 26.04 (resolute) ships libdisplay-info3 (0.3); libdisplay-info1 is gone.
-      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0t64 | libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3t64 | libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, xdg-desktop-portal, kitty, pkexec, polkitd"
+      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0t64 | libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3t64 | libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
@@ -122,7 +123,7 @@ write_control() {
       fi
       ;;
     debian13)
-      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, xdg-desktop-portal, kitty, pkexec, polkitd"
+      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi

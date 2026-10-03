@@ -331,7 +331,7 @@ pub const NAV: &[NavItem] = &[
         title: "Remote access",
         icon: Some("network-transmit-receive-symbolic"),
         hue: Some(NavHue::Blue),
-        subtitle: Some("Classic RDP, FreeRDP shadow, and third-party tools"),
+        subtitle: Some("Classic RDP, Metis native RDP, and third-party tools"),
         category: Some("system"),
     },
     NavItem {

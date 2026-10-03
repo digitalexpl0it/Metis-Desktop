@@ -36,7 +36,7 @@ pub enum RudpControlMsg {
     VideoReady {
         width: u32,
         height: u32,
-        /// `"h264"` or `"hevc"`.
+        /// `"h264"`, `"hevc"`, or `"av1"`.
         codec: String,
     },
     /// Host advertises system-audio stream parameters (host → client Opus).

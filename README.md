@@ -483,7 +483,7 @@ Optional follow-up (remaining): default-on colour-management protocol (upstream
 wayland-rs ObjectData UAF — still opt-in `METIS_COLOR_MGMT=1`); fuller per-surface
 HDR tone-map / float scene-linear; Anvil-style MultiRenderer element typing;
 Metis Remote polish (multi-monitor / pointer-lock edge cases); classic RDP host
-beyond GRD + experimental FreeRDP shadow.
+beyond GRD + opt-in Metis native (`metis-rdp-host`).
 
 See [`metis-os-workspace/TODO.md`](metis-os-workspace/TODO.md) for the detailed
 roadmap, [`CHANGELOG.md`](CHANGELOG.md) for recent changes,

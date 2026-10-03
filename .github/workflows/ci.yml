@@ -52,6 +52,7 @@ jobs:
             libavcodec-dev libavformat-dev libavutil-dev \
             libswscale-dev libswresample-dev \
             libva-dev \
+            freerdp3-dev libwinpr3-dev \
             gettext
 
       - name: Check support-floor versions

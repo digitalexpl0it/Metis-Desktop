@@ -66,6 +66,7 @@ fn probe_main(args: &[String]) -> ! {
     let codec = match args.next() {
         Some("hevc") | Some("h265") => RudpCodec::Hevc,
         Some("h264") | Some("avc") => RudpCodec::H264,
+        Some("av1") => RudpCodec::Av1,
         other => usage_exit(&format!("unknown codec {other:?}")),
     };
     let width = match args.next().and_then(|s| s.parse::<u32>().ok()) {

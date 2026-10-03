@@ -5,6 +5,20 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-03]
+
+### Added
+
+- **Metis native RDP host (`metis-rdp-host`)** — portal ScreenCast → PipeWire →
+  FreeRDP shadow server; `metis-remote native enable` / Settings **Metis native
+  RDP**. GRD remains the default classic RDP backend.
+- **RUDP AV1** — Settings codec preference; HW encode (`av1_vaapi` / `av1_nvenc`)
+  and soft+HW Viewer decode (`av1` / VAAPI / NVDEC).
+- **RUDP encoded-packet queue** — keyframe-aware outbox so deltas survive slow
+  keyframe stream writes.
+- **RUDP audio v1**, text clipboard, auto-unlock Metis PAM lock, and Viewer HW
+  decode ladder (VAAPI → NVDEC → software).
+
 ## [2026-10-02]
 
 ### Fixed
@@ -53,10 +67,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **FreeRDP sessions on their own workspace** — `wlfreerdp` / `xfreerdp` client
   windows are moved to a dedicated desktop and that workspace is activated
   (visible in Super+Tab Task View and Super+Alt+←/→ cycling).
-- **Experimental Metis-native RDP host** — Settings → Remote access and
-  `metis-remote native enable` start FreeRDP shadow (`freerdp-shadow-x11`) so
-  Metis Viewer can connect without GRD. GNOME Remote Desktop remains the
-  supported default; Wayland capture limitations are documented.
+- **Metis-native RDP host (`metis-rdp-host`)** — Settings → Remote access and
+  `metis-remote native enable` start a portal ScreenCast + FreeRDP shadow
+  server so Metis Viewer can connect without GRD. GNOME Remote Desktop remains
+  the supported default.
 - **Per-Steam-appid Gamescope profiles** — Settings → Gaming edits
   `gaming.json` → `gamescope_profiles`. Metis-spawned
   `steam -applaunch <id>` / `steam://rungameid/<id>` get

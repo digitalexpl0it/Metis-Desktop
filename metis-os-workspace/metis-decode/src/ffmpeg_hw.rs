@@ -41,8 +41,10 @@ fn hw_decoder_names(backend: DecoderBackend, codec: RudpCodec) -> &'static [&'st
     match (backend, codec) {
         (DecoderBackend::Vaapi, RudpCodec::H264) => &["h264_vaapi"],
         (DecoderBackend::Vaapi, RudpCodec::Hevc) => &["hevc_vaapi"],
+        (DecoderBackend::Vaapi, RudpCodec::Av1) => &["av1_vaapi"],
         (DecoderBackend::Nvdec, RudpCodec::H264) => &["h264_nvdec", "h264_cuvid"],
         (DecoderBackend::Nvdec, RudpCodec::Hevc) => &["hevc_nvdec", "hevc_cuvid"],
+        (DecoderBackend::Nvdec, RudpCodec::Av1) => &["av1_nvdec", "av1_cuvid"],
         _ => &[],
     }
 }

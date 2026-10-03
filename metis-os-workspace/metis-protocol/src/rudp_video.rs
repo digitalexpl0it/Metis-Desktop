@@ -23,6 +23,7 @@ pub const FLAG_DAMAGE_FULL: u8 = 0x04;
 
 pub const CODEC_H264: u8 = 1;
 pub const CODEC_HEVC: u8 = 2;
+pub const CODEC_AV1: u8 = 3;
 
 /// Physical dirty rectangle on a reliable AU (compact wire form).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -422,14 +423,18 @@ impl ReliableAccessUnit {
 pub fn codec_from_str(s: &str) -> u8 {
     match s {
         "h264" => CODEC_H264,
-        _ => CODEC_HEVC,
+        "hevc" | "h265" => CODEC_HEVC,
+        "av1" => CODEC_AV1,
+        _ => CODEC_H264,
     }
 }
 
 pub fn codec_to_str(c: u8) -> &'static str {
     match c {
         CODEC_H264 => "h264",
-        _ => "hevc",
+        CODEC_HEVC => "hevc",
+        CODEC_AV1 => "av1",
+        _ => "h264",
     }
 }
 

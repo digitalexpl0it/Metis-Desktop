@@ -51,8 +51,10 @@ fn encoder_codec_name(backend: EncoderBackend, codec: RudpCodec) -> &'static str
     match (backend, codec) {
         (EncoderBackend::Vaapi | EncoderBackend::Auto, RudpCodec::Hevc) => "hevc_vaapi",
         (EncoderBackend::Vaapi | EncoderBackend::Auto, RudpCodec::H264) => "h264_vaapi",
+        (EncoderBackend::Vaapi | EncoderBackend::Auto, RudpCodec::Av1) => "av1_vaapi",
         (EncoderBackend::Nvenc, RudpCodec::Hevc) => "hevc_nvenc",
         (EncoderBackend::Nvenc, RudpCodec::H264) => "h264_nvenc",
+        (EncoderBackend::Nvenc, RudpCodec::Av1) => "av1_nvenc",
     }
 }
 
