@@ -21,11 +21,14 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
-use smithay::backend::renderer::element::{AsRenderElements, surface::WaylandSurfaceRenderElement};
+use smithay::backend::renderer::element::{
+    AsRenderElements, Id, surface::WaylandSurfaceRenderElement,
+};
 use smithay::backend::renderer::gles::element::TextureShaderElement;
 use smithay::backend::renderer::gles::{
     GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName, UniformType,
 };
+use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Bind, Offscreen};
 use smithay::desktop::Window;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
@@ -574,6 +577,93 @@ impl HdrEncodeRuntime {
             program,
             vec![Uniform::new("reference_white", REFERENCE_WHITE_NITS)],
         ))
+    }
+
+    /// Hybrid MultiRenderer variant: same offscreen decode setup, wrapped for
+    /// [`crate::hybrid_shader::HybridTexShaderElement`].
+    pub fn try_decode_window_hybrid(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        window: &Window,
+        place_at: Point<i32, Physical>,
+        scale: Scale<f64>,
+        alpha: f32,
+        transfer: HdrTransfer,
+    ) -> Option<crate::hybrid_shader::HybridTexShaderElement> {
+        self.ensure_decode_program(renderer, transfer);
+        let program = match transfer {
+            HdrTransfer::Pq => self.pq_decode_program.clone()?,
+            HdrTransfer::Hlg => self.hlg_decode_program.clone()?,
+        };
+
+        let geo = window.geometry();
+        let width = geo.size.w.max(1);
+        let height = geo.size.h.max(1);
+        let size_phys: Size<i32, Physical> =
+            Size::<i32, Logical>::from((width, height)).to_physical_precise_round(scale);
+        if size_phys.w <= 0 || size_phys.h <= 0 {
+            return None;
+        }
+        if size_phys.w > 7680 || size_phys.h > 4320 {
+            tracing::warn!(
+                w = size_phys.w,
+                h = size_phys.h,
+                "hdr: refusing hybrid decode offscreen larger than 8K"
+            );
+            return None;
+        }
+
+        let size_buf: Size<i32, Buffer> = Size::from((size_phys.w, size_phys.h));
+        let loc =
+            Point::<i32, Logical>::from((-geo.loc.x, -geo.loc.y)).to_physical_precise_round(scale);
+        let elems = AsRenderElements::<GlesRenderer>::render_elements::<
+            WaylandSurfaceRenderElement<GlesRenderer>,
+        >(window, renderer, loc, scale, alpha);
+        if elems.is_empty() {
+            return None;
+        }
+
+        let mut scene = None;
+        for format in [Fourcc::Abgr2101010, Fourcc::Abgr8888] {
+            let mut offscreen =
+                match Offscreen::<GlesTexture>::create_buffer(renderer, format, size_buf) {
+                    Ok(buf) => buf,
+                    Err(_) => continue,
+                };
+            let ok = {
+                let mut framebuffer = match renderer.bind(&mut offscreen) {
+                    Ok(fb) => fb,
+                    Err(_) => continue,
+                };
+                let mut damage_tracker =
+                    OutputDamageTracker::new(size_phys, scale, Transform::Normal);
+                damage_tracker
+                    .render_output(renderer, &mut framebuffer, 0, &elems, DECODE_CLEAR)
+                    .is_ok()
+            };
+            if ok {
+                scene = Some(offscreen);
+                break;
+            }
+        }
+        let scene = scene?;
+        let geometry = Rectangle::new(place_at, size_phys);
+        let src = Rectangle::<f64, Buffer>::new(
+            Point::from((0.0, 0.0)),
+            Size::from((size_phys.w as f64, size_phys.h as f64)),
+        );
+        crate::hybrid_shader::HybridTexShaderElement::from_gles_texture(
+            renderer,
+            Id::new(),
+            CommitCounter::default(),
+            geometry,
+            src,
+            scene,
+            program,
+            vec![Uniform::new("reference_white", REFERENCE_WHITE_NITS)],
+            alpha,
+            Kind::Unspecified,
+        )
     }
 }
 

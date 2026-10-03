@@ -4,13 +4,17 @@
 //! PQ or HLG encode (when HDR active) → single fullscreen scanout element.
 
 use smithay::backend::allocator::Fourcc;
+use smithay::backend::drm::DrmDeviceFd;
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
+use smithay::backend::renderer::element::{Id, Kind};
 use smithay::backend::renderer::gles::element::TextureShaderElement;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture, Uniform};
-use smithay::backend::renderer::{Bind, Offscreen};
+use smithay::backend::renderer::multigpu::{MultiTexture, gbm::GbmGlesBackend};
+use smithay::backend::renderer::{Bind, Offscreen, Renderer};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
+
+type UdevGbm = GbmGlesBackend<GlesRenderer, DrmDeviceFd>;
 
 use crate::color_lut::ColorLutRuntime;
 use crate::hdr_encode::{HDR_CLEAR, HdrEncodeRuntime, HdrTransfer, REFERENCE_WHITE_NITS};
@@ -53,7 +57,45 @@ pub fn apply_colour_post_pass(
     }
 
     let size_buf: Size<i32, Buffer> = Size::from((size.w, size.h));
-    let mut scene = composite_offscreen(renderer, elements, size, scale, size_buf)?;
+    let scene = composite_offscreen(renderer, elements, size, scale, size_buf)?;
+    apply_colour_post_pass_scene(
+        lut_runtime,
+        hdr_runtime,
+        renderer,
+        scene,
+        output_name,
+        size,
+        hdr_active,
+        hdr_transfer,
+        hdr_passthrough,
+    )
+}
+
+/// Apply LUT / HDR encode to an already-composited scene texture.
+///
+/// Used by the GLES path after offscreen composite and by the hybrid Multi path
+/// after same-node Multi offscreen composite.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_colour_post_pass_scene(
+    lut_runtime: &mut ColorLutRuntime,
+    hdr_runtime: &mut HdrEncodeRuntime,
+    renderer: &mut GlesRenderer,
+    mut scene: GlesTexture,
+    output_name: &str,
+    size: Size<i32, Physical>,
+    hdr_active: bool,
+    hdr_transfer: HdrTransfer,
+    hdr_passthrough: bool,
+) -> Option<ColourPassResult> {
+    let wants_lut = lut_runtime.lut_owns_output(output_name);
+    let wants_hdr_encode = hdr_active && !hdr_passthrough;
+    if !wants_lut && !wants_hdr_encode {
+        return None;
+    }
+    if size.w <= 0 || size.h <= 0 {
+        return None;
+    }
+    let size_buf: Size<i32, Buffer> = Size::from((size.w, size.h));
 
     if wants_lut
         && let Some(mapped) = lut_runtime.apply(renderer, output_name, scene.clone(), size_buf)
@@ -109,6 +151,92 @@ pub fn apply_colour_post_pass(
         elements: vec![OutputStack::Wallpaper(tex)],
         clear: CLEAR_COLOR,
     })
+}
+
+/// Hybrid Multi present result after colour post: one fullscreen MultiTexture
+/// element (LUT-only) or a hybrid shader element (HDR encode).
+pub enum HybridColourPass {
+    Texture(TextureRenderElement<smithay::backend::renderer::multigpu::MultiTexture>),
+    Shader(crate::hybrid_shader::HybridTexShaderElement),
+}
+
+/// Run LUT / HDR encode on a primary-GPU scene and wrap for Multi present.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_hybrid_colour_post_pass(
+    lut_runtime: &mut ColorLutRuntime,
+    hdr_runtime: &mut HdrEncodeRuntime,
+    renderer: &mut GlesRenderer,
+    multi_context_id: smithay::backend::renderer::ContextId<MultiTexture>,
+    scene: GlesTexture,
+    output_name: &str,
+    size: Size<i32, Physical>,
+    hdr_active: bool,
+    hdr_transfer: HdrTransfer,
+    hdr_passthrough: bool,
+) -> Option<(HybridColourPass, [f32; 4])> {
+    let wants_lut = lut_runtime.lut_owns_output(output_name);
+    let wants_hdr_encode = hdr_active && !hdr_passthrough;
+    if !wants_lut && !wants_hdr_encode {
+        return None;
+    }
+    if size.w <= 0 || size.h <= 0 {
+        return None;
+    }
+    let size_buf: Size<i32, Buffer> = Size::from((size.w, size.h));
+    let mut scene = scene;
+
+    if wants_lut
+        && let Some(mapped) = lut_runtime.apply(renderer, output_name, scene.clone(), size_buf)
+    {
+        scene = mapped;
+    }
+
+    if wants_hdr_encode {
+        hdr_runtime.ensure_program(renderer, hdr_transfer);
+        let program = match hdr_transfer {
+            HdrTransfer::Pq => hdr_runtime.pq_program.clone()?,
+            HdrTransfer::Hlg => hdr_runtime.hlg_program.clone()?,
+        };
+        let geometry = Rectangle::new(Point::from((0, 0)), size);
+        let src = Rectangle::<f64, Buffer>::new(
+            Point::from((0.0, 0.0)),
+            Size::from((size.w as f64, size.h as f64)),
+        );
+        let elem = crate::hybrid_shader::HybridTexShaderElement::from_gles_texture(
+            renderer,
+            Id::new(),
+            smithay::backend::renderer::utils::CommitCounter::default(),
+            geometry,
+            src,
+            scene,
+            program,
+            vec![Uniform::new("reference_white", REFERENCE_WHITE_NITS)],
+            1.0,
+            Kind::Unspecified,
+        )?;
+        return Some((HybridColourPass::Shader(elem), HDR_CLEAR));
+    }
+
+    let multi =
+        MultiTexture::from_native_texture::<UdevGbm>(&Renderer::context_id(renderer), scene)?;
+    let src_rect = Rectangle::<f64, Logical>::new(
+        Point::from((0.0, 0.0)),
+        Size::from((size.w as f64, size.h as f64)),
+    );
+    let tex = TextureRenderElement::from_static_texture(
+        Id::new(),
+        multi_context_id,
+        Point::<f64, Physical>::from((0.0, 0.0)),
+        multi,
+        1,
+        Transform::Normal,
+        None,
+        Some(src_rect),
+        Some(Size::from((size.w, size.h))),
+        None,
+        Kind::Unspecified,
+    );
+    Some((HybridColourPass::Texture(tex), CLEAR_COLOR))
 }
 
 fn composite_offscreen(

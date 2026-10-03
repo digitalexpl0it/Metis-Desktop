@@ -237,6 +237,48 @@ impl BlurRuntime {
         })
     }
 
+    /// Hybrid MultiRenderer blur element sampling a [`MultiTexture`] wallpaper.
+    pub fn hybrid_element(
+        &mut self,
+        rect: Rectangle<i32, Physical>,
+        texture: smithay::backend::renderer::multigpu::MultiTexture,
+        tex_size: Size<i32, Buffer>,
+    ) -> Option<crate::hybrid_shader::HybridTexShaderElement> {
+        if !self.enabled || rect.size.is_empty() || tex_size.is_empty() {
+            return None;
+        }
+        let program = self.program.clone()?;
+
+        // MultiTexture has no GLES tex_id; hash size + geometry for damage.
+        let sig = signature(rect, self.radius, 0, tex_size);
+        if sig != self.last_sig {
+            self.last_sig = sig;
+            self.commit.increment();
+        }
+
+        let src = Rectangle::<f64, Buffer>::new(
+            Point::from((rect.loc.x as f64, rect.loc.y as f64)),
+            Size::from((rect.size.w as f64, rect.size.h as f64)),
+        );
+
+        Some(
+            crate::hybrid_shader::HybridTexShaderElement::from_multi_texture(
+                self.id.clone(),
+                self.commit,
+                rect,
+                src,
+                texture,
+                program,
+                vec![
+                    Uniform::new("tex_size", [tex_size.w as f32, tex_size.h as f32]),
+                    Uniform::new("blur_radius", self.radius),
+                ],
+                1.0,
+                smithay::backend::renderer::element::Kind::Unspecified,
+            ),
+        )
+    }
+
     /// Build a full-target blur element for the compositor lock screen.
     ///
     /// Unlike [`Self::element`] (which conflates the bar's local rect with the

@@ -9,10 +9,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
-- **Hybrid MultiRenderer Wave A/B** — secondary GPUs try Smithay
-  `GpuManager::renderer` when blur/HDR/LUT are idle, with textured server-side
-  decorations and cached wallpaper `ImportMem`; full-frame GBM dmabuf transfer
-  (ExportMem fallback) remains for blur/HDR/LUT, with path metrics.
+- **Hybrid MultiRenderer Wave A/B/C** — secondary GPUs present via Smithay
+  `GpuManager::renderer` with textured SSD, bar blur, HDR decode/encode, and
+  Stage-2 LUT on the Multi path; full-frame GBM dmabuf transfer is fail-fallback
+  only, with path metrics.
 - **Metis native RDP host (`metis-rdp-host`)** — portal ScreenCast → PipeWire →
   FreeRDP shadow server; `metis-remote native enable` / Settings **Metis native
   RDP**. GRD remains the default classic RDP backend.

@@ -59,7 +59,7 @@ const SNAP_OVERLAY_COLOR: [f32; 4] = [0.36, 0.56, 0.96, 0.30];
 /// backdrop blur. Returned in the output's local physical coordinates; the
 /// caller offsets by the output's global origin. `None` when the bar is not
 /// (yet) mapped.
-fn bar_layer_rect(output: &Output) -> Option<Rectangle<i32, Physical>> {
+pub(crate) fn bar_layer_rect(output: &Output) -> Option<Rectangle<i32, Physical>> {
     let map = layer_map_for_output(output);
     for layer in map.layers() {
         if layer.namespace() == "metis-bar"

@@ -1,11 +1,11 @@
 //! Primary→secondary GPU framebuffer transfer for hybrid outputs (Wave 3a).
 //!
-//! Full-frame primary→secondary transfer when hybrid MultiRenderer cannot host
-//! GLES-only elements (blur, HDR encode, Stage-2 LUT). Wave A/B
-//! ([`crate::hybrid_multi`]) presents the Anvil-easy stack — surfaces, textured
-//! SSD, wallpaper, cursor — via [`MultiRenderer`] when those post-passes are idle.
+//! Full-frame primary→secondary transfer fallback when hybrid
+//! [`crate::hybrid_multi`] MultiRenderer fails. Wave C runs blur, HDR decode/
+//! encode, and Stage-2 LUT on the Multi path; this module remains the hard-fail
+//! safety net (and the historical Wave 3a path).
 //!
-//! For outputs whose render node ≠ the primary GPU and transfer is required:
+//! For outputs whose render node ≠ the primary GPU when Multi fails:
 //!
 //! 1. Composite the full stack (blur allowed) on the **primary** GPU into a
 //!    GBM `Dmabuf` (preferred) or an offscreen texture.

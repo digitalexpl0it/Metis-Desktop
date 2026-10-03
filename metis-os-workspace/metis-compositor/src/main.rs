@@ -20,6 +20,7 @@ mod handlers;
 mod hdr_encode;
 mod hdr_surface;
 mod hybrid_multi;
+mod hybrid_shader;
 mod idle;
 mod image_capture;
 mod input;

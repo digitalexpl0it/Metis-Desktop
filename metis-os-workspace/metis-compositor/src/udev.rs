@@ -1480,7 +1480,7 @@ impl MetisState {
             if let Some(s) = self.udev.as_mut().and_then(|u| u.surface_mut(id)) {
                 s.pending = false;
             }
-            // Wave A: MultiRenderer when blur/HDR/LUT idle; else full-frame transfer.
+            // Wave C: MultiRenderer for hybrid (blur/HDR/LUT included); transfer on hard-fail.
             let multi = crate::hybrid_multi::try_multirenderer_frame(
                 self,
                 &mut gpus,
@@ -1497,21 +1497,13 @@ impl MetisState {
                 }
                 Ok(None) => Ok(None),
                 Err(multi_err) => {
-                    if multi_err.contains("skipped") {
-                        tracing::trace!(
-                            %multi_err,
-                            output = %output.name(),
-                            "hybrid MultiRenderer skipped; using full-frame transfer"
-                        );
-                    } else {
-                        tracing::debug!(
-                            %multi_err,
-                            ?primary_gpu,
-                            ?render_node,
-                            output = %output.name(),
-                            "hybrid MultiRenderer failed; trying full-frame transfer"
-                        );
-                    }
+                    tracing::debug!(
+                        %multi_err,
+                        ?primary_gpu,
+                        ?render_node,
+                        output = %output.name(),
+                        "hybrid MultiRenderer failed; trying full-frame transfer"
+                    );
                     match crate::cross_gpu::try_transfer_frame(
                         self,
                         &mut gpus,

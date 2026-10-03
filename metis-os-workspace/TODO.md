@@ -6,8 +6,8 @@
 consent + Mutter lock/EIS gates) and **Engineering review backlog**
 (security P1/P2, perf/resources, maintainability).
 **Phase 18** (security / IPC / isolation polish) **A–D complete** 2026-08-08;
-§E: colour management UAF stays track-only; **MultiRenderer** Wave A/B landed
-(textured SSD); blur/HDR on Multi remains urgent (see **Urgent priorities**).
+§E: colour management UAF stays track-only; **MultiRenderer** Wave A/B/C landed
+(blur/HDR/LUT on Multi; transfer fail-fallback) — see **Urgent priorities**.
 **Phase 19** (Gaming Setup UX — guided drivers + first-run polish) shipped
 2026-08-08 — see Phase 19 below; **per-app Gamescope UI** still urgent.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
@@ -47,15 +47,14 @@ Security items from the **2026-09-27 code review** sit above product stretch.
 
 ### Product (promoted 2026-09-20)
 
-- [ ] **1. GLES `MultiRenderer` / zero-copy cross-GPU path** — **Wave A+B
-      (2026-10-03):** hybrid outputs try `GpuManager::renderer` MultiRenderer
-      (`hybrid_multi` / `HybridOutputStack`) when blur/HDR/LUT idle — textured
-      SSD via CPU-cache `ImportMem` + wallpaper upload reuse; else GBM dmabuf
-      transfer (`cross_gpu`, ExportMem fallback) with path metrics.
-      **Residual:** blur/HDR/`TextureShaderElement` on MultiTexture; shrink
-      full-frame transfer once those land.
-      → Wave 3a residual, Phase 3 multi-GPU notes, Phase 18 §E.
-      *(dmabuf transfer 2026-09-27; MultiRenderer Wave A/B 2026-10-03)*
+- [x] **1. GLES `MultiRenderer` / zero-copy cross-GPU path** — **Wave A/B/C
+      (2026-10-03):** hybrid outputs present via `GpuManager::renderer`
+      MultiRenderer (`hybrid_multi`) with textured SSD, blur
+      (`HybridTexShaderElement` via MultiFrame→GlesFrame), HDR decode, and
+      same-node offscreen LUT/HDR encode. `cross_gpu` full-frame transfer is
+      fail-fallback only (ExportMem still available).
+      → Wave 3a, Phase 3 multi-GPU notes, Phase 18 §E.
+      *(dmabuf transfer 2026-09-27; MultiRenderer Wave A/B/C 2026-10-03)*
 - [ ] **2. True per-surface HDR decode** — mixed SDR+HDR now decodes PQ/HLG
       windows to sRGB (Reinhard @ 203 nits) before the encode pass; HDR-only /
       fullscreen still pass-through. **Residual:** float scene-linear composite
@@ -75,8 +74,8 @@ Security items from the **2026-09-27 code review** sit above product stretch.
       still uses `gamescope_big_picture`.
       → Phase 19 §C. *(landed 2026-09-27)*
 
-**Suggested order:** S1–S3 done → **1** → 2 → 4 → 3 (graphics first; native
-remote last). Profile MultiRenderer before deep investment. Broader review
+**Suggested order:** S1–S3 + MultiRenderer **1** done → **2** (HDR decode
+residuals) next; Gamescope **4** and native remote **3** landed. Broader review
 follow-ups: **Engineering review backlog** below.
 
 ---
@@ -171,9 +170,8 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 ### Wave 3 — Graphics
 - [x] **3a** Primary→secondary transfer for hybrid outputs (CPU readback path;
       local+no-blur fallback). **2026-09-27:** prefer GBM dmabuf bind/import
-      (CPU ExportMem fallback). **2026-10-03 Wave A/B:** MultiRenderer hybrid
-      stack with textured SSD + wallpaper cache; blur/HDR still transfer — see
-      **Urgent priorities**.
+      (CPU ExportMem fallback). **2026-10-03 Wave A/B/C:** MultiRenderer hybrid
+      with SSD/blur/HDR/LUT; `cross_gpu` fail-fallback only.
 - [ ] **3b** Default-on `wp_color_management_v1` — **blocked** on upstream
       wayland-rs server/sys ObjectData UAF; keep `METIS_COLOR_MGMT=1` opt-in
       ([docs/upstream/](../docs/upstream/README.md))
@@ -537,15 +535,13 @@ so each milestone is shippable on its own:
         and per-device scanners, output managers, render nodes, notifier tokens,
         and CRTC surface maps. Outputs render with their device's
         `single_renderer`; primary-GPU client buffers are early-imported.
-        **Caveat (updated Wave A/B, 2026-10-03):** hybrid outputs prefer
-        Smithay `MultiRenderer` (`hybrid_multi`) with textured SSD when
-        blur/HDR/LUT are idle; otherwise primary→secondary full-frame transfer
-        (blur allowed) and local+no-blur fallback. **Urgent residual:** blur +
-        HDR/`TextureShaderElement` on MultiTexture — see **Urgent priorities**.
-        Wallpaper/decoration GL caches (and hybrid wallpaper ImportMem) are
-        invalidated on renderer-context switches. **Hardware validation
-        (2026-07-26):** hybrid iGPU+dGPU laptop — HDMI projector output, gaming
-        PRIME offload (fast), pointer/input stable.
+        **Caveat (updated Wave C, 2026-10-03):** hybrid outputs prefer Smithay
+        `MultiRenderer` (`hybrid_multi`) including blur/HDR/LUT; full-frame
+        transfer is fail-fallback, then local+no-blur. Wallpaper/decoration GL
+        caches (and hybrid wallpaper ImportMem) are invalidated on
+        renderer-context switches. **Hardware validation (2026-07-26):** hybrid
+        iGPU+dGPU laptop — HDMI projector output, gaming PRIME offload (fast),
+        pointer/input stable.
 - [x] **Settings portal (`org.freedesktop.portal.Settings`)** — `metis-portal`
       serves color-scheme (`u` uint32 per xdg-desktop-portal spec), gtk-theme,
       and empty decoration/button layouts from `metis-config` so GTK /
@@ -1895,10 +1891,9 @@ re-doing ScreenCast dmabuf (already shipped).
 - [ ] **Default-on `wp_color_management_v1`** — only after upstream wayland-rs
       **server/sys** ObjectData UAF fix (keep `METIS_COLOR_MGMT=1` opt-in). No
       local ObjectData lifecycle wrapper in Metis (**blocked**, not urgent)
-- [ ] **Urgent: GLES `MultiRenderer` element typing** — Wave A/B (2026-10-03)
-      hybrid MultiRenderer + textured SSD (`DecorationElement<R>` ImportMem) +
-      wallpaper cache; residual blur/HDR/`TextureShaderElement` on MultiTexture.
-      See **Urgent priorities**.
+- [x] **Urgent: GLES `MultiRenderer` element typing** — Wave A/B/C (2026-10-03)
+      hybrid MultiRenderer with SSD, blur, HDR decode/encode, Stage-2 LUT;
+      `cross_gpu` fail-fallback. See **Urgent priorities**.
 
 ### F. Explicitly deferred / rejected from review
 
