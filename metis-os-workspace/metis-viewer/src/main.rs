@@ -348,7 +348,9 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     pass_hint.add_css_class("metis-viewer-hint");
     panel.append(&pass_hint);
 
-    // RDP-only: FreeRDP advanced notebook. Hidden for Metis Remote.
+    // RDP-only: FreeRDP advanced notebook in a fixed-height scroller.
+    // Do NOT wrap host/password fields in a propagate-natural-height scroll —
+    // that remeasures the whole form on every keystroke and freezes typing.
     let options_ui = Rc::new(OptionsUi::build());
     let rdp_options = gtk::Box::new(gtk::Orientation::Vertical, 0);
     rdp_options.add_css_class("metis-viewer-rdp-options");
@@ -356,7 +358,16 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     options_header.set_xalign(0.0);
     options_header.add_css_class("metis-viewer-card-title");
     rdp_options.append(&options_header);
-    rdp_options.append(&options_ui.root);
+    let options_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .hexpand(true)
+        .build();
+    options_scroll.add_css_class("metis-viewer-rdp-options-scroll");
+    // Fixed height: scroll inside, don't grow the Viewer window.
+    options_scroll.set_size_request(-1, 220);
+    options_scroll.set_child(Some(&options_ui.root));
+    rdp_options.append(&options_scroll);
     panel.append(&rdp_options);
 
     let rudp_hint = gtk::Label::new(Some(&tr(
@@ -379,23 +390,11 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     actions.append(&connect_btn);
     panel.append(&actions);
 
-    // Cap form height so Advanced Desktop Settings scroll inside the panel
-    // instead of stretching the whole Viewer window.
-    let form_scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .propagate_natural_height(true)
-        .max_content_height(360)
-        .hexpand(true)
-        .build();
-    form_scroll.add_css_class("metis-viewer-add-scroll");
-    form_scroll.set_child(Some(&panel));
-
     let revealer = gtk::Revealer::new();
     revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     revealer.set_transition_duration(220);
     revealer.set_reveal_child(false);
-    revealer.set_child(Some(&form_scroll));
+    revealer.set_child(Some(&panel));
     page.append(&revealer);
 
     let sync_protocol_ui = {
@@ -664,6 +663,28 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             refresh_hosts();
 
             if protocol == ViewerProtocol::Rudp {
+                if username.trim().is_empty() {
+                    set_status(
+                        &status,
+                        &tr("Enter a username for Metis Remote."),
+                        StatusKind::Error,
+                    );
+                    open_panel();
+                    *connect_busy.borrow_mut() = false;
+                    connect_btn.set_sensitive(true);
+                    return;
+                }
+                if password.is_empty() {
+                    set_status(
+                        &status,
+                        &tr("Enter the host PAM password for Metis Remote."),
+                        StatusKind::Error,
+                    );
+                    open_panel();
+                    *connect_busy.borrow_mut() = false;
+                    connect_btn.set_sensitive(true);
+                    return;
+                }
                 if let Some(parent) = host_entry.root().and_downcast::<gtk::Window>() {
                     rudp_session::open_rudp_session(
                         &parent,

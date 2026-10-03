@@ -359,7 +359,11 @@ impl ViewerRdpOptions {
             args.push("-sound".into());
         }
         args.push(toggle("+microphone", "-microphone", self.microphone));
-        args.push(toggle("+printers", "-printers", self.printers));
+        // FreeRDP 3 with WITH_FREERDP_DEPRECATED_COMMANDLINE=OFF rejects
+        // +/-printers (Unexpected keyword). Enable with /printer only.
+        if self.printers {
+            args.push("/printer".into());
+        }
         args.push(toggle("+smartcard", "-smartcard", self.smartcard));
 
         args.push(toggle("+wallpaper", "-wallpaper", self.wallpaper));
@@ -368,7 +372,12 @@ impl ViewerRdpOptions {
         args.push(toggle("+window-drag", "-window-drag", self.window_drag));
         args.push(toggle("+menu-anims", "-menu-anims", self.menu_animations));
         args.push(toggle("+themes", "-themes", self.themes));
-        args.push(toggle("+bitmap-cache", "-bitmap-cache", self.bitmap_cache));
+        // +/-bitmap-cache is also gone on modern FreeRDP 3 builds.
+        args.push(if self.bitmap_cache {
+            "/cache:bitmap:on".into()
+        } else {
+            "/cache:bitmap:off".into()
+        });
         args.push(toggle(
             "+auto-reconnect",
             "-auto-reconnect",
@@ -554,6 +563,7 @@ mod tests {
         let opts = ViewerRdpOptions {
             clipboard: true,
             wallpaper: true,
+            printers: true,
             display_mode: ViewerDisplayMode::Windowed,
             width: 1280,
             height: 720,
@@ -565,7 +575,14 @@ mod tests {
         assert!(args.iter().any(|a| a == "+clipboard"));
         assert!(args.iter().any(|a| a == "+wallpaper"));
         assert!(args.iter().any(|a| a == "/size:1280x720"));
+        assert!(args.iter().any(|a| a == "/printer"));
+        assert!(args.iter().any(|a| a == "/cache:bitmap:on"));
         assert!(!args.iter().any(|a| a == "/dynamic-resolution"));
+        // FreeRDP 3.x (Ubuntu 26.04) rejects these as Unexpected keyword.
+        assert!(!args.iter().any(|a| a == "+printers" || a == "-printers"));
+        assert!(!args
+            .iter()
+            .any(|a| a == "+bitmap-cache" || a == "-bitmap-cache"));
     }
 
     #[test]

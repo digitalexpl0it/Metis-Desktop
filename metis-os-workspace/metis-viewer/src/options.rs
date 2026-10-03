@@ -303,16 +303,11 @@ fn options_page() -> gtk::Box {
     page
 }
 
-fn scroll(child: gtk::Box) -> gtk::ScrolledWindow {
-    let scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .min_content_height(160)
-        .max_content_height(280)
-        .propagate_natural_height(true)
-        .build();
-    scroll.set_child(Some(&child));
-    scroll
+/// Page body for a notebook tab. No nested ScrolledWindow — the host form
+/// already scrolls Advanced Desktop Settings; nested `propagate_natural_height`
+/// scrollers remeasure on every keystroke in sibling entries.
+fn scroll(child: gtk::Box) -> gtk::Widget {
+    child.upcast()
 }
 
 fn tab_label(text: &str) -> gtk::Label {

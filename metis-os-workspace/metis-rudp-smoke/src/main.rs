@@ -91,8 +91,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         );
     }
 
-    let addr: SocketAddr = host_port
-        .parse()
+    let addr: SocketAddr = metis_rudp_client::resolve_endpoint(&host_port)
         .map_err(|e| format!("invalid host:port '{host_port}': {e}"))?;
 
     let mut password = if let Ok(p) = std::env::var("METIS_RUDP_PASSWORD") {

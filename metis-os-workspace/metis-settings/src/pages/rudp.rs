@@ -78,12 +78,18 @@ pub fn build() -> gtk::Widget {
     conn_addr.add_css_class("metis-settings-value");
     host_body.append(&readout_row(&tr("Connection address"), &conn_addr));
 
+    // Vertical block: a colon-hex fingerprint must not set the window min-width
+    // the way a horizontal readout row would (GTK natural width = unwrapped text).
     let fingerprint = gtk::Label::new(None);
     fingerprint.set_xalign(0.0);
     fingerprint.set_selectable(true);
     fingerprint.set_wrap(true);
+    fingerprint.set_wrap_mode(gtk::pango::WrapMode::Char);
+    fingerprint.set_hexpand(true);
+    fingerprint.set_width_chars(1);
+    fingerprint.set_max_width_chars(48);
     fingerprint.add_css_class("metis-settings-value");
-    host_body.append(&readout_row(&tr("Host fingerprint"), &fingerprint));
+    host_body.append(&fingerprint_block(&tr("Host fingerprint"), &fingerprint));
 
     let copy_fp = gtk::Button::with_label(&tr("Copy fingerprint"));
     copy_fp.set_halign(gtk::Align::End);
@@ -448,8 +454,24 @@ fn readout_row(label: &str, value: &gtk::Label) -> gtk::Box {
     name.set_hexpand(true);
     name.add_css_class("metis-settings-label");
     row.append(&name);
+    // Cap natural width so long status/address text cannot widen the window.
+    value.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    value.set_hexpand(false);
+    value.set_halign(gtk::Align::End);
+    value.set_max_width_chars(36);
     row.append(value);
     row
+}
+
+fn fingerprint_block(label: &str, value: &gtk::Label) -> gtk::Box {
+    let block = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    block.add_css_class("metis-settings-row");
+    let name = gtk::Label::new(Some(label));
+    name.set_xalign(0.0);
+    name.add_css_class("metis-settings-label");
+    block.append(&name);
+    block.append(value);
+    block
 }
 
 fn rebuild_accounts(

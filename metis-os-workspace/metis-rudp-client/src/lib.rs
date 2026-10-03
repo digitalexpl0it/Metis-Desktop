@@ -2,9 +2,11 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+mod resolve;
 mod session;
 mod tofu;
 
+pub use resolve::{resolve_endpoint, resolve_host_port};
 pub use session::{
     AccessUnitEvent, RudpClientConfig, RudpSession, SessionEvent, TofuMode, connect,
 };

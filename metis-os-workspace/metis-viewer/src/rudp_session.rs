@@ -14,22 +14,15 @@ use metis_i18n::tr;
 use metis_protocol::RudpControlMsg;
 use metis_rudp_client::{
     ClientError, RudpClientConfig, SessionEvent, TofuMode, clear_host_pin, connect, pin_host,
+    resolve_host_port,
 };
 use zeroize::Zeroize;
 
 enum ToGtk {
     Connected,
     Event(SessionEvent),
-    Failed(ConnectFail),
-}
-
-enum ToWorker {
-    Input(RudpControlMsg),
-    Shutdown,
-}
-
-enum ConnectFail {
-    Message(String),
+    Failed(String),
+    /// Worker is blocked waiting for [`ToWorker::TofuAccept`] / Decline.
     TofuUnknown {
         fingerprint: String,
         host_key: String,
@@ -41,6 +34,13 @@ enum ConnectFail {
     },
 }
 
+enum ToWorker {
+    Input(RudpControlMsg),
+    Shutdown,
+    TofuAccept,
+    TofuDecline,
+}
+
 /// Open an RUDP session: TOFU (interactive), decode, present, send input.
 pub fn open_rudp_session(
     parent: &impl IsA<gtk::Window>,
@@ -50,7 +50,7 @@ pub fn open_rudp_session(
     mut password: String,
 ) {
     let host_key = format!("{host}:{port}");
-    let addr: SocketAddr = match format!("{host}:{port}").parse() {
+    let addr: SocketAddr = match resolve_host_port(&host, port) {
         Ok(a) => a,
         Err(e) => {
             show_alert(parent, &format!("{}: {e}", tr("Invalid host address")));
@@ -91,10 +91,46 @@ pub fn open_rudp_session(
                 // Session window owns further event polling.
                 glib::ControlFlow::Break
             }
-            Ok(ToGtk::Failed(fail)) => {
+            Ok(ToGtk::Failed(msg)) => {
                 drop(rx);
-                handle_connect_fail(&parent, fail);
+                show_alert(&parent, &msg);
                 glib::ControlFlow::Break
+            }
+            Ok(ToGtk::TofuUnknown {
+                fingerprint,
+                host_key,
+            }) => {
+                drop(rx);
+                let parent = parent.clone();
+                let worker_tx = worker_tx.clone();
+                glib::spawn_future_local(async move {
+                    if trust_dialog(&parent, &fingerprint).await
+                        && pin_host(&host_key, &fingerprint).is_ok()
+                    {
+                        let _ = worker_tx.send(ToWorker::TofuAccept);
+                    } else {
+                        let _ = worker_tx.send(ToWorker::TofuDecline);
+                    }
+                });
+                glib::ControlFlow::Continue
+            }
+            Ok(ToGtk::TofuMismatch {
+                got,
+                pinned,
+                host_key,
+            }) => {
+                drop(rx);
+                let parent = parent.clone();
+                let worker_tx = worker_tx.clone();
+                glib::spawn_future_local(async move {
+                    if clear_pin_dialog(&parent, &got, &pinned).await {
+                        let _ = clear_host_pin(&host_key);
+                        let _ = worker_tx.send(ToWorker::TofuAccept);
+                    } else {
+                        let _ = worker_tx.send(ToWorker::TofuDecline);
+                    }
+                });
+                glib::ControlFlow::Continue
             }
             Ok(ToGtk::Event(_)) => glib::ControlFlow::Continue,
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -117,45 +153,73 @@ fn worker_main(
     {
         Ok(rt) => rt,
         Err(e) => {
-            let _ = gtk_tx.send(ToGtk::Failed(ConnectFail::Message(e.to_string())));
+            let _ = gtk_tx.send(ToGtk::Failed(e.to_string()));
+            password.zeroize();
             return;
         }
     };
 
-    let cfg = RudpClientConfig {
-        addr,
-        host_key: host_key.clone(),
-        username,
-        password: password.clone(),
-        tofu: TofuMode::Interactive,
+    let mut session = loop {
+        let cfg = RudpClientConfig {
+            addr,
+            host_key: host_key.clone(),
+            username: username.clone(),
+            password: password.clone(),
+            tofu: TofuMode::Interactive,
+        };
+
+        match rt.block_on(connect(cfg)) {
+            Ok(s) => break s,
+            Err(ClientError::TofuUnknown { fingerprint }) => {
+                if gtk_tx
+                    .send(ToGtk::TofuUnknown {
+                        fingerprint,
+                        host_key: host_key.clone(),
+                    })
+                    .is_err()
+                {
+                    password.zeroize();
+                    return;
+                }
+                match wait_tofu_decision(&worker_rx) {
+                    TofuWait::Accept => continue,
+                    TofuWait::Decline | TofuWait::Shutdown => {
+                        password.zeroize();
+                        return;
+                    }
+                }
+            }
+            Err(ClientError::TofuMismatch { got, pinned }) => {
+                if gtk_tx
+                    .send(ToGtk::TofuMismatch {
+                        got,
+                        pinned,
+                        host_key: host_key.clone(),
+                    })
+                    .is_err()
+                {
+                    password.zeroize();
+                    return;
+                }
+                match wait_tofu_decision(&worker_rx) {
+                    TofuWait::Accept => continue,
+                    TofuWait::Decline | TofuWait::Shutdown => {
+                        password.zeroize();
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = gtk_tx.send(ToGtk::Failed(friendly_connect_error(&e)));
+                password.zeroize();
+                return;
+            }
+        }
     };
     password.zeroize();
 
-    let mut session = match rt.block_on(connect(cfg)) {
-        Ok(s) => s,
-        Err(ClientError::TofuUnknown { fingerprint }) => {
-            let _ = gtk_tx.send(ToGtk::Failed(ConnectFail::TofuUnknown {
-                fingerprint,
-                host_key,
-            }));
-            return;
-        }
-        Err(ClientError::TofuMismatch { got, pinned }) => {
-            let _ = gtk_tx.send(ToGtk::Failed(ConnectFail::TofuMismatch {
-                got,
-                pinned,
-                host_key,
-            }));
-            return;
-        }
-        Err(e) => {
-            let _ = gtk_tx.send(ToGtk::Failed(ConnectFail::Message(e.to_string())));
-            return;
-        }
-    };
-
     let _ = gtk_tx.send(ToGtk::Connected);
-    println_session_ok(session.session_id());
+    tracing::info!(id = %session.session_id(), "metis-viewer: RUDP SessionOk");
 
     loop {
         // Drain input without blocking the event pump too long.
@@ -164,7 +228,7 @@ fn worker_main(
                 ToWorker::Input(m) => {
                     let _ = rt.block_on(session.send_input(m));
                 }
-                ToWorker::Shutdown => return,
+                ToWorker::Shutdown | ToWorker::TofuAccept | ToWorker::TofuDecline => return,
             }
         }
         match rt.block_on(async {
@@ -183,11 +247,7 @@ fn worker_main(
                     return;
                 }
             }
-            None => {
-                if worker_rx.try_recv().ok().is_none() {
-                    // idle
-                }
-            }
+            None => {}
         }
         // Also check for disconnect via try after timeout path.
         while let Some(ev) = session.try_recv_event() {
@@ -202,45 +262,47 @@ fn worker_main(
     }
 }
 
-fn println_session_ok(id: &str) {
-    tracing::info!(%id, "metis-viewer: RUDP SessionOk");
+enum TofuWait {
+    Accept,
+    Decline,
+    Shutdown,
 }
 
-fn handle_connect_fail(parent: &gtk::Window, fail: ConnectFail) {
-    match fail {
-        ConnectFail::Message(m) => show_alert(parent, &m),
-        ConnectFail::TofuUnknown {
-            fingerprint,
-            host_key,
-        } => {
-            let parent = parent.clone();
-            glib::spawn_future_local(async move {
-                if trust_dialog(&parent, &fingerprint).await
-                    && pin_host(&host_key, &fingerprint).is_ok()
-                {
-                    show_alert(
-                        &parent,
-                        &tr("Host trusted. Connect again to open the session."),
-                    );
-                }
-            });
+fn wait_tofu_decision(worker_rx: &Receiver<ToWorker>) -> TofuWait {
+    loop {
+        match worker_rx.recv() {
+            Ok(ToWorker::TofuAccept) => return TofuWait::Accept,
+            Ok(ToWorker::TofuDecline) => return TofuWait::Decline,
+            Ok(ToWorker::Shutdown) => return TofuWait::Shutdown,
+            Ok(ToWorker::Input(_)) => {}
+            Err(_) => return TofuWait::Shutdown,
         }
-        ConnectFail::TofuMismatch {
-            got,
-            pinned,
-            host_key,
-        } => {
-            let parent = parent.clone();
-            glib::spawn_future_local(async move {
-                if clear_pin_dialog(&parent, &got, &pinned).await {
-                    let _ = clear_host_pin(&host_key);
-                    show_alert(
-                        &parent,
-                        &tr("Pin cleared. Connect again to trust the new fingerprint."),
-                    );
-                }
-            });
+    }
+}
+
+fn friendly_connect_error(err: &ClientError) -> String {
+    match err {
+        ClientError::Rejected { reason } if reason.starts_with("auth_failed") => {
+            tr("Authentication failed. Check username and password.")
         }
+        ClientError::Rejected { reason } if reason.starts_with("not_allowed") => {
+            tr("This user is not allowed for Metis Remote on the host.")
+        }
+        ClientError::Rejected { reason } => {
+            format!("{}: {reason}", tr("Connection rejected"))
+        }
+        ClientError::Message(m)
+            if m.contains("connection lost")
+                || m.contains("ConnectionLost")
+                || m.contains("connection closed")
+                || m.contains("ConnectionClosed") =>
+        {
+            tr(
+                "Sign-in failed or the host closed the connection. \
+                 Check username/password and that Metis Remote is enabled.",
+            )
+        }
+        other => other.to_string(),
     }
 }
 

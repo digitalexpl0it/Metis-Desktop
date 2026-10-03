@@ -550,6 +550,10 @@ async fn connection_broker_loop(
                         }
                         Err(err) => {
                             tracing::warn!(%peer, %err, "rudp host: auth failed");
+                            // Reject (if written) must reach the client before
+                            // CONNECTION_CLOSE, or the Viewer only sees
+                            // "read: connection lost".
+                            tokio::time::sleep(Duration::from_millis(300)).await;
                             conn.close(0u32.into(), b"auth failed");
                         }
                     }
@@ -747,12 +751,10 @@ async fn authenticate_connection(
     let username = match hello {
         RudpControlMsg::Hello { protocol, username } => {
             if protocol != RUDP_PROTOCOL_VERSION {
-                let _ = write_control_msg(
+                write_control_reject(
                     &mut send,
-                    &RudpControlMsg::Reject {
-                        reason: RudpRejectReason::Protocol,
-                        detail: Some(format!("unsupported protocol {protocol}")),
-                    },
+                    RudpRejectReason::Protocol,
+                    Some(format!("unsupported protocol {protocol}")),
                 )
                 .await;
                 return Err(format!("bad protocol {protocol}"));
@@ -760,12 +762,10 @@ async fn authenticate_connection(
             username
         }
         other => {
-            let _ = write_control_msg(
+            write_control_reject(
                 &mut send,
-                &RudpControlMsg::Reject {
-                    reason: RudpRejectReason::Protocol,
-                    detail: Some("expected hello".into()),
-                },
+                RudpRejectReason::Protocol,
+                Some("expected hello".into()),
             )
             .await;
             return Err(format!("expected hello, got {other:?}"));
@@ -779,14 +779,7 @@ async fn authenticate_connection(
         guard.iter().any(|u| u == &username)
     };
     if !allowed {
-        let _ = write_control_msg(
-            &mut send,
-            &RudpControlMsg::Reject {
-                reason: RudpRejectReason::NotAllowed,
-                detail: None,
-            },
-        )
-        .await;
+        write_control_reject(&mut send, RudpRejectReason::NotAllowed, None).await;
         return Err(format!("user {username} not in allowlist"));
     }
 
@@ -809,12 +802,10 @@ async fn authenticate_connection(
     let password = match response {
         RudpControlMsg::AuthResponse { password } => password,
         other => {
-            let _ = write_control_msg(
+            write_control_reject(
                 &mut send,
-                &RudpControlMsg::Reject {
-                    reason: RudpRejectReason::Protocol,
-                    detail: Some("expected auth_response".into()),
-                },
+                RudpRejectReason::Protocol,
+                Some("expected auth_response".into()),
             )
             .await;
             return Err(format!("expected auth_response, got {other:?}"));
@@ -830,14 +821,7 @@ async fn authenticate_connection(
     if !ok {
         // Brief delay against online guessing.
         tokio::time::sleep(Duration::from_millis(400)).await;
-        let _ = write_control_msg(
-            &mut send,
-            &RudpControlMsg::Reject {
-                reason: RudpRejectReason::AuthFailed,
-                detail: None,
-            },
-        )
-        .await;
+        write_control_reject(&mut send, RudpRejectReason::AuthFailed, None).await;
         return Err("pam authentication failed".into());
     }
 
@@ -862,6 +846,20 @@ async fn write_control_msg(
         .map_err(|_| "control write timed out".to_string())?
         .map_err(|e| format!("control write: {e}"))?;
     Ok(())
+}
+
+async fn write_control_reject(
+    send: &mut quinn::SendStream,
+    reason: RudpRejectReason,
+    detail: Option<String>,
+) {
+    let _ = write_control_msg(
+        send,
+        &RudpControlMsg::Reject { reason, detail },
+    )
+    .await;
+    // Half-close so the peer's read completes with the Reject frame.
+    let _ = send.finish();
 }
 
 async fn read_control_msg(recv: &mut quinn::RecvStream) -> Result<RudpControlMsg, String> {

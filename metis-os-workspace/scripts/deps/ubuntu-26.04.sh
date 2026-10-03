@@ -47,6 +47,7 @@ METIS_APT_PACKAGES=(
   libavformat-dev
   libavutil-dev
   libswscale-dev
+  libswresample-dev
   libva-dev
   nftables
   pkexec

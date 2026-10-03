@@ -178,6 +178,13 @@ fn useful_stderr_detail(stderr: &str) -> Option<String> {
             continue;
         }
 
+        // Prefer the full "Failed at index N [/bad-arg]: Unexpected keyword"
+        // line — stripping only the trailing "Unexpected keyword" hides which
+        // FreeRDP flag our build rejected.
+        if lower.contains("unexpected keyword") || lower.contains("commandlineparsearguments") {
+            return Some(truncate_msg(trimmed, 160));
+        }
+
         let msg = strip_freerdp_prefix(trimmed);
         if msg.is_empty() {
             continue;
@@ -257,8 +264,14 @@ fn format_failure(_code: Option<i32>, detail: Option<&str>) -> String {
         {
             return "Could not reach the host. Check address, port, and that sharing is on.".into();
         }
+        if lower.contains("unexpected keyword") {
+            return format!(
+                "FreeRDP rejected a connection option ({d}). Update Metis Viewer, \
+                 or clear Advanced Desktop Settings toggles and try again."
+            );
+        }
         // Keep a short FreeRDP detail when it is actually useful (not log spam).
-        if d.len() <= 120 && !lower.contains("[com.freerdp") {
+        if d.len() <= 160 && !lower.contains("[com.freerdp") {
             return format!("Connection failed: {d}");
         }
     }
@@ -293,5 +306,17 @@ mod tests {
         assert!(detail.to_ascii_lowercase().contains("failed to connect"));
         let msg = format_failure(Some(255), Some(&detail));
         assert!(msg.contains("Could not reach") || msg.contains("Connection failed"));
+    }
+
+    #[test]
+    fn surfaces_unexpected_keyword_line() {
+        let stderr = "\
+[20:29:29:909] [1:1] [ERROR][com.winpr.commandline] - [CommandLineParseArgumentsA]: Failed at index 3 [+bitmap-cache]: Unexpected keyword
+";
+        let detail = useful_stderr_detail(stderr).expect("detail");
+        assert!(detail.contains("Unexpected keyword"));
+        assert!(detail.contains("bitmap-cache") || detail.contains("Failed at index"));
+        let msg = format_failure(Some(255), Some(&detail));
+        assert!(msg.contains("FreeRDP rejected") || msg.contains("Unexpected keyword"));
     }
 }

@@ -48,6 +48,9 @@ jobs:
             liblcms2-dev \
             libwayland-dev wayland-protocols \
             libeis-dev \
+            libavcodec-dev libavformat-dev libavutil-dev \
+            libswscale-dev libswresample-dev \
+            libva-dev \
             gettext
 
       - name: Check support-floor versions

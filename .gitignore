@@ -1,5 +1,7 @@
 # Rust build artifacts
 target/
+metis-os-workspace/.cargo-target/
+metis-os-workspace/.tmp/
 **/dist/
 **/*.rs.bk
 *.pdb

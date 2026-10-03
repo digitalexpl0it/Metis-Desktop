@@ -131,19 +131,13 @@ fn watch_appearance() {
         held.push(mon);
     }
 
-    glib::timeout_add_local(Duration::from_millis(400), || {
-        use std::sync::atomic::{AtomicU8, Ordering};
-        static LAST: AtomicU8 = AtomicU8::new(255);
-        let tag: u8 = match effective_theme_name().as_str() {
-            "light" => 0,
-            "dark" => 1,
-            _ => 2,
-        };
-        if LAST.swap(tag, Ordering::SeqCst) != tag {
-            reapply();
-        }
-        glib::ControlFlow::Continue
-    });
+    // System light/dark flips via GTK settings — no disk poll on a timer
+    // (that used to hitch the UI while typing in entries).
+    if let Some(settings) = gtk::Settings::default() {
+        settings.connect_gtk_application_prefer_dark_theme_notify(|_| {
+            glib::timeout_add_local_once(Duration::from_millis(120), reapply);
+        });
+    }
 
     MONITORS.with(|m| *m.borrow_mut() = held);
 }
