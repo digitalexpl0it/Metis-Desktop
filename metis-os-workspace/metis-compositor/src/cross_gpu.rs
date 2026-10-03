@@ -1,8 +1,11 @@
 //! Primary→secondary GPU framebuffer transfer for hybrid outputs (Wave 3a).
 //!
-//! Metis custom stack elements (`BlurElement`, decorations, HDR encode) are
-//! GLES-typed and cannot feed Smithay [`MultiRenderer`] directly yet. For outputs
-//! whose render node ≠ the primary GPU we therefore:
+//! Full-frame primary→secondary transfer when hybrid MultiRenderer cannot host
+//! GLES-only elements (blur, HDR encode, Stage-2 LUT). Wave A/B
+//! ([`crate::hybrid_multi`]) presents the Anvil-easy stack — surfaces, textured
+//! SSD, wallpaper, cursor — via [`MultiRenderer`] when those post-passes are idle.
+//!
+//! For outputs whose render node ≠ the primary GPU and transfer is required:
 //!
 //! 1. Composite the full stack (blur allowed) on the **primary** GPU into a
 //!    GBM `Dmabuf` (preferred) or an offscreen texture.
@@ -12,10 +15,6 @@
 //!
 //! When transfer fails entirely, callers fall back to the local `single_renderer`
 //! path with blur disabled — same behaviour as before Wave 3a.
-//!
-//! Wave A adds a true [`MultiRenderer`] path for the Anvil-easy stack (see
-//! [`crate::hybrid_multi`]); this full-frame transfer remains the fallback when
-//! blur / HDR / colour post-pass need GLES-only elements.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -1444,6 +1444,7 @@ impl MetisState {
             .is_some_and(|udev| udev.active_render_node != Some(render_node));
         if context_changed {
             self.wallpaper.invalidate_gpu_cache();
+            self.hybrid_wallpaper_cache = None;
             self.decorations.invalidate_all();
             self.clear_mirror_batch_cache();
             if let Some(udev) = self.udev.as_mut() {
@@ -1582,6 +1583,7 @@ impl MetisState {
         {
             if render_node != primary_gpu {
                 self.wallpaper.invalidate_gpu_cache();
+                self.hybrid_wallpaper_cache = None;
                 self.decorations.invalidate_all();
                 self.clear_mirror_batch_cache();
                 if let Some(udev) = self.udev.as_mut() {

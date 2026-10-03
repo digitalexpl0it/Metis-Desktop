@@ -82,6 +82,9 @@ pub struct Wallpaper {
     fade_on_next_upload: bool,
     /// Decoded RGBA pixels (CPU) ready for a fast GPU upload during render.
     cpu_pixels: Option<Vec<u8>>,
+    /// Bumped whenever `cpu_pixels` is replaced or cleared so hybrid MultiRenderer
+    /// can reuse an ImportMem upload across frames.
+    cpu_pixels_gen: u64,
     /// Full-resolution sources kept in memory (keyed by path) so resizes only
     /// re-scale (cheap) instead of re-reading and re-decoding from disk. Shared
     /// across outputs, so two displays showing the same image only read it once.
@@ -122,6 +125,7 @@ impl Wallpaper {
             fade_start: None,
             fade_on_next_upload: false,
             cpu_pixels: None,
+            cpu_pixels_gen: 0,
             sources: HashMap::new(),
             decode_slot: Arc::new(Mutex::new((0, None))),
             decode_generation: 0,
@@ -176,7 +180,7 @@ impl Wallpaper {
         self.sources.retain(|p, _| keep.contains(p));
         // Soft invalidate + request a fade when the new framebuffer uploads.
         self.decode_generation = self.decode_generation.wrapping_add(1);
-        self.cpu_pixels = None;
+        self.clear_cpu_pixels();
         self.fade_on_next_upload = true;
         // Drop any in-progress fade so we always blend from the currently shown
         // wallpaper into the newly requested one.
@@ -190,11 +194,17 @@ impl Wallpaper {
         self.outgoing = None;
         self.fade_start = None;
         self.fade_on_next_upload = false;
-        self.cpu_pixels = None;
+        self.clear_cpu_pixels();
         // Bump the generation so any in-flight worker's result is ignored on poll.
         // Never drop `decode_slot` or join here — that orphaned workers and/or
         // blocked the main loop for the full decode on every resize burst.
         self.decode_generation = self.decode_generation.wrapping_add(1);
+    }
+
+    fn clear_cpu_pixels(&mut self) {
+        if self.cpu_pixels.take().is_some() {
+            self.cpu_pixels_gen = self.cpu_pixels_gen.wrapping_add(1);
+        }
     }
 
     /// Drop only context-bound GL objects while retaining the composed CPU image.
@@ -229,7 +239,7 @@ impl Wallpaper {
         // after `invalidate_gpu_cache`. Drop them when the framebuffer size
         // changes — the old buffer no longer matches `full_size`.
         if size_changed {
-            self.cpu_pixels = None;
+            self.clear_cpu_pixels();
         }
         let at = Instant::now() + Duration::from_millis(120);
         self.redecode_at = Some(self.redecode_at.map_or(at, |prev| prev.min(at)));
@@ -415,6 +425,7 @@ impl Wallpaper {
                 self.sources.insert(path, src);
             }
             self.cpu_pixels = Some(out.pixels);
+            self.cpu_pixels_gen = self.cpu_pixels_gen.wrapping_add(1);
             if self.fade_on_next_upload {
                 // Keep painting the previous wallpaper until the new
                 // texture uploads, then crossfade.
@@ -523,6 +534,11 @@ impl Wallpaper {
     /// Borrow composed CPU wallpaper pixels (full virtual desktop, Abgr8888).
     pub fn cpu_pixels_ref(&self) -> Option<&[u8]> {
         self.cpu_pixels.as_deref()
+    }
+
+    /// Generation of the current `cpu_pixels` buffer (for hybrid ImportMem reuse).
+    pub fn cpu_pixels_gen(&self) -> u64 {
+        self.cpu_pixels_gen
     }
 
     pub fn full_size(&self) -> Size<i32, Physical> {

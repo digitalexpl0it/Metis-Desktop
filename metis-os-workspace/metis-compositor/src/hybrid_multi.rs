@@ -1,20 +1,19 @@
-//! Wave A: Anvil-style [`MultiRenderer`] present for hybrid outputs.
+//! Wave A/B: Anvil-style [`MultiRenderer`] present for hybrid outputs.
 //!
 //! When the frame does not need GLES-only blur / HDR / colour post-pass, hybrid
 //! CRTCs composite through `GpuManager::renderer(primary, target, format)` with a
-//! generic element stack (surfaces, wallpaper, solid overlays/chrome, cursor).
-//! Server-side decoration *textures* stay GLES-cached; Wave A draws solid chrome
-//! placeholders from [`WindowDeco`] geometry instead. Full textured SSD + blur +
-//! HDR on MultiRenderer remain follow-ups; [`crate::cross_gpu`] transfer covers those.
+//! generic element stack (surfaces, textured SSD, wallpaper, overlays, cursor).
+//! Wave B uploads decoration CPU caches via [`ImportMem`] into MultiRenderer.
+//! Blur + HDR/`TextureShaderElement` stay on [`crate::cross_gpu`] transfer.
 
 use smithay::{
     backend::{
         allocator::Fourcc,
         drm::{DrmDeviceFd, DrmNode},
         renderer::{
-            Color32F, ImportAll, ImportMem, Renderer,
+            Color32F, ImportAll, ImportMem,
             element::{
-                AsRenderElements, Id, Kind,
+                AsRenderElements, Kind,
                 memory::MemoryRenderBufferRenderElement,
                 solid::SolidColorRenderElement,
                 surface::WaylandSurfaceRenderElement,
@@ -22,8 +21,7 @@ use smithay::{
                 utils::CropRenderElement,
             },
             gles::GlesRenderer,
-            multigpu::{MultiRenderer, gbm::GbmGlesBackend},
-            utils::CommitCounter,
+            multigpu::{MultiRenderer, MultiTexture, gbm::GbmGlesBackend},
         },
     },
     desktop::layer_map_for_output,
@@ -32,6 +30,13 @@ use smithay::{
     utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform},
     wayland::shell::wlr_layer::Layer,
 };
+
+/// Cached hybrid MultiRenderer wallpaper upload (invalidated with GPU/context resets).
+pub struct HybridWallpaperCache {
+    generation: u64,
+    size: Size<i32, Physical>,
+    buffer: TextureBuffer<MultiTexture>,
+}
 
 use crate::cross_gpu::{self, TransferFrameResult};
 use crate::night_light::RenderTargetInfo;
@@ -44,8 +49,10 @@ smithay::backend::renderer::element::render_elements! {
     pub HybridOutputStack<R> where R: ImportAll + ImportMem;
     Wallpaper=TextureRenderElement<R::TextureId>,
     Surface=WaylandSurfaceRenderElement<R>,
+    Deco=crate::decoration::DecorationElement<R>,
     Overlay=SolidColorRenderElement,
     CropSurface=CropRenderElement<WaylandSurfaceRenderElement<R>>,
+    CropDeco=CropRenderElement<crate::decoration::DecorationElement<R>>,
     CursorMemory=MemoryRenderBufferRenderElement<R>,
 }
 
@@ -58,8 +65,6 @@ pub type UdevMultiRenderer<'a> = MultiRenderer<
 >;
 
 const SNAP_OVERLAY_COLOR: [f32; 4] = [0.36, 0.56, 0.96, 0.30];
-const SSD_TITLEBAR_ACTIVE: [f32; 4] = [0.16, 0.17, 0.20, 0.92];
-const SSD_TITLEBAR_INACTIVE: [f32; 4] = [0.12, 0.13, 0.15, 0.88];
 
 /// True when Wave A should skip MultiRenderer and use full-frame transfer (blur/HDR/LUT).
 pub fn hybrid_needs_gles_transfer(state: &MetisState, output: &Output, id: UdevOutputId) -> bool {
@@ -175,23 +180,19 @@ pub fn try_multirenderer_frame(
     }
 }
 
-fn build_hybrid_elements<R>(
+fn build_hybrid_elements<'a>(
     state: &mut MetisState,
-    renderer: &mut R,
+    renderer: &mut UdevMultiRenderer<'a>,
     render_origin: Point<i32, Physical>,
     output_scale: Scale<f64>,
     target: RenderTargetInfo<'_>,
     output: &Output,
-) -> Result<Vec<HybridOutputStack<R>>, String>
-where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Clone + Send + 'static,
-{
+) -> Result<Vec<HybridOutputStack<UdevMultiRenderer<'a>>>, String> {
     if state.lock.locked || state.protocol_lock.is_locked() {
         return Err("hybrid MultiRenderer: session locked — use transfer/local".into());
     }
 
-    let mut render_elements: Vec<HybridOutputStack<R>> = Vec::new();
+    let mut render_elements: Vec<HybridOutputStack<UdevMultiRenderer<'a>>> = Vec::new();
 
     // Snap preview
     if let Some((rect, _)) = state.snap_preview {
@@ -231,13 +232,9 @@ where
             };
             let loc =
                 (geo.loc + out_origin).to_physical_precise_round(output_scale) - render_origin;
-            let elems = AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(
-                surface,
-                renderer,
-                loc,
-                output_scale,
-                1.0,
-            );
+            let elems = AsRenderElements::<UdevMultiRenderer<'a>>::render_elements::<
+                WaylandSurfaceRenderElement<UdevMultiRenderer<'a>>,
+            >(surface, renderer, loc, output_scale, 1.0);
             let target_vec = if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
                 &mut lower_layers
             } else {
@@ -248,36 +245,44 @@ where
     }
     render_elements.extend(upper_layers);
 
-    // Solid SSD chrome placeholders (textured SSD stays on the GLES transfer path).
+    // Textured SSD (Wave B): same stacking as the GLES path — overlay chrome
+    // below the bar, then each window immediately followed by its below-chrome.
     let deco_specs = state.decoration_specs();
-    let mut deco_commit = CommitCounter::default();
-    deco_commit.increment();
-    for spec in &deco_specs {
-        let header = metis_grid::APP_TILE_HEADER_PX.min(spec.frame.height);
-        if header <= 0 || spec.frame.width <= 2 {
-            continue;
+    state.decorations.begin_frame(&deco_specs);
+    let deco_by_id: std::collections::HashMap<u32, crate::decoration::WindowDeco> =
+        deco_specs.into_iter().map(|w| (w.id, w)).collect();
+
+    for spec in deco_by_id.values().filter(|w| w.overlay) {
+        if let Some(record) = state.windows.get(spec.id) {
+            let win_scale = state.window_output_scale(&record.window, output_scale);
+            let decos = state.decorations.window_elements(renderer, spec, win_scale);
+            render_elements.extend(decos.into_iter().map(HybridOutputStack::Deco));
         }
-        let color = if spec.focused {
-            SSD_TITLEBAR_ACTIVE
-        } else {
-            SSD_TITLEBAR_INACTIVE
-        };
-        let geo = Rectangle::<i32, Logical>::new(
-            Point::from((spec.frame.x, spec.frame.y)),
-            Size::from((spec.frame.width.max(1), header)),
-        )
-        .to_physical_precise_round(output_scale);
-        let geo = Rectangle::new(geo.loc - render_origin, geo.size);
-        render_elements.push(HybridOutputStack::Overlay(SolidColorRenderElement::new(
-            Id::new(),
-            geo,
-            deco_commit,
-            Color32F::from(color),
-            Kind::Unspecified,
-        )));
     }
 
-    // Windows top-to-bottom
+    {
+        let stack_ids: std::collections::HashSet<u32> = state
+            .space
+            .elements()
+            .filter_map(|w| state.windows.id_for_window(w))
+            .collect();
+        for (id, spec) in &deco_by_id {
+            if spec.overlay || stack_ids.contains(id) {
+                continue;
+            }
+            tracing::warn!(
+                id,
+                "hybrid deco: window chrome not matched to a stacked window — drawing on top"
+            );
+            if let Some(record) = state.windows.get(*id) {
+                let win_scale = state.window_output_scale(&record.window, output_scale);
+                let decos = state.decorations.window_elements(renderer, spec, win_scale);
+                render_elements.extend(decos.into_iter().map(HybridOutputStack::Deco));
+            }
+        }
+    }
+
+    // Windows top-to-bottom, each followed by its own chrome (GLES parity).
     let stacking: Vec<_> = state.space.elements().cloned().collect();
     for window in stacking.iter().rev() {
         let id = state.windows.id_for_window(window);
@@ -315,9 +320,9 @@ where
                     .map(|c| Rectangle::new(c.loc - render_origin, c.size))
             }
         });
-        let elems = AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(
-            window, renderer, loc, win_scale, alpha,
-        );
+        let elems = AsRenderElements::<UdevMultiRenderer<'a>>::render_elements::<
+            WaylandSurfaceRenderElement<UdevMultiRenderer<'a>>,
+        >(window, renderer, loc, win_scale, alpha);
         if let Some(clip) = clip {
             for e in elems {
                 if let Some(c) = CropRenderElement::from_element(e, win_scale, clip) {
@@ -326,6 +331,20 @@ where
             }
         } else {
             render_elements.extend(elems.into_iter().map(HybridOutputStack::Surface));
+        }
+        if let Some(id) = id
+            && let Some(spec) = deco_by_id.get(&id).filter(|s| !s.overlay)
+        {
+            let decos = state.decorations.window_elements(renderer, spec, win_scale);
+            if let Some(clip) = clip {
+                for d in decos {
+                    if let Some(c) = CropRenderElement::from_element(d, win_scale, clip) {
+                        render_elements.push(HybridOutputStack::CropDeco(c));
+                    }
+                }
+            } else {
+                render_elements.extend(decos.into_iter().map(HybridOutputStack::Deco));
+            }
         }
     }
 
@@ -359,36 +378,49 @@ where
     Ok(render_elements)
 }
 
-fn wallpaper_element<R>(
-    state: &MetisState,
-    renderer: &mut R,
+fn wallpaper_element<'a>(
+    state: &mut MetisState,
+    renderer: &mut UdevMultiRenderer<'a>,
     render_origin: Point<i32, Physical>,
-) -> Result<Option<TextureRenderElement<R::TextureId>>, String>
-where
-    R: Renderer + ImportMem,
-    R::TextureId: Clone + Send + 'static,
-{
-    let Some(rgba) = state.wallpaper.cpu_pixels_ref() else {
-        return Ok(None);
-    };
+) -> Result<Option<TextureRenderElement<MultiTexture>>, String> {
     let size = state.wallpaper.full_size();
-    if size.w <= 0 || size.h <= 0 {
+    if size.w <= 0 || size.h <= 0 || state.wallpaper.cpu_pixels_ref().is_none() {
         return Ok(None);
     }
     let expected = (size.w as usize)
         .saturating_mul(size.h as usize)
         .saturating_mul(4);
-    if rgba.len() != expected {
-        return Ok(None);
+    let pixels_gen = state.wallpaper.cpu_pixels_gen();
+    let reuse = state
+        .hybrid_wallpaper_cache
+        .as_ref()
+        .is_some_and(|c| c.generation == pixels_gen && c.size == size);
+    if !reuse {
+        let buffer = {
+            let Some(rgba) = state.wallpaper.cpu_pixels_ref() else {
+                return Ok(None);
+            };
+            if rgba.len() != expected {
+                return Ok(None);
+            }
+            let texture = renderer
+                .import_memory(rgba, Fourcc::Abgr8888, (size.w, size.h).into(), false)
+                .map_err(|e| format!("hybrid wallpaper import: {e:?}"))?;
+            TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None)
+        };
+        state.hybrid_wallpaper_cache = Some(HybridWallpaperCache {
+            generation: pixels_gen,
+            size,
+            buffer,
+        });
     }
-    let texture = renderer
-        .import_memory(rgba, Fourcc::Abgr8888, (size.w, size.h).into(), false)
-        .map_err(|e| format!("hybrid wallpaper import: {e:?}"))?;
-    let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
+    let Some(cache) = state.hybrid_wallpaper_cache.as_ref() else {
+        return Ok(None);
+    };
     let loc: Point<f64, Physical> = Point::from((-render_origin.x as f64, -render_origin.y as f64));
     Ok(Some(TextureRenderElement::from_texture_buffer(
         loc,
-        &buffer,
+        &cache.buffer,
         None,
         None,
         None,
@@ -396,16 +428,12 @@ where
     )))
 }
 
-fn hybrid_cursor_elements<R>(
+fn hybrid_cursor_elements<'a>(
     state: &mut MetisState,
-    renderer: &mut R,
+    renderer: &mut UdevMultiRenderer<'a>,
     output: &Output,
     scale: Scale<f64>,
-) -> Result<Vec<HybridOutputStack<R>>, String>
-where
-    R: Renderer + ImportMem,
-    R::TextureId: Clone + Send + 'static,
-{
+) -> Result<Vec<HybridOutputStack<UdevMultiRenderer<'a>>>, String> {
     let mut out = Vec::new();
     let Some(geo) = state.space.output_geometry(output) else {
         return Ok(out);

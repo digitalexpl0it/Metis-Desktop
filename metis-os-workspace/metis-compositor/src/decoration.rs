@@ -19,9 +19,9 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
 use smithay::backend::renderer::element::{Id, Kind, render_elements};
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::backend::renderer::{Color32F, ImportAll, ImportMem};
+use smithay::backend::renderer::{Color32F, ImportAll, ImportMem, Renderer};
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 // Muted, desaturated control colors tuned to the dark slate theme rather than the
@@ -193,6 +193,14 @@ pub enum DecoControl {
     Titlebar,
 }
 
+/// CPU-side RGBA cache entry (uploaded via [`ImportMem`] for GLES or MultiRenderer).
+#[derive(Clone)]
+struct CachedPixels {
+    pixels: Vec<u8>,
+    width: i32,
+    height: i32,
+}
+
 #[derive(Clone)]
 struct CachedTitle {
     text: String,
@@ -202,9 +210,7 @@ struct CachedTitle {
     /// the texture re-rasterizes when the configured border changes.
     border: Vec<[f32; 3]>,
     border_px: f32,
-    width: i32,
-    height: i32,
-    buffer: TextureBuffer<GlesTexture>,
+    cpu: CachedPixels,
 }
 
 /// A cached, anti-aliased control-button texture (rounded circle + glyph). Keyed
@@ -213,7 +219,7 @@ struct CachedTitle {
 #[derive(Clone)]
 struct CachedButton {
     focused: bool,
-    buffer: TextureBuffer<GlesTexture>,
+    cpu: CachedPixels,
 }
 
 /// A cached titlebar-background texture with rounded top corners. Re-rasterized
@@ -234,7 +240,7 @@ struct CachedTitlebar {
     overlay: bool,
     /// Border gradient stops baked into the ring (1 = flat, >1 = top→bottom ramp).
     border: Vec<[f32; 3]>,
-    buffer: TextureBuffer<GlesTexture>,
+    cpu: CachedPixels,
 }
 
 /// Cached vertical-gradient side-border edge texture (left + right share it). The
@@ -247,8 +253,7 @@ struct CachedBorder {
     frame_height: i32,
     focused: bool,
     stops: Vec<[f32; 3]>,
-    /// One buffer per side (`[left, right]`) so each quad has a distinct element id.
-    bufs: Vec<TextureBuffer<GlesTexture>>,
+    cpu: CachedPixels,
 }
 
 /// Outcome of a throttled config refresh: whether to re-damage and/or relayout.
@@ -269,18 +274,11 @@ pub struct DecorationRuntime {
     buttons: HashMap<(u32, u8), CachedButton>,
     titlebars: HashMap<u32, CachedTitlebar>,
     borders: HashMap<u32, CachedBorder>,
-    /// Single shared drop-shadow texture (black, premultiplied), rasterized once
-    /// and 9-sliced for every window. `None` until the first frame imports it.
-    /// Used for the straight edges and the (square) bottom corners.
-    shadow_tex: Option<GlesTexture>,
-    /// Rounded top-corner shadow textures (left + right). The window's titlebar has
-    /// rounded top corners, so the shadow there hugs the arc instead of a square
-    /// corner. Fixed size (`MARGIN + CORNER_RADIUS`), rasterized once.
-    shadow_corner_tl: Option<GlesTexture>,
-    shadow_corner_tr: Option<GlesTexture>,
-    /// Per-window texture buffers wrapping the shadow textures — one per slice so
-    /// each quad has a stable, distinct element id for damage tracking.
-    shadow_bufs: HashMap<u32, Vec<TextureBuffer<GlesTexture>>>,
+    /// Shared drop-shadow CPU pixels (black, premultiplied), rasterized once.
+    /// Uploaded per frame via ImportMem (GLES or MultiRenderer).
+    shadow_edge: Option<CachedPixels>,
+    shadow_corner_tl: Option<CachedPixels>,
+    shadow_corner_tr: Option<CachedPixels>,
     commit: CommitCounter,
     last_sig: u64,
     /// Configurable titlebar background opacity (title text + buttons stay
@@ -308,10 +306,9 @@ impl Default for DecorationRuntime {
             buttons: HashMap::new(),
             titlebars: HashMap::new(),
             borders: HashMap::new(),
-            shadow_tex: None,
+            shadow_edge: None,
             shadow_corner_tl: None,
             shadow_corner_tr: None,
-            shadow_bufs: HashMap::new(),
             commit: CommitCounter::default(),
             last_sig: 0,
             titlebar_alpha: read_titlebar_opacity(),
@@ -362,8 +359,7 @@ impl DecorationRuntime {
         self.buttons.clear();
         self.titlebars.clear();
         self.borders.clear();
-        self.shadow_bufs.clear();
-        self.shadow_tex = None;
+        self.shadow_edge = None;
         self.shadow_corner_tl = None;
         self.shadow_corner_tr = None;
         self.commit.increment();
@@ -375,7 +371,40 @@ impl DecorationRuntime {
         self.buttons.retain(|(id, _), _| live.contains(id));
         self.titlebars.retain(|id, _| live.contains(id));
         self.borders.retain(|id, _| live.contains(id));
-        self.shadow_bufs.retain(|id, _| live.contains(id));
+    }
+
+    /// Upload cached CPU pixels into `renderer` and wrap as a texture element.
+    fn text_from_cpu<R>(
+        renderer: &mut R,
+        cpu: &CachedPixels,
+        scale: i32,
+        loc: Point<f64, Physical>,
+        src: Rectangle<f64, Logical>,
+        size: Size<i32, Logical>,
+    ) -> Option<DecorationElement<R>>
+    where
+        R: Renderer + ImportMem,
+        R::TextureId: Clone + 'static,
+    {
+        let texture = renderer
+            .import_memory(
+                &cpu.pixels,
+                Fourcc::Abgr8888,
+                Size::from((cpu.width, cpu.height)),
+                false,
+            )
+            .ok()?;
+        let buffer = TextureBuffer::from_texture(renderer, texture, scale, Transform::Normal, None);
+        Some(DecorationElement::Text(
+            TextureRenderElement::from_texture_buffer(
+                loc,
+                &buffer,
+                None,
+                Some(src),
+                Some(size),
+                Kind::Unspecified,
+            ),
+        ))
     }
 
     /// Prune stale caches and bump the damage commit when decoration geometry
@@ -403,12 +432,19 @@ impl DecorationRuntime {
     }
 
     /// Build render elements for one decorated window at `output_scale`.
-    pub fn window_elements(
+    ///
+    /// Works with [`GlesRenderer`] (local/transfer path) and MultiRenderer
+    /// (hybrid Wave B) via per-frame [`ImportMem`] of CPU-cached chrome pixels.
+    pub fn window_elements<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         w: &WindowDeco,
         output_scale: Scale<f64>,
-    ) -> Vec<GlesDecorationElement> {
+    ) -> Vec<DecorationElement<R>>
+    where
+        R: Renderer + ImportAll + ImportMem,
+        R::TextureId: Clone + Send + 'static,
+    {
         self.build_scale = output_scale;
         let frame = w.frame;
         if frame.width <= 2 || frame.height <= APP_TILE_HEADER_PX {
@@ -608,14 +644,17 @@ impl DecorationRuntime {
         DecoElements { below, overlay }
     }
 
-    fn solid(
+    fn solid<R>(
         &mut self,
         window_id: u32,
         role: u8,
         rect: PixelRect,
         color: [f32; 4],
         commit: CommitCounter,
-    ) -> GlesDecorationElement {
+    ) -> DecorationElement<R>
+    where
+        R: ImportAll + ImportMem,
+    {
         let id = self
             .ids
             .entry((window_id, role))
@@ -632,15 +671,19 @@ impl DecorationRuntime {
     }
 
     /// Build (or reuse) a rounded control-button texture and place it at `(x, cy)`.
-    fn button_element(
+    fn button_element<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         w: &WindowDeco,
         role: u8,
         kind: DecoControl,
         x: i32,
         cy: i32,
-    ) -> Option<GlesDecorationElement> {
+    ) -> Option<DecorationElement<R>>
+    where
+        R: Renderer + ImportMem,
+        R::TextureId: Clone + 'static,
+    {
         let needs_render = self
             .buttons
             .get(&(w.id, role))
@@ -649,16 +692,15 @@ impl DecorationRuntime {
 
         if needs_render {
             let (pixels, pw, ph) = rasterize_button(kind, w.focused)?;
-            let texture = renderer
-                .import_memory(&pixels, Fourcc::Abgr8888, Size::from((pw, ph)), false)
-                .ok()?;
-            let buffer =
-                TextureBuffer::from_texture(renderer, texture, BTN_SS, Transform::Normal, None);
             self.buttons.insert(
                 (w.id, role),
                 CachedButton {
                     focused: w.focused,
-                    buffer,
+                    cpu: CachedPixels {
+                        pixels,
+                        width: pw,
+                        height: ph,
+                    },
                 },
             );
         }
@@ -668,26 +710,24 @@ impl DecorationRuntime {
             Point::from((0.0, 0.0)),
             Size::from((BTN_SIZE as f64, BTN_SIZE as f64)),
         );
-        let loc = self.logical_point(x, cy);
-        Some(DecorationElement::Text(
-            TextureRenderElement::from_texture_buffer(
-                loc.to_f64(),
-                &cached.buffer,
-                None,
-                Some(src),
-                Some(Size::from((BTN_SIZE, BTN_SIZE))),
-                Kind::Unspecified,
-            ),
-        ))
+        let loc = self.logical_point(x, cy).to_f64();
+        Self::text_from_cpu(
+            renderer,
+            &cached.cpu,
+            BTN_SS,
+            loc,
+            src,
+            Size::from((BTN_SIZE, BTN_SIZE)),
+        )
     }
 
     /// Build (or reuse) the titlebar-background texture (rounded top corners) and
     /// place it across the top of the frame. Re-rasterized only when the window's
     /// width, opacity, or focus changes.
     #[allow(clippy::too_many_arguments)]
-    fn titlebar_element(
+    fn titlebar_element<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         w: &WindowDeco,
         width: i32,
         header: i32,
@@ -699,7 +739,11 @@ impl DecorationRuntime {
         bar_x: i32,
         bar_y: i32,
         overlay: bool,
-    ) -> Option<GlesDecorationElement> {
+    ) -> Option<DecorationElement<R>>
+    where
+        R: Renderer + ImportMem,
+        R::TextureId: Clone + 'static,
+    {
         if width <= 0 || header <= 0 {
             return None;
         }
@@ -729,16 +773,6 @@ impl DecorationRuntime {
                 border_px,
                 overlay,
             )?;
-            let texture = renderer
-                .import_memory(&pixels, Fourcc::Abgr8888, Size::from((pw, ph)), false)
-                .ok()?;
-            let buffer = TextureBuffer::from_texture(
-                renderer,
-                texture,
-                TITLEBAR_SS,
-                Transform::Normal,
-                None,
-            );
             self.titlebars.insert(
                 w.id,
                 CachedTitlebar {
@@ -750,7 +784,11 @@ impl DecorationRuntime {
                     focused: w.focused,
                     overlay,
                     border: border.to_vec(),
-                    buffer,
+                    cpu: CachedPixels {
+                        pixels,
+                        width: pw,
+                        height: ph,
+                    },
                 },
             );
         }
@@ -760,30 +798,32 @@ impl DecorationRuntime {
             Point::from((0.0, 0.0)),
             Size::from((width as f64, header as f64)),
         );
-        let loc = self.logical_point(bar_x, bar_y);
-        Some(DecorationElement::Text(
-            TextureRenderElement::from_texture_buffer(
-                loc.to_f64(),
-                &cached.buffer,
-                None,
-                Some(src),
-                Some(Size::from((width, header))),
-                Kind::Unspecified,
-            ),
-        ))
+        let loc = self.logical_point(bar_x, bar_y).to_f64();
+        Self::text_from_cpu(
+            renderer,
+            &cached.cpu,
+            TITLEBAR_SS,
+            loc,
+            src,
+            Size::from((width, header)),
+        )
     }
 
     /// Build (or reuse) the shared vertical-gradient side-border texture and place it
     /// as the window's left and right edges (below the titlebar). Re-rasterized only
     /// when the window height, focus, or border stops change.
-    fn border_edge_elements(
+    fn border_edge_elements<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         w: &WindowDeco,
         b: i32,
         header: i32,
         stops: &[[f32; 3]],
-    ) -> Vec<GlesDecorationElement> {
+    ) -> Vec<DecorationElement<R>>
+    where
+        R: Renderer + ImportMem,
+        R::TextureId: Clone + 'static,
+    {
         let frame = w.frame;
         let height = frame.height - header;
         if b <= 0 || height <= 0 {
@@ -806,26 +846,6 @@ impl DecorationRuntime {
             else {
                 return Vec::new();
             };
-            let texture = match renderer.import_memory(
-                &pixels,
-                Fourcc::Abgr8888,
-                Size::from((pw, ph)),
-                false,
-            ) {
-                Ok(t) => t,
-                Err(_) => return Vec::new(),
-            };
-            let bufs = (0..2)
-                .map(|_| {
-                    TextureBuffer::from_texture(
-                        renderer,
-                        texture.clone(),
-                        1,
-                        Transform::Normal,
-                        None,
-                    )
-                })
-                .collect::<Vec<_>>();
             self.borders.insert(
                 w.id,
                 CachedBorder {
@@ -833,7 +853,11 @@ impl DecorationRuntime {
                     frame_height: frame.height,
                     focused: w.focused,
                     stops: stops.to_vec(),
-                    bufs,
+                    cpu: CachedPixels {
+                        pixels,
+                        width: pw,
+                        height: ph,
+                    },
                 },
             );
         }
@@ -850,34 +874,30 @@ impl DecorationRuntime {
             (frame.x + frame.width - b, frame.y + header),
         ];
         let mut out = Vec::with_capacity(2);
-        for (i, (x, y)) in positions.iter().enumerate() {
-            let Some(buf) = cached.bufs.get(i) else {
-                continue;
-            };
-            let loc = self.logical_point(*x, *y);
-            out.push(DecorationElement::Text(
-                TextureRenderElement::from_texture_buffer(
-                    loc.to_f64(),
-                    buf,
-                    None,
-                    Some(src),
-                    Some(Size::from((b, height))),
-                    Kind::Unspecified,
-                ),
-            ));
+        for (x, y) in positions {
+            let loc = self.logical_point(x, y).to_f64();
+            if let Some(elem) =
+                Self::text_from_cpu(renderer, &cached.cpu, 1, loc, src, Size::from((b, height)))
+            {
+                out.push(elem);
+            }
         }
         out
     }
 
-    fn title_element(
+    fn title_element<R>(
         &mut self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         w: &WindowDeco,
         x: i32,
         max_w: i32,
         header: i32,
         bar_y: i32,
-    ) -> Option<GlesDecorationElement> {
+    ) -> Option<DecorationElement<R>>
+    where
+        R: Renderer + ImportMem,
+        R::TextureId: Clone + 'static,
+    {
         let font = self.font.as_ref()?;
         let color = if w.focused {
             self.palette.text_active
@@ -936,34 +956,21 @@ impl DecorationRuntime {
                 &border,
                 border_px,
             ) {
-                match renderer.import_memory(&pixels, Fourcc::Abgr8888, Size::from((tw, th)), false)
-                {
-                    Ok(texture) => {
-                        let buffer = TextureBuffer::from_texture(
-                            renderer,
-                            texture,
-                            1,
-                            Transform::Normal,
-                            None,
-                        );
-                        self.titles.insert(
-                            w.id,
-                            CachedTitle {
-                                text: w.title.clone(),
-                                color,
-                                pill,
-                                border,
-                                border_px,
-                                width: tw,
-                                height: th,
-                                buffer,
-                            },
-                        );
-                    }
-                    _ => {
-                        return None;
-                    }
-                }
+                self.titles.insert(
+                    w.id,
+                    CachedTitle {
+                        text: w.title.clone(),
+                        color,
+                        pill,
+                        border,
+                        border_px,
+                        cpu: CachedPixels {
+                            pixels,
+                            width: tw,
+                            height: th,
+                        },
+                    },
+                );
             } else {
                 self.titles.remove(&w.id);
                 return None;
@@ -971,37 +978,24 @@ impl DecorationRuntime {
         }
 
         let cached = self.titles.get(&w.id)?;
-        let (tw, th) = (cached.width, cached.height);
+        let (tw, th) = (cached.cpu.width, cached.cpu.height);
         let draw_w = tw.min(max_w);
         let y = bar_y + (header - th) / 2;
         let src = Rectangle::<f64, Logical>::new(
             Point::from((0.0, 0.0)),
             Size::from((draw_w as f64, th as f64)),
         );
-        let loc = self.logical_point(x, y);
-        Some(DecorationElement::Text(
-            TextureRenderElement::from_texture_buffer(
-                loc.to_f64(),
-                &cached.buffer,
-                None,
-                Some(src),
-                Some(Size::from((draw_w, th))),
-                Kind::Unspecified,
-            ),
-        ))
+        let loc = self.logical_point(x, y).to_f64();
+        Self::text_from_cpu(renderer, &cached.cpu, 1, loc, src, Size::from((draw_w, th)))
     }
 
-    /// Build the drop-shadow quads for one window. The shadow is an outer ring that
-    /// never overlaps the frame interior: straight edges + (square) bottom corners
-    /// come from one shared radial texture, while the two top corners use dedicated
-    /// rounded-corner textures so the shadow hugs the titlebar's rounded top corners.
-    /// All textures are imported once; each window owns one `TextureBuffer` per piece
-    /// so every quad has a stable, distinct element id for damage tracking.
-    fn shadow_elements(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        w: &WindowDeco,
-    ) -> Vec<GlesDecorationElement> {
+    /// Build the drop-shadow quads for one window. Shared shadow CPU pixels are
+    /// rasterized once; each slice is uploaded via ImportMem for the active renderer.
+    fn shadow_elements<R>(&mut self, renderer: &mut R, w: &WindowDeco) -> Vec<DecorationElement<R>>
+    where
+        R: Renderer + ImportMem,
+        R::TextureId: Clone + 'static,
+    {
         let m = SHADOW_MARGIN;
         let r = CORNER_RADIUS_PX;
         let f = w.frame;
@@ -1010,96 +1004,78 @@ impl DecorationRuntime {
             return Vec::new();
         }
 
-        // Ensure the three shared shadow textures exist (radial edge tex + the two
-        // rounded top-corner textures). Any failure simply skips the shadow.
-        if self.shadow_tex.is_none() {
+        if self.shadow_edge.is_none() {
             let Some((px, pw, ph)) = rasterize_shadow() else {
                 return Vec::new();
             };
-            match renderer.import_memory(&px, Fourcc::Abgr8888, Size::from((pw, ph)), false) {
-                Ok(t) => self.shadow_tex = Some(t),
-                Err(_) => return Vec::new(),
-            }
+            self.shadow_edge = Some(CachedPixels {
+                pixels: px,
+                width: pw,
+                height: ph,
+            });
         }
         if self.shadow_corner_tl.is_none() {
             let Some((px, pw, ph)) = rasterize_shadow_corner(false) else {
                 return Vec::new();
             };
-            match renderer.import_memory(&px, Fourcc::Abgr8888, Size::from((pw, ph)), false) {
-                Ok(t) => self.shadow_corner_tl = Some(t),
-                Err(_) => return Vec::new(),
-            }
+            self.shadow_corner_tl = Some(CachedPixels {
+                pixels: px,
+                width: pw,
+                height: ph,
+            });
         }
         if self.shadow_corner_tr.is_none() {
             let Some((px, pw, ph)) = rasterize_shadow_corner(true) else {
                 return Vec::new();
             };
-            match renderer.import_memory(&px, Fourcc::Abgr8888, Size::from((pw, ph)), false) {
-                Ok(t) => self.shadow_corner_tr = Some(t),
-                Err(_) => return Vec::new(),
-            }
+            self.shadow_corner_tr = Some(CachedPixels {
+                pixels: px,
+                width: pw,
+                height: ph,
+            });
         }
         let (Some(edge), Some(ctl), Some(ctr)) = (
-            self.shadow_tex.clone(),
+            self.shadow_edge.clone(),
             self.shadow_corner_tl.clone(),
             self.shadow_corner_tr.clone(),
         ) else {
             return Vec::new();
         };
 
-        // Ensure this window's slice buffers exist. Index → source texture is fixed:
-        // 0 = rounded TL, 1 = rounded TR, 2..8 = radial (edges + square bottom corners).
-        self.shadow_bufs.entry(w.id).or_insert_with(|| {
-            let sources = [&ctl, &ctr, &edge, &edge, &edge, &edge, &edge, &edge];
-            sources
-                .iter()
-                .map(|t| {
-                    TextureBuffer::from_texture(renderer, (*t).clone(), 1, Transform::Normal, None)
-                })
-                .collect::<Vec<_>>()
-        });
-        let Some(bufs) = self.shadow_bufs.get(&w.id) else {
-            return Vec::new();
-        };
-
         let s2 = m + r; // rounded-corner texture side
         let tail = m + 2; // far edge/corner offset in the radial texture
 
-        // (src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h). Index order must
-        // match the `sources` mapping above. Every dst sits outside the frame.
-        type ShadowSlice = (i32, i32, i32, i32, i32, i32, i32, i32);
+        // (src_x, src_y, src_w, src_h, dst_x, dst_y, dst_w, dst_h, cpu_source_index)
+        // 0 = TL, 1 = TR, 2 = edge
+        type ShadowSlice = (i32, i32, i32, i32, i32, i32, i32, i32, u8);
         let slices: [ShadowSlice; 8] = [
-            // Rounded top corners (full corner texture, unstretched).
-            (0, 0, s2, s2, f.x - m, f.y - m, s2, s2),
-            (0, 0, s2, s2, f.x + f.width - r, f.y - m, s2, s2),
-            // Top + bottom edges (vertical fade), between the corners.
-            (m, 0, 2, m, f.x + r, f.y - m, f.width - 2 * r, m),
-            (m, tail, 2, m, f.x, f.y + f.height, f.width, m),
-            // Left + right edges (horizontal fade), below the rounded top corners.
-            (0, m, m, 2, f.x - m, f.y + r, m, f.height - r),
-            (tail, m, m, 2, f.x + f.width, f.y + r, m, f.height - r),
-            // Square bottom corners (radial fade).
-            (0, tail, m, m, f.x - m, f.y + f.height, m, m),
-            (tail, tail, m, m, f.x + f.width, f.y + f.height, m, m),
+            (0, 0, s2, s2, f.x - m, f.y - m, s2, s2, 0),
+            (0, 0, s2, s2, f.x + f.width - r, f.y - m, s2, s2, 1),
+            (m, 0, 2, m, f.x + r, f.y - m, f.width - 2 * r, m, 2),
+            (m, tail, 2, m, f.x, f.y + f.height, f.width, m, 2),
+            (0, m, m, 2, f.x - m, f.y + r, m, f.height - r, 2),
+            (tail, m, m, 2, f.x + f.width, f.y + r, m, f.height - r, 2),
+            (0, tail, m, m, f.x - m, f.y + f.height, m, m, 2),
+            (tail, tail, m, m, f.x + f.width, f.y + f.height, m, m, 2),
         ];
 
         let mut out = Vec::with_capacity(8);
-        for (i, (sx, sy, sw, sh, dx, dy, dw, dh)) in slices.iter().enumerate() {
+        for (sx, sy, sw, sh, dx, dy, dw, dh, src_i) in slices {
+            let cpu = match src_i {
+                0 => &ctl,
+                1 => &ctr,
+                _ => &edge,
+            };
             let src = Rectangle::<f64, Logical>::new(
-                Point::from((*sx as f64, *sy as f64)),
-                Size::from((*sw as f64, *sh as f64)),
+                Point::from((sx as f64, sy as f64)),
+                Size::from((sw as f64, sh as f64)),
             );
-            let loc = self.logical_point(*dx, *dy);
-            out.push(DecorationElement::Text(
-                TextureRenderElement::from_texture_buffer(
-                    loc.to_f64(),
-                    &bufs[i],
-                    None,
-                    Some(src),
-                    Some(Size::from((*dw, *dh))),
-                    Kind::Unspecified,
-                ),
-            ));
+            let loc = self.logical_point(dx, dy).to_f64();
+            if let Some(elem) =
+                Self::text_from_cpu(renderer, cpu, 1, loc, src, Size::from((dw, dh)))
+            {
+                out.push(elem);
+            }
         }
         out
     }
