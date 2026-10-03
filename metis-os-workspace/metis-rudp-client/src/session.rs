@@ -58,6 +58,11 @@ pub enum SessionEvent {
     PointerLock {
         locked: bool,
     },
+    ClipboardSet {
+        mime: String,
+        text: String,
+        serial: u64,
+    },
     AccessUnit(AccessUnitEvent),
     Disconnected,
 }
@@ -244,6 +249,11 @@ async fn session_pump(
                                 }
                                 RudpControlMsg::PointerLock { locked } => {
                                     let _ = event_tx.send(SessionEvent::PointerLock { locked }).await;
+                                }
+                                RudpControlMsg::ClipboardSet { mime, text, serial } => {
+                                    let _ = event_tx
+                                        .send(SessionEvent::ClipboardSet { mime, text, serial })
+                                        .await;
                                 }
                                 RudpControlMsg::Keepalive => {}
                                 other => {

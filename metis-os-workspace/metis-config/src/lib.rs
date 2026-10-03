@@ -533,10 +533,10 @@ pub use updates::{
     save_updates_config, updates_config_path,
 };
 pub use viewer::{
-    ViewerCertPolicy, ViewerColorDepth, ViewerConfig, ViewerDisplayMode, ViewerHost, ViewerNetwork,
-    ViewerPlacement, ViewerProtocol, ViewerRdpOptions, load_viewer_config, remember_host,
-    remove_recent, save_viewer_config, set_viewer_pending_placement, take_viewer_pending_placement,
-    viewer_config_path,
+    ViewerCertPolicy, ViewerColorDepth, ViewerConfig, ViewerDisplayMode, ViewerHost,
+    ViewerHostsView, ViewerNetwork, ViewerPlacement, ViewerProtocol, ViewerRdpOptions,
+    load_viewer_config, remember_host, remove_recent, save_hosts_view, save_viewer_config,
+    set_viewer_pending_placement, take_viewer_pending_placement, viewer_config_path,
 };
 pub use wallpaper::{
     BackgroundKind, GradientDirection, WALLPAPER_IMAGE_EXTS, WallpaperConfig,

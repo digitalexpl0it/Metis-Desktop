@@ -1108,7 +1108,13 @@ game session ends.
 3. Enter the PAM password (never saved). Trust the host fingerprint on first connect (TOFU).
 
 Metis Remote accepts pointer and keyboard on the Quinn control stream (absolute /
-relative pointer, buttons, scroll, keys); inject pauses while the session is locked.
+relative pointer, buttons, scroll, keys). **Session lock:** if the host uses the
+Metis PAM lock (`Super+L`) and you authenticate as the **session owner** (the
+logged-in `$USER`), a successful RUDP PAM login **unlocks** the desktop — you do
+not type the password again into the lock UI. Third-party lockers
+(`ext-session-lock`, e.g. swaylock) are not cleared; allowlisted users other than
+the session owner can still connect for video but cannot unlock or inject input
+while locked. Classic RDP still pauses listen on lock (separate from Metis Remote).
 When a game locks the pointer, the host advertises `PointerLock` so the Viewer
 sends relative motion.
 

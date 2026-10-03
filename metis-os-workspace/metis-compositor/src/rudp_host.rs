@@ -38,7 +38,7 @@ use metis_encode::{
 use metis_protocol::{
     RUDP_DEFAULT_DATAGRAM_BUDGET, RUDP_PROTOCOL_VERSION, ReliableAccessUnit, RudpControlMsg,
     RudpDamageRect, RudpRejectReason, build_media_datagrams, codec_from_str, encode_rudp_frame,
-    try_decode_rudp_frame,
+    truncate_clipboard_text, try_decode_rudp_frame,
 };
 use quinn::Endpoint;
 use smithay::reexports::calloop;
@@ -70,8 +70,16 @@ const ENCODER_HEALTHY_RESET: Duration = Duration::from_secs(60);
 /// Keep a warm worker this long after the last client leaves.
 const ENCODER_IDLE_CLOSE: Duration = Duration::from_secs(15);
 
-/// Input events from the Quinn control stream, marshaled onto calloop.
-#[derive(Debug, Clone, Copy)]
+/// Latest-wins outbound clipboard payload for authenticated sessions.
+#[derive(Debug, Clone)]
+pub struct RudpClipboardOut {
+    pub serial: u64,
+    pub mime: String,
+    pub text: String,
+}
+
+/// Input / control events from the Quinn stream, marshaled onto calloop.
+#[derive(Debug, Clone)]
 pub enum RudpInputEvent {
     PointerAbsolute {
         x: f64,
@@ -93,14 +101,25 @@ pub enum RudpInputEvent {
         keycode: u32,
         pressed: bool,
     },
+    /// Viewer → host: install text on the Wayland clipboard.
+    ClipboardSet {
+        mime: String,
+        text: String,
+        serial: u64,
+    },
+    /// Authenticated RUDP session as this user — unlock Metis PAM lock if they
+    /// own the session (calloop; not from the control-stream JSON enum).
+    UnlockPamSession {
+        username: String,
+    },
     /// Not input: the frame pipeline needs a full frame now (client joined /
     /// encoder restarted) even if the desktop is idle — repaint + force export.
     RefreshVideo,
 }
 
 impl RudpInputEvent {
-    fn from_control(msg: &RudpControlMsg) -> Option<Self> {
-        match *msg {
+    fn from_control(msg: RudpControlMsg) -> Option<Self> {
+        match msg {
             RudpControlMsg::PointerAbsolute { x, y } => Some(Self::PointerAbsolute { x, y }),
             RudpControlMsg::PointerRelative { dx, dy } => Some(Self::PointerRelative { dx, dy }),
             RudpControlMsg::PointerButton { button, pressed } => {
@@ -108,6 +127,9 @@ impl RudpInputEvent {
             }
             RudpControlMsg::PointerScroll { dx, dy } => Some(Self::PointerScroll { dx, dy }),
             RudpControlMsg::Key { keycode, pressed } => Some(Self::Key { keycode, pressed }),
+            RudpControlMsg::ClipboardSet { mime, text, serial } => {
+                Some(Self::ClipboardSet { mime, text, serial })
+            }
             _ => None,
         }
     }
@@ -213,6 +235,11 @@ pub struct RudpHostSystem {
     pub render_node_path: PathBuf,
     /// Shared with calloop: true when a Wayland pointer lock is active.
     pub pointer_locked: Arc<AtomicBool>,
+    /// Latest-wins clipboard text for fan-out to authenticated clients.
+    clipboard_out: Arc<Mutex<Option<RudpClipboardOut>>>,
+    clipboard_serial: Arc<AtomicU64>,
+    /// Authenticated session count (export/encode demand).
+    active_sessions: Arc<AtomicUsize>,
     /// Crash-loop guard marker; dropped (file removed) after threads join.
     _marker: Arc<HostMarker>,
 }
@@ -240,13 +267,17 @@ impl RudpHostSystem {
 
         let marker = Arc::new(HostMarker::create());
         let allowed_users_live = Arc::new(StdRwLock::new(allowed_users.clone()));
+        let clipboard_out = Arc::new(Mutex::new(None));
+        let clipboard_serial = Arc::new(AtomicU64::new(0));
+        let active_sessions = Arc::new(AtomicUsize::new(0));
         let video = Arc::new(VideoShared {
             latest_packet: Arc::clone(&latest_packet),
             width: AtomicU32::new(0),
             height: AtomicU32::new(0),
             codec: AtomicU8::new(codec_to_u8(to_encode_codec(encode_prefs.codec))),
-            active_sessions: AtomicUsize::new(0),
+            active_sessions: Arc::clone(&active_sessions),
             session_joins: AtomicU64::new(0),
+            clipboard_out: Arc::clone(&clipboard_out),
         });
         let quinn_stop = Arc::clone(&stop);
         let quinn_allowed = Arc::clone(&allowed_users_live);
@@ -334,8 +365,36 @@ impl RudpHostSystem {
             encode_prefs,
             render_node_path,
             pointer_locked,
+            clipboard_out,
+            clipboard_serial,
+            active_sessions,
             _marker: marker,
         })
+    }
+
+    /// Push local clipboard text to connected RUDP clients (latest-wins).
+    /// No-op when nobody is authenticated.
+    pub fn push_clipboard_text(&self, mime: &str, text: &str) {
+        if self.active_sessions.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let trimmed = truncate_clipboard_text(text);
+        if trimmed.is_empty() {
+            return;
+        }
+        let serial = self.clipboard_serial.fetch_add(1, Ordering::Relaxed) + 1;
+        let mime = if mime.is_empty() {
+            "text/plain;charset=utf-8".into()
+        } else {
+            mime.to_string()
+        };
+        if let Ok(mut slot) = self.clipboard_out.lock() {
+            *slot = Some(RudpClipboardOut {
+                serial,
+                mime,
+                text: trimmed.to_string(),
+            });
+        }
     }
 
     /// Signal stop, disarm export (unblocks frame wake), join workers.
@@ -390,9 +449,10 @@ struct VideoShared {
     /// after a fallback) — advertised to clients in `VideoReady`.
     codec: AtomicU8,
     /// Authenticated sessions; > 0 ⇒ export + encode demand.
-    active_sessions: AtomicUsize,
+    active_sessions: Arc<AtomicUsize>,
     /// Monotonic join counter — a change makes the frame thread emit an IDR.
     session_joins: AtomicU64,
+    clipboard_out: Arc<Mutex<Option<RudpClipboardOut>>>,
 }
 
 /// Counts one authenticated session for as long as it lives (incl. task cancel).
@@ -498,8 +558,17 @@ async fn connection_broker_loop(
                     let peer = conn.remote_address();
                     tracing::info!(%peer, "rudp host: TLS connected — starting auth");
                     match authenticate_connection(&conn, &allowed).await {
-                        Ok((session_id, mut control_send, mut control_recv)) => {
-                            tracing::info!(%peer, %session_id, "rudp host: session authenticated");
+                        Ok((session_id, username, mut control_send, mut control_recv)) => {
+                            tracing::info!(
+                                %peer,
+                                %session_id,
+                                %username,
+                                "rudp host: session authenticated"
+                            );
+                            // Unlock Metis PAM lock on calloop when this user owns the session.
+                            let _ = bridge
+                                .input_tx
+                                .send(RudpInputEvent::UnlockPamSession { username });
                             // Advertise current pointer-lock so the client can pick
                             // absolute vs relative before the next pump tick.
                             let locked = bridge.pointer_locked.load(Ordering::Relaxed);
@@ -538,7 +607,7 @@ async fn connection_broker_loop(
                                     buf.extend_from_slice(&tmp[..n]);
                                     while let Ok(Some((msg, n))) = try_decode_rudp_frame(&buf) {
                                         buf.drain(..n);
-                                        if let Some(ev) = RudpInputEvent::from_control(&msg) {
+                                        if let Some(ev) = RudpInputEvent::from_control(msg) {
                                             let _ = input_tx.send(ev);
                                         }
                                     }
@@ -577,6 +646,7 @@ async fn video_pump_loop(
     let mut last_seq: Option<u64> = None;
     let mut last_ready = (0u32, 0u32, CODEC_H264);
     let mut last_pointer_lock: Option<bool> = None;
+    let mut last_clipboard_serial: Option<u64> = None;
 
     while !stop.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(4)).await;
@@ -593,6 +663,26 @@ async fn video_pump_loop(
                 let _ = write_control_msg(&mut send, &msg).await;
             }
             last_pointer_lock = Some(locked);
+        }
+
+        let clipboard = video.clipboard_out.lock().ok().and_then(|g| g.clone());
+        if let Some(clip) = clipboard
+            && last_clipboard_serial != Some(clip.serial)
+        {
+            let snap: Vec<Arc<VideoSession>> = {
+                let guard = sessions.read().await;
+                guard.values().cloned().collect()
+            };
+            let msg = RudpControlMsg::ClipboardSet {
+                mime: clip.mime.clone(),
+                text: clip.text.clone(),
+                serial: clip.serial,
+            };
+            for session in &snap {
+                let mut send = session.control_send.lock().await;
+                let _ = write_control_msg(&mut send, &msg).await;
+            }
+            last_clipboard_serial = Some(clip.serial);
         }
 
         let w = video.width.load(Ordering::Relaxed);
@@ -740,7 +830,7 @@ async fn video_pump_loop(
 async fn authenticate_connection(
     conn: &quinn::Connection,
     allowed_users: &Arc<StdRwLock<Vec<String>>>,
-) -> Result<(String, quinn::SendStream, quinn::RecvStream), String> {
+) -> Result<(String, String, quinn::SendStream, quinn::RecvStream), String> {
     // Client opens the control bi-stream.
     let (mut send, mut recv) = tokio::time::timeout(Duration::from_secs(15), conn.accept_bi())
         .await
@@ -833,7 +923,7 @@ async fn authenticate_connection(
         },
     )
     .await?;
-    Ok((session_id, send, recv))
+    Ok((session_id, username, send, recv))
 }
 
 async fn write_control_msg(
@@ -1439,8 +1529,9 @@ mod tests {
             width: AtomicU32::new(0),
             height: AtomicU32::new(0),
             codec: AtomicU8::new(CODEC_H264),
-            active_sessions: AtomicUsize::new(0),
+            active_sessions: Arc::new(AtomicUsize::new(0)),
             session_joins: AtomicU64::new(0),
+            clipboard_out: Arc::new(Mutex::new(None)),
         });
         let a = SessionGuard::new(&video);
         let b = SessionGuard::new(&video);

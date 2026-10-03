@@ -1,17 +1,18 @@
 //! Metis Remote (RUDP) session window — decode + present + input.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use gtk::gdk;
+use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 use metis_decode::{RudpCodec, open_decoder};
 use metis_i18n::tr;
-use metis_protocol::RudpControlMsg;
+use metis_protocol::{RudpControlMsg, truncate_clipboard_text};
 use metis_rudp_client::{
     ClientError, RudpClientConfig, SessionEvent, TofuMode, clear_host_pin, connect, pin_host,
     resolve_host_port,
@@ -231,23 +232,20 @@ fn worker_main(
                 ToWorker::Shutdown | ToWorker::TofuAccept | ToWorker::TofuDecline => return,
             }
         }
-        match rt.block_on(async {
+        if let Some(ev) = rt.block_on(async {
             tokio::select! {
                 biased;
                 ev = session.recv_event() => ev,
                 _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => None,
             }
         }) {
-            Some(ev) => {
-                let done = matches!(ev, SessionEvent::Disconnected);
-                if gtk_tx.send(ToGtk::Event(ev)).is_err() {
-                    return;
-                }
-                if done {
-                    return;
-                }
+            let done = matches!(ev, SessionEvent::Disconnected);
+            if gtk_tx.send(ToGtk::Event(ev)).is_err() {
+                return;
             }
-            None => {}
+            if done {
+                return;
+            }
         }
         // Also check for disconnect via try after timeout path.
         while let Some(ev) = session.try_recv_event() {
@@ -340,10 +338,21 @@ fn build_session_window(
     let video_size = Rc::new(Cell::new((0u32, 0u32)));
     let last_pos = Rc::new(Cell::new((0.0f64, 0.0f64)));
     let decoder: Rc<Mutex<Option<Box<dyn metis_decode::VideoDecoder>>>> = Rc::new(Mutex::new(None));
+    let applying_remote_clip = Rc::new(Cell::new(false));
+    let last_remote_clip_serial = Rc::new(Cell::new(0u64));
+    let outbound_clip_serial = Rc::new(Cell::new(0u64));
+    let last_outbound_clip = Rc::new(RefCell::new(String::new()));
+    let clip_handler: Rc<Cell<Option<glib::SignalHandlerId>>> = Rc::new(Cell::new(None));
 
     {
         let worker_tx = worker_tx.clone();
+        let clip_handler = clip_handler.clone();
         win.connect_close_request(move |_| {
+            if let Some(id) = clip_handler.take()
+                && let Some(display) = gdk::Display::default()
+            {
+                display.clipboard().disconnect(id);
+            }
             let _ = worker_tx.send(ToWorker::Shutdown);
             glib::Propagation::Proceed
         });
@@ -355,6 +364,9 @@ fn build_session_window(
         let pointer_locked = pointer_locked.clone();
         let video_size = video_size.clone();
         let decoder = decoder.clone();
+        let applying_remote_clip = applying_remote_clip.clone();
+        let last_remote_clip_serial = last_remote_clip_serial.clone();
+        let last_outbound_clip = last_outbound_clip.clone();
         let win = win.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
             let Ok(rx) = gtk_rx.lock() else {
@@ -374,6 +386,9 @@ fn build_session_window(
                             &pointer_locked,
                             &video_size,
                             &decoder,
+                            &applying_remote_clip,
+                            &last_remote_clip_serial,
+                            &last_outbound_clip,
                         );
                     }
                     Ok(_) => {}
@@ -389,6 +404,44 @@ fn build_session_window(
             }
             glib::ControlFlow::Continue
         });
+    }
+
+    if let Some(display) = gdk::Display::default() {
+        let clipboard = display.clipboard();
+        let worker_tx = worker_tx.clone();
+        let applying_remote_clip = applying_remote_clip.clone();
+        let outbound_clip_serial = outbound_clip_serial.clone();
+        let last_outbound_clip = last_outbound_clip.clone();
+        let id = clipboard.connect_changed(move |cb| {
+            if applying_remote_clip.get() {
+                return;
+            }
+            let worker_tx = worker_tx.clone();
+            let applying_remote_clip = applying_remote_clip.clone();
+            let outbound_clip_serial = outbound_clip_serial.clone();
+            let last_outbound_clip = last_outbound_clip.clone();
+            cb.read_text_async(gio::Cancellable::NONE, move |result| {
+                if applying_remote_clip.get() {
+                    return;
+                }
+                let Ok(Some(text)) = result else {
+                    return;
+                };
+                let text = truncate_clipboard_text(text.as_str()).to_string();
+                if text.is_empty() || *last_outbound_clip.borrow() == text {
+                    return;
+                }
+                *last_outbound_clip.borrow_mut() = text.clone();
+                let serial = outbound_clip_serial.get().wrapping_add(1);
+                outbound_clip_serial.set(serial);
+                let _ = worker_tx.send(ToWorker::Input(RudpControlMsg::ClipboardSet {
+                    mime: "text/plain;charset=utf-8".into(),
+                    text,
+                    serial,
+                }));
+            });
+        });
+        clip_handler.set(Some(id));
     }
 
     {
@@ -485,6 +538,7 @@ fn build_session_window(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_event(
     ev: &SessionEvent,
     picture: &gtk::Picture,
@@ -492,6 +546,9 @@ fn apply_event(
     pointer_locked: &Rc<Cell<bool>>,
     video_size: &Rc<Cell<(u32, u32)>>,
     decoder: &Rc<Mutex<Option<Box<dyn metis_decode::VideoDecoder>>>>,
+    applying_remote_clip: &Rc<Cell<bool>>,
+    last_remote_clip_serial: &Rc<Cell<u64>>,
+    last_outbound_clip: &Rc<RefCell<String>>,
 ) {
     match ev {
         SessionEvent::VideoReady {
@@ -515,6 +572,23 @@ fn apply_event(
             pointer_locked.set(*locked);
             if *locked {
                 status.set_text(&tr("Pointer lock — relative mouse"));
+            }
+        }
+        SessionEvent::ClipboardSet {
+            mime: _,
+            text,
+            serial,
+        } => {
+            if *serial != 0 && last_remote_clip_serial.get() == *serial {
+                return;
+            }
+            last_remote_clip_serial.set(*serial);
+            // Seed before set_text so a delayed changed→read_text doesn't echo.
+            *last_outbound_clip.borrow_mut() = text.clone();
+            if let Some(display) = gdk::Display::default() {
+                applying_remote_clip.set(true);
+                display.clipboard().set_text(text);
+                applying_remote_clip.set(false);
             }
         }
         SessionEvent::AccessUnit(au) => {

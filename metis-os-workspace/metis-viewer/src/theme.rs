@@ -245,6 +245,41 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             font-weight: 650;
             color: {text};
         }}
+        .metis-viewer-hosts-search {{
+            min-width: 160px;
+        }}
+        .metis-viewer-view-toggle {{
+            border-radius: {rs}px;
+            border: 1px solid {border};
+            background-color: {raised};
+        }}
+        .metis-viewer-view-btn {{
+            min-width: 36px;
+            min-height: 34px;
+            padding: 0;
+            border-radius: 0;
+            border: none;
+            background-color: transparent;
+            color: {muted};
+            -gtk-icon-size: 16px;
+        }}
+        .metis-viewer-view-btn:first-child {{
+            border-top-left-radius: {rs}px;
+            border-bottom-left-radius: {rs}px;
+        }}
+        .metis-viewer-view-btn:last-child {{
+            border-top-right-radius: {rs}px;
+            border-bottom-right-radius: {rs}px;
+        }}
+        .metis-viewer-view-btn:hover {{
+            color: {text};
+            background-color: {surface};
+        }}
+        .metis-viewer-view-btn:checked {{
+            color: {accent};
+            background-color: {surface};
+            box-shadow: inset 0 0 0 1px {border};
+        }}
         .metis-viewer-title {{
             font-size: 20px;
             font-weight: 650;
@@ -283,13 +318,25 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             padding: 12px 16px 4px;
         }}
         .metis-viewer-field {{
-            padding: 8px 16px;
+            padding: 6px 16px;
+        }}
+        .metis-viewer-field-row {{
+            padding: 6px 16px;
+        }}
+        .metis-viewer-field-col {{
+            min-width: 0;
+        }}
+        .metis-viewer-field-label-row {{
+            margin-bottom: 4px;
         }}
         .metis-viewer-field-label {{
             font-size: 12px;
             font-weight: 600;
             color: {muted};
-            margin-bottom: 4px;
+        }}
+        .metis-viewer-field-icon {{
+            color: {muted};
+            opacity: 0.9;
         }}
         .metis-viewer-actions {{
             padding: 4px 16px 14px;
@@ -386,8 +433,22 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
         .metis-viewer-hosts-body {{
             padding: 8px 20px 24px;
         }}
+        .metis-viewer-hosts-sections {{
+            min-height: 0;
+        }}
+        .metis-viewer-hosts-section-title {{
+            font-size: 11px;
+            font-weight: 650;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: {muted};
+            padding: 0 2px;
+        }}
         .metis-viewer-hosts-grid {{
             min-height: 80px;
+        }}
+        .metis-viewer-hosts-list {{
+            min-height: 0;
         }}
         .metis-viewer-empty-state {{
             padding: 48px 24px;
@@ -455,6 +516,25 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
         }}
         .metis-viewer-host-card-remove:hover {{
             color: {text};
+        }}
+        .metis-viewer-host-row {{
+            background-color: {surface};
+            border: 1px solid {border};
+            border-radius: {rs}px;
+            padding: 8px 10px 8px 12px;
+            min-height: 56px;
+        }}
+        .metis-viewer-host-row:hover {{
+            border-color: {accent};
+            background-color: {raised};
+        }}
+        .metis-viewer-host-row .metis-viewer-host-card-icon-wrap {{
+            min-width: 34px;
+            min-height: 34px;
+        }}
+        .metis-viewer-host-row .metis-viewer-host-card-icon-wrap image,
+        .metis-viewer-host-row .metis-viewer-host-card-icon {{
+            margin: 8px;
         }}
 
         .metis-viewer-options {{

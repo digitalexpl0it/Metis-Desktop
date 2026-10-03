@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 pub const RUDP_PROTOCOL_VERSION: u32 = 2;
 pub const RUDP_MAX_FRAME: usize = 64 * 1024;
+/// Max UTF-8 bytes in a [`RudpControlMsg::ClipboardSet`] text payload so the
+/// JSON frame stays under [`RUDP_MAX_FRAME`].
+pub const RUDP_CLIPBOARD_MAX_BYTES: usize = 48 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -65,6 +68,16 @@ pub enum RudpControlMsg {
     PointerLock {
         locked: bool,
     },
+    /// Either direction: replace the peer clipboard with this UTF-8 text.
+    /// Cap `text` with [`truncate_clipboard_text`] before send.
+    ClipboardSet {
+        /// e.g. `"text/plain;charset=utf-8"`.
+        mime: String,
+        text: String,
+        /// Monotonic id so receivers can drop echoes of their own set.
+        #[serde(default)]
+        serial: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +98,18 @@ impl RudpRejectReason {
             Self::RateLimited => "rate_limited",
         }
     }
+}
+
+/// Truncate UTF-8 clipboard text to [`RUDP_CLIPBOARD_MAX_BYTES`] on a char boundary.
+pub fn truncate_clipboard_text(text: &str) -> &str {
+    if text.len() <= RUDP_CLIPBOARD_MAX_BYTES {
+        return text;
+    }
+    let mut end = RUDP_CLIPBOARD_MAX_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// Encode one control message to length-prefixed bytes.
@@ -160,5 +185,18 @@ mod tests {
             height: 1080,
             codec: "hevc".into(),
         });
+        roundtrip(RudpControlMsg::ClipboardSet {
+            mime: "text/plain;charset=utf-8".into(),
+            text: "hello clipboard".into(),
+            serial: 7,
+        });
+    }
+
+    #[test]
+    fn truncate_clipboard_respects_char_boundary() {
+        let s = "é".repeat(RUDP_CLIPBOARD_MAX_BYTES);
+        let t = truncate_clipboard_text(&s);
+        assert!(t.len() <= RUDP_CLIPBOARD_MAX_BYTES);
+        assert!(t.is_char_boundary(t.len()));
     }
 }

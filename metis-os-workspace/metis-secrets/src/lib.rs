@@ -14,6 +14,9 @@ pub type SecretResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub const CALDAV_PASSWORD: &str = "caldav_password";
 /// Attribute "kind" for a Microsoft 365 OAuth refresh token.
 pub const MS_REFRESH_TOKEN: &str = "ms_refresh_token";
+/// Attribute "kind" for Metis Viewer host passwords (RDP / Metis Remote).
+/// Values live in the Secret Service only — never in `viewer.json`.
+pub const VIEWER_PASSWORD: &str = "viewer_password";
 
 fn attributes<'a>(account: &'a str, kind: &'a str) -> HashMap<&'a str, &'a str> {
     let mut map = HashMap::new();

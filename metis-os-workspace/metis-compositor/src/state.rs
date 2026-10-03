@@ -5075,6 +5075,43 @@ impl MetisState {
                     RudpInputEvent::Key { keycode, pressed } => {
                         state.inject_remote_key(keycode, pressed);
                     }
+                    RudpInputEvent::ClipboardSet {
+                        mime,
+                        text,
+                        serial: _,
+                    } => {
+                        if state.session_is_locked() {
+                            return;
+                        }
+                        let mime = if mime.is_empty() {
+                            "text/plain;charset=utf-8".into()
+                        } else {
+                            mime
+                        };
+                        let text = metis_protocol::truncate_clipboard_text(&text).to_string();
+                        if text.is_empty() {
+                            return;
+                        }
+                        if let Err(err) = state.set_clipboard_from_command(mime, Some(text), None) {
+                            tracing::debug!(%err, "rudp clipboard set failed");
+                        }
+                    }
+                    RudpInputEvent::UnlockPamSession { username } => {
+                        // Metis PAM lock only — never clear ext-session-lock.
+                        if !state.lock.locked {
+                            return;
+                        }
+                        let session_user = crate::pam_auth::current_username().unwrap_or_default();
+                        if session_user.is_empty() || username != session_user {
+                            tracing::info!(
+                                %username,
+                                %session_user,
+                                "rudp: skip unlock — not session owner"
+                            );
+                            return;
+                        }
+                        state.unlock_session();
+                    }
                     RudpInputEvent::RefreshVideo => {
                         state.stream_export.request_full_frame();
                         state.schedule_redraw();

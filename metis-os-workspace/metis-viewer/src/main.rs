@@ -1,18 +1,20 @@
 //! Metis Viewer — GTK4 client for RDP (FreeRDP) and Metis Remote (RUDP).
 
+mod credentials;
 mod freerdp;
 mod options;
 mod rudp_session;
 mod theme;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::process::Child;
 use std::rc::Rc;
 use std::time::Instant;
 
 use gtk::prelude::*;
 use metis_config::{
-    ViewerHost, ViewerProtocol, remember_host, remove_recent, set_viewer_pending_placement,
+    ViewerHost, ViewerHostsView, ViewerProtocol, load_viewer_config, remember_host, remove_recent,
+    save_hosts_view, set_viewer_pending_placement,
 };
 use metis_i18n::tr;
 use options::OptionsUi;
@@ -240,6 +242,35 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     heading.set_hexpand(true);
     heading.add_css_class("metis-viewer-page-title");
     toolbar.append(&heading);
+
+    let search_entry = gtk::SearchEntry::new();
+    search_entry.set_placeholder_text(Some(&tr("Search hosts")));
+    search_entry.set_tooltip_text(Some(&tr("Search hosts")));
+    search_entry.add_css_class("metis-viewer-hosts-search");
+    search_entry.set_width_chars(18);
+    search_entry.set_max_width_chars(28);
+    toolbar.append(&search_entry);
+
+    let initial_view = load_viewer_config().hosts_view;
+    let hosts_view = Rc::new(Cell::new(initial_view));
+    let view_toggle = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    view_toggle.add_css_class("metis-viewer-view-toggle");
+    view_toggle.add_css_class("linked");
+    let tile_btn = gtk::ToggleButton::new();
+    tile_btn.set_icon_name("view-grid-symbolic");
+    tile_btn.set_tooltip_text(Some(&tr("Tile view")));
+    tile_btn.add_css_class("metis-viewer-view-btn");
+    tile_btn.set_active(initial_view == ViewerHostsView::Tile);
+    let list_btn = gtk::ToggleButton::new();
+    list_btn.set_icon_name("view-list-symbolic");
+    list_btn.set_tooltip_text(Some(&tr("List view")));
+    list_btn.add_css_class("metis-viewer-view-btn");
+    list_btn.set_active(initial_view == ViewerHostsView::List);
+    list_btn.set_group(Some(&tile_btn));
+    view_toggle.append(&tile_btn);
+    view_toggle.append(&list_btn);
+    toolbar.append(&view_toggle);
+
     let add_btn = gtk::Button::with_label(&tr("Add host"));
     add_btn.add_css_class("suggested-action");
     add_btn.set_tooltip_text(Some(&tr("Show connection fields")));
@@ -301,29 +332,33 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         ViewerProtocol::Rdp => 0,
         ViewerProtocol::Rudp => 1,
     });
-    panel.append(&field_box(&tr("Protocol"), &protocol_dropdown));
+    let label_entry = gtk::Entry::new();
+    label_entry.set_placeholder_text(Some(&tr("Optional display name")));
+    label_entry.set_hexpand(true);
 
-    let host_port = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    host_port.add_css_class("metis-viewer-field");
-    let host_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    host_col.set_hexpand(true);
-    let host_lbl = gtk::Label::new(Some(&tr("Host")));
-    host_lbl.set_xalign(0.0);
-    host_lbl.add_css_class("metis-viewer-field-label");
-    host_col.append(&host_lbl);
-    host_col.append(&host_entry);
-    let port_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let port_lbl = gtk::Label::new(Some(&tr("Port")));
-    port_lbl.set_xalign(0.0);
-    port_lbl.add_css_class("metis-viewer-field-label");
-    port_col.append(&port_lbl);
-    port_col.append(&port_entry);
-    host_port.append(&host_col);
-    host_port.append(&port_col);
-    panel.append(&host_port);
+    // Protocol | Label
+    panel.append(&two_col_fields(
+        icon_field(
+            &tr("Protocol"),
+            "network-workgroup-symbolic",
+            &protocol_dropdown,
+        ),
+        icon_field(&tr("Label"), "tag-symbolic", &label_entry),
+    ));
+
+    // Host | Port
+    panel.append(&two_col_fields(
+        icon_field(&tr("Host"), "network-server-symbolic", &host_entry),
+        icon_field(
+            &tr("Port"),
+            "network-transmit-receive-symbolic",
+            &port_entry,
+        ),
+    ));
 
     let user_entry = gtk::Entry::new();
     user_entry.set_placeholder_text(Some(&tr("Username")));
+    user_entry.set_hexpand(true);
     if let Some(u) = &prefill.user {
         user_entry.set_text(u);
     } else if let Ok(u) = std::env::var("USER")
@@ -331,22 +366,38 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     {
         user_entry.set_text(&u);
     }
-    panel.append(&field_box(&tr("Username"), &user_entry));
-
-    let label_entry = gtk::Entry::new();
-    label_entry.set_placeholder_text(Some(&tr("Optional display name")));
-    label_entry.set_hexpand(true);
-    panel.append(&field_box(&tr("Label"), &label_entry));
 
     let pass_entry = gtk::PasswordEntry::new();
     pass_entry.set_show_peek_icon(true);
     pass_entry.set_placeholder_text(Some(&tr("Optional")));
-    panel.append(&field_box(&tr("Password"), &pass_entry));
+    pass_entry.set_hexpand(true);
+
+    // Username | Password
+    panel.append(&two_col_fields(
+        icon_field(&tr("Username"), "avatar-default-symbolic", &user_entry),
+        icon_field(&tr("Password"), "dialog-password-symbolic", &pass_entry),
+    ));
     let pass_hint = gtk::Label::new(None);
     pass_hint.set_xalign(0.0);
     pass_hint.set_wrap(true);
     pass_hint.add_css_class("metis-viewer-hint");
     panel.append(&pass_hint);
+
+    // When editing a saved host, migrate the keyring item if the endpoint changes.
+    let editing_secret: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    // True after the user types in the password field — async keyring fill must
+    // never overwrite in-progress keystrokes (that looked like a 5s stutter).
+    let password_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    let suppress_pass_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    {
+        let dirty = password_dirty.clone();
+        let suppress = suppress_pass_dirty.clone();
+        pass_entry.connect_changed(move |_| {
+            if !suppress.get() {
+                dirty.set(true);
+            }
+        });
+    }
 
     // RDP-only: FreeRDP advanced notebook in a fixed-height scroller.
     // Do NOT wrap host/password fields in a propagate-natural-height scroll —
@@ -365,7 +416,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         .build();
     options_scroll.add_css_class("metis-viewer-rdp-options-scroll");
     // Fixed height: scroll inside, don't grow the Viewer window.
-    options_scroll.set_size_request(-1, 220);
+    options_scroll.set_size_request(-1, 200);
     options_scroll.set_child(Some(&options_ui.root));
     rdp_options.append(&options_scroll);
     panel.append(&rdp_options);
@@ -412,7 +463,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             match proto {
                 ViewerProtocol::Rdp => {
                     pass_hint.set_text(&tr(
-                        "Leave blank to let FreeRDP prompt. Passwords are never saved.",
+                        "Leave blank to use a saved keyring password or let FreeRDP prompt. \
+                         Passwords are stored in your system keyring, never in viewer.json.",
                     ));
                     rdp_options.set_visible(true);
                     rudp_hint.set_visible(false);
@@ -421,7 +473,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 }
                 ViewerProtocol::Rudp => {
                     pass_hint.set_text(&tr(
-                        "Required — local PAM password on the host. Never saved.",
+                        "Local PAM password on the host. Stored in your system keyring \
+                         (never in viewer.json).",
                     ));
                     rdp_options.set_visible(false);
                     rudp_hint.set_visible(true);
@@ -471,16 +524,10 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     hosts_inner.add_css_class("metis-viewer-hosts-body");
     hosts_inner.set_hexpand(true);
 
-    let hosts_grid = gtk::FlowBox::new();
-    hosts_grid.add_css_class("metis-viewer-hosts-grid");
-    hosts_grid.set_selection_mode(gtk::SelectionMode::None);
-    hosts_grid.set_homogeneous(true);
-    hosts_grid.set_column_spacing(12);
-    hosts_grid.set_row_spacing(12);
-    hosts_grid.set_max_children_per_line(3);
-    hosts_grid.set_min_children_per_line(1);
-    hosts_grid.set_hexpand(true);
-    hosts_inner.append(&hosts_grid);
+    let hosts_sections = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    hosts_sections.add_css_class("metis-viewer-hosts-sections");
+    hosts_sections.set_hexpand(true);
+    hosts_inner.append(&hosts_sections);
 
     let hosts_empty = gtk::Box::new(gtk::Orientation::Vertical, 8);
     hosts_empty.add_css_class("metis-viewer-empty-state");
@@ -506,6 +553,21 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     hosts_empty.append(&empty_body);
     hosts_inner.append(&hosts_empty);
 
+    let hosts_no_match = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    hosts_no_match.add_css_class("metis-viewer-empty-state");
+    hosts_no_match.set_halign(gtk::Align::Center);
+    hosts_no_match.set_valign(gtk::Align::Center);
+    hosts_no_match.set_hexpand(true);
+    hosts_no_match.set_vexpand(true);
+    hosts_no_match.set_visible(false);
+    let no_match_title = gtk::Label::new(Some(&tr("No matching hosts")));
+    no_match_title.add_css_class("metis-viewer-empty-title");
+    let no_match_body = gtk::Label::new(Some(&tr("Try a different search.")));
+    no_match_body.add_css_class("metis-viewer-empty");
+    hosts_no_match.append(&no_match_title);
+    hosts_no_match.append(&no_match_body);
+    hosts_inner.append(&hosts_no_match);
+
     hosts_scroll.set_child(Some(&hosts_inner));
     page.append(&hosts_scroll);
 
@@ -524,19 +586,31 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     let close_panel: Rc<dyn Fn()> = Rc::new({
         let revealer = revealer.clone();
         let add_btn = add_btn.clone();
+        let editing_secret = editing_secret.clone();
         move || {
             revealer.set_reveal_child(false);
             add_btn.set_label(&tr("Add host"));
+            *editing_secret.borrow_mut() = None;
         }
     });
 
     {
         let open_panel = open_panel.clone();
         let close_panel = close_panel.clone();
+        let pass_entry = pass_entry.clone();
+        let editing_secret = editing_secret.clone();
+        let password_dirty = password_dirty.clone();
+        let suppress_pass_dirty = suppress_pass_dirty.clone();
         add_btn.connect_clicked(move |_| {
             if revealer_r.is_child_revealed() {
                 close_panel();
             } else {
+                // Fresh "Add host" — don't keep a previous edit's password.
+                *editing_secret.borrow_mut() = None;
+                password_dirty.set(false);
+                suppress_pass_dirty.set(true);
+                pass_entry.set_text("");
+                suppress_pass_dirty.set(false);
                 open_panel();
             }
         });
@@ -552,32 +626,80 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     let connect_slot: Rc<RefCell<Option<ConnectFn>>> = Rc::new(RefCell::new(None));
 
     let refresh_hosts: RefreshFn = {
-        let hosts_grid = hosts_grid.clone();
+        let hosts_sections = hosts_sections.clone();
         let hosts_empty = hosts_empty.clone();
+        let hosts_no_match = hosts_no_match.clone();
+        let search_entry = search_entry.clone();
+        let hosts_view = hosts_view.clone();
         let host_entry = host_entry.clone();
         let port_entry = port_entry.clone();
         let user_entry = user_entry.clone();
         let label_entry = label_entry.clone();
+        let pass_entry = pass_entry.clone();
         let protocol_dropdown = protocol_dropdown.clone();
         let connect_slot = connect_slot.clone();
         let open_panel = open_panel.clone();
         let options_ui = options_ui.clone();
+        let editing_secret = editing_secret.clone();
+        let password_dirty = password_dirty.clone();
+        let suppress_pass_dirty = suppress_pass_dirty.clone();
         Rc::new(move || {
             let on_connect = connect_slot.borrow().clone();
-            refill_hosts_grid(
-                &hosts_grid,
+            refill_hosts_list(
+                &hosts_sections,
                 &hosts_empty,
+                &hosts_no_match,
+                &search_entry.text(),
+                hosts_view.get(),
                 &host_entry,
                 &port_entry,
                 &user_entry,
                 &label_entry,
+                &pass_entry,
                 &protocol_dropdown,
                 options_ui.clone(),
+                editing_secret.clone(),
+                password_dirty.clone(),
+                suppress_pass_dirty.clone(),
                 on_connect,
                 Some(open_panel.clone()),
             );
         })
     };
+
+    {
+        let refresh_hosts = refresh_hosts.clone();
+        search_entry.connect_search_changed(move |_| refresh_hosts());
+    }
+    {
+        let hosts_view = hosts_view.clone();
+        let refresh_hosts = refresh_hosts.clone();
+        let tile_btn = tile_btn.clone();
+        tile_btn.connect_toggled(move |btn| {
+            if !btn.is_active() {
+                return;
+            }
+            hosts_view.set(ViewerHostsView::Tile);
+            if let Err(err) = save_hosts_view(ViewerHostsView::Tile) {
+                tracing::warn!("viewer.json hosts_view save failed: {err}");
+            }
+            refresh_hosts();
+        });
+    }
+    {
+        let hosts_view = hosts_view.clone();
+        let refresh_hosts = refresh_hosts.clone();
+        list_btn.connect_toggled(move |btn| {
+            if !btn.is_active() {
+                return;
+            }
+            hosts_view.set(ViewerHostsView::List);
+            if let Err(err) = save_hosts_view(ViewerHostsView::List) {
+                tracing::warn!("viewer.json hosts_view save failed: {err}");
+            }
+            refresh_hosts();
+        });
+    }
 
     let do_connect: ConnectFn = Rc::new({
         let connect_busy = connect_busy.clone();
@@ -594,6 +716,9 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let open_panel = open_panel.clone();
         let options_ui = options_ui.clone();
         let protocol_dropdown = protocol_dropdown.clone();
+        let editing_secret = editing_secret.clone();
+        let password_dirty = password_dirty.clone();
+        let suppress_pass_dirty = suppress_pass_dirty.clone();
 
         move || {
             if *connect_busy.borrow() {
@@ -620,7 +745,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             let port_text = port_entry.text().to_string();
             let username = user_entry.text().to_string();
             let label = label_entry.text().to_string();
-            let password = pass_entry.text().to_string();
+            let mut password = pass_entry.text().to_string();
             let options = options_ui.collect();
 
             let port: u16 = match port_text.trim().parse() {
@@ -657,6 +782,23 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 protocol,
                 options: options.clone(),
             };
+            let account = credentials::secret_account(&entry);
+            if password.is_empty()
+                && let Some(saved) = credentials::cached_password(&account)
+            {
+                password = saved;
+                suppress_pass_dirty.set(true);
+                pass_entry.set_text(&password);
+                suppress_pass_dirty.set(false);
+                password_dirty.set(false);
+            }
+            let previous = editing_secret.borrow().clone();
+            if let Err(e) =
+                credentials::save_host_password(&account, &password, previous.as_deref())
+            {
+                tracing::warn!("viewer keyring save failed: {e}");
+            }
+            *editing_secret.borrow_mut() = Some(account);
             if let Err(e) = remember_host(entry) {
                 tracing::warn!("viewer.json save failed: {e}");
             }
@@ -795,11 +937,14 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let close_panel = close_panel.clone();
         let options_ui = options_ui.clone();
         let protocol_dropdown = protocol_dropdown.clone();
+        let pass_entry = pass_entry.clone();
+        let editing_secret = editing_secret.clone();
         save_btn.connect_clicked(move |_| {
             let host = host_entry.text();
             let port_text = port_entry.text();
             let username = user_entry.text();
             let label = label_entry.text();
+            let password = pass_entry.text().to_string();
             let port: u16 = match port_text.trim().parse() {
                 Ok(0) | Err(_) => {
                     set_status(
@@ -831,9 +976,25 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 },
                 options: options_ui.collect(),
             };
+            let account = credentials::secret_account(&entry);
+            let previous = editing_secret.borrow().clone();
+            if let Err(e) =
+                credentials::save_host_password(&account, &password, previous.as_deref())
+            {
+                set_status(
+                    &status,
+                    &tr(&format!("Could not save password to keyring: {e}")),
+                    StatusKind::Error,
+                );
+                return;
+            }
             match remember_host(entry) {
                 Ok(()) => {
-                    set_status(&status, &tr("Host saved."), StatusKind::Ok);
+                    set_status(
+                        &status,
+                        &tr("Host saved (password in system keyring)."),
+                        StatusKind::Ok,
+                    );
                     refresh_hosts();
                     close_panel();
                 }
@@ -898,7 +1059,7 @@ fn build_settings_page(freerdp_ok: bool) -> gtk::Widget {
 
     let notes = gtk::Label::new(Some(&tr(
         "Metis Viewer spawns FreeRDP with /cert:ignore and dynamic resolution. \
-         Passwords are never written to viewer.json. Host sharing is configured \
+         Passwords are kept in your system keyring, never in viewer.json. Host sharing is configured \
          on the remote machine (Settings → Remote access).",
     )));
     notes.set_xalign(0.0);
@@ -989,15 +1150,42 @@ fn missing_freerdp_banner() -> gtk::Box {
     banner
 }
 
-fn field_box(label: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
-    let col = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    col.add_css_class("metis-viewer-field");
+fn field_label(label: &str, icon: &str) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.add_css_class("metis-viewer-field-label-row");
+    let img = gtk::Image::from_icon_name(icon);
+    img.set_pixel_size(14);
+    img.add_css_class("metis-viewer-field-icon");
     let lbl = gtk::Label::new(Some(label));
     lbl.set_xalign(0.0);
     lbl.add_css_class("metis-viewer-field-label");
-    col.append(&lbl);
+    row.append(&img);
+    row.append(&lbl);
+    row
+}
+
+fn icon_field(label: &str, icon: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    col.add_css_class("metis-viewer-field");
+    col.set_hexpand(true);
+    col.append(&field_label(label, icon));
     col.append(widget);
     col
+}
+
+/// Two equal columns sharing one padded field row.
+fn two_col_fields(left: gtk::Box, right: gtk::Box) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("metis-viewer-field-row");
+    left.remove_css_class("metis-viewer-field");
+    right.remove_css_class("metis-viewer-field");
+    left.add_css_class("metis-viewer-field-col");
+    right.add_css_class("metis-viewer-field-col");
+    left.set_hexpand(true);
+    right.set_hexpand(true);
+    row.append(&left);
+    row.append(&right);
+    row
 }
 
 enum StatusKind {
@@ -1052,186 +1240,399 @@ fn notify_desktop(title: &str, body: &str, urgency: &str) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn refill_hosts_grid(
-    grid: &gtk::FlowBox,
-    empty: &gtk::Box,
+fn apply_host_to_form(
+    entry: &ViewerHost,
     host_entry: &gtk::Entry,
     port_entry: &gtk::Entry,
     user_entry: &gtk::Entry,
     label_entry: &gtk::Entry,
+    pass_entry: &gtk::PasswordEntry,
+    protocol_dropdown: &gtk::DropDown,
+    options_ui: &OptionsUi,
+    editing_secret: &Rc<RefCell<Option<String>>>,
+    password_dirty: &Rc<Cell<bool>>,
+    suppress_pass_dirty: &Rc<Cell<bool>>,
+) {
+    host_entry.set_text(&entry.host);
+    port_entry.set_text(&entry.port.to_string());
+    user_entry.set_text(&entry.username);
+    label_entry.set_text(&entry.label);
+    protocol_dropdown.set_selected(match entry.protocol {
+        ViewerProtocol::Rdp => 0,
+        ViewerProtocol::Rudp => 1,
+    });
+    options_ui.apply_host(entry);
+    let account = credentials::secret_account(entry);
+    *editing_secret.borrow_mut() = Some(account.clone());
+    // Clear without marking dirty, then fill from cache/keyring off-thread.
+    password_dirty.set(false);
+    suppress_pass_dirty.set(true);
+    pass_entry.set_text("");
+    suppress_pass_dirty.set(false);
+    credentials::fill_password_async(
+        pass_entry.clone(),
+        account,
+        password_dirty.clone(),
+        editing_secret.clone(),
+        suppress_pass_dirty.clone(),
+    );
+}
+
+fn host_matches_search(entry: &ViewerHost, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    let hay = [
+        entry.label.as_str(),
+        entry.host.as_str(),
+        entry.username.as_str(),
+        entry.protocol.label(),
+    ]
+    .join(" ")
+    .to_lowercase();
+    hay.contains(&q)
+}
+
+fn host_title_meta(entry: &ViewerHost) -> (String, String) {
+    let title = if entry.label.is_empty() {
+        format!("{}:{}", entry.host, entry.port)
+    } else {
+        entry.label.clone()
+    };
+    let proto = entry.protocol.label();
+    let meta = if entry.label.is_empty() {
+        if entry.username.is_empty() {
+            proto.to_string()
+        } else {
+            format!("{proto} · {}", entry.username)
+        }
+    } else {
+        let user = if entry.username.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", entry.username)
+        };
+        format!("{proto} · {}:{}{user}", entry.host, entry.port)
+    };
+    (title, meta)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn refill_hosts_list(
+    sections: &gtk::Box,
+    empty: &gtk::Box,
+    no_match: &gtk::Box,
+    search: &str,
+    view: ViewerHostsView,
+    host_entry: &gtk::Entry,
+    port_entry: &gtk::Entry,
+    user_entry: &gtk::Entry,
+    label_entry: &gtk::Entry,
+    pass_entry: &gtk::PasswordEntry,
     protocol_dropdown: &gtk::DropDown,
     options_ui: Rc<OptionsUi>,
+    editing_secret: Rc<RefCell<Option<String>>>,
+    password_dirty: Rc<Cell<bool>>,
+    suppress_pass_dirty: Rc<Cell<bool>>,
     on_connect: Option<ConnectFn>,
     open_panel: Option<Rc<dyn Fn()>>,
 ) {
-    while let Some(child) = grid.child_at_index(0) {
-        grid.remove(&child);
+    while let Some(child) = sections.first_child() {
+        sections.remove(&child);
     }
-    let cfg = metis_config::load_viewer_config();
+
+    let cfg = load_viewer_config();
     if cfg.recent.is_empty() {
-        grid.set_visible(false);
+        sections.set_visible(false);
         empty.set_visible(true);
+        no_match.set_visible(false);
         return;
     }
+
+    // Warm the session password cache in the background so Edit/Connect
+    // do not stall the GTK loop on Secret Service.
+    for entry in &cfg.recent {
+        let account = credentials::secret_account(entry);
+        if credentials::cached_password(&account).is_none() {
+            let _ = std::thread::Builder::new()
+                .name("metis-viewer-keyring-warm".into())
+                .spawn(move || {
+                    let _ = credentials::load_password_blocking(&account);
+                });
+        }
+    }
+
+    let filtered: Vec<ViewerHost> = cfg
+        .recent
+        .into_iter()
+        .filter(|e| host_matches_search(e, search))
+        .collect();
+    if filtered.is_empty() {
+        sections.set_visible(false);
+        empty.set_visible(false);
+        no_match.set_visible(true);
+        return;
+    }
+
     empty.set_visible(false);
-    grid.set_visible(true);
+    no_match.set_visible(false);
+    sections.set_visible(true);
 
-    for entry in cfg.recent {
-        let card = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        card.add_css_class("metis-viewer-host-card");
-        card.set_hexpand(true);
+    let groups: [(ViewerProtocol, &str); 2] = [
+        (ViewerProtocol::Rudp, ViewerProtocol::Rudp.label()),
+        (ViewerProtocol::Rdp, ViewerProtocol::Rdp.label()),
+    ];
 
-        let btn = gtk::Button::new();
-        btn.set_has_frame(false);
-        btn.set_hexpand(true);
-        btn.set_tooltip_text(Some(&tr("Connect")));
-        btn.add_css_class("metis-viewer-host-card-body");
+    for (proto, section_title) in groups {
+        let group: Vec<ViewerHost> = filtered
+            .iter()
+            .filter(|e| e.protocol == proto)
+            .cloned()
+            .collect();
+        if group.is_empty() {
+            continue;
+        }
 
-        let body = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        body.set_hexpand(true);
-        let icon_wrap = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        icon_wrap.add_css_class("metis-viewer-host-card-icon-wrap");
-        icon_wrap.set_valign(gtk::Align::Center);
-        let icon = gtk::Image::from_icon_name("computer-symbolic");
-        icon.set_pixel_size(22);
-        icon.add_css_class("metis-viewer-host-card-icon");
-        icon_wrap.append(&icon);
-        body.append(&icon_wrap);
+        let section = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        section.add_css_class("metis-viewer-hosts-section");
+        let heading = gtk::Label::new(Some(section_title));
+        heading.set_xalign(0.0);
+        heading.add_css_class("metis-viewer-hosts-section-title");
+        section.append(&heading);
 
-        let col = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        col.set_hexpand(true);
-        col.set_valign(gtk::Align::Center);
-        let title = if entry.label.is_empty() {
-            format!("{}:{}", entry.host, entry.port)
-        } else {
-            entry.label.clone()
-        };
-        let title_l = gtk::Label::new(Some(&title));
-        title_l.set_xalign(0.0);
-        title_l.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        title_l.add_css_class("metis-viewer-host-card-title");
-        let endpoint = {
-            let proto = entry.protocol.label();
-            if entry.label.is_empty() {
-                if entry.username.is_empty() {
-                    proto.to_string()
-                } else {
-                    format!("{proto} · {}", entry.username)
-                }
-            } else {
-                let user = if entry.username.is_empty() {
-                    String::new()
-                } else {
-                    format!(" · {}", entry.username)
-                };
-                format!("{proto} · {}:{}{user}", entry.host, entry.port)
+        let items_parent: gtk::Widget = match view {
+            ViewerHostsView::Tile => {
+                let grid = gtk::FlowBox::new();
+                grid.add_css_class("metis-viewer-hosts-grid");
+                grid.set_selection_mode(gtk::SelectionMode::None);
+                grid.set_homogeneous(true);
+                grid.set_column_spacing(12);
+                grid.set_row_spacing(12);
+                grid.set_max_children_per_line(3);
+                grid.set_min_children_per_line(1);
+                grid.set_hexpand(true);
+                grid.upcast()
+            }
+            ViewerHostsView::List => {
+                let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                list.add_css_class("metis-viewer-hosts-list");
+                list.set_hexpand(true);
+                list.upcast()
             }
         };
-        let meta_l = gtk::Label::new(Some(&endpoint));
-        meta_l.set_xalign(0.0);
-        meta_l.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        meta_l.add_css_class("metis-viewer-host-card-meta");
-        col.append(&title_l);
-        col.append(&meta_l);
-        body.append(&col);
-        btn.set_child(Some(&body));
 
-        {
-            let h = host_entry.clone();
-            let p = port_entry.clone();
-            let u = user_entry.clone();
-            let l = label_entry.clone();
-            let proto_dd = protocol_dropdown.clone();
-            let opts = options_ui.clone();
-            let e = entry.clone();
-            let connect = on_connect.clone();
-            btn.connect_clicked(move |_| {
-                h.set_text(&e.host);
-                p.set_text(&e.port.to_string());
-                u.set_text(&e.username);
-                l.set_text(&e.label);
-                proto_dd.set_selected(match e.protocol {
-                    ViewerProtocol::Rdp => 0,
-                    ViewerProtocol::Rudp => 1,
-                });
-                opts.apply_host(&e);
-                if let Some(f) = &connect {
-                    f();
-                }
-            });
+        for entry in group {
+            let card = build_host_card(
+                &entry,
+                view,
+                host_entry,
+                port_entry,
+                user_entry,
+                label_entry,
+                pass_entry,
+                protocol_dropdown,
+                options_ui.clone(),
+                editing_secret.clone(),
+                password_dirty.clone(),
+                suppress_pass_dirty.clone(),
+                on_connect.clone(),
+                open_panel.clone(),
+                sections,
+                empty,
+                no_match,
+                search,
+            );
+            if let Some(grid) = items_parent.downcast_ref::<gtk::FlowBox>() {
+                grid.append(&card);
+            } else if let Some(list) = items_parent.downcast_ref::<gtk::Box>() {
+                list.append(&card);
+            }
         }
-        card.append(&btn);
-
-        let edit = gtk::Button::from_icon_name("document-edit-symbolic");
-        edit.set_has_frame(false);
-        edit.set_tooltip_text(Some(&tr("Edit")));
-        edit.add_css_class("flat");
-        edit.add_css_class("metis-viewer-host-card-remove");
-        edit.set_valign(gtk::Align::Start);
-        {
-            let h = host_entry.clone();
-            let p = port_entry.clone();
-            let u = user_entry.clone();
-            let l = label_entry.clone();
-            let proto_dd = protocol_dropdown.clone();
-            let opts = options_ui.clone();
-            let e = entry.clone();
-            let open = open_panel.clone();
-            edit.connect_clicked(move |_| {
-                h.set_text(&e.host);
-                p.set_text(&e.port.to_string());
-                u.set_text(&e.username);
-                l.set_text(&e.label);
-                proto_dd.set_selected(match e.protocol {
-                    ViewerProtocol::Rdp => 0,
-                    ViewerProtocol::Rudp => 1,
-                });
-                opts.apply_host(&e);
-                if let Some(f) = &open {
-                    f();
-                }
-            });
-        }
-        card.append(&edit);
-
-        let trash = gtk::Button::from_icon_name("user-trash-symbolic");
-        trash.set_has_frame(false);
-        trash.set_tooltip_text(Some(&tr("Remove")));
-        trash.add_css_class("flat");
-        trash.add_css_class("metis-viewer-host-card-remove");
-        trash.set_valign(gtk::Align::Start);
-        {
-            let grid = grid.clone();
-            let empty = empty.clone();
-            let host_entry = host_entry.clone();
-            let port_entry = port_entry.clone();
-            let user_entry = user_entry.clone();
-            let label_entry = label_entry.clone();
-            let protocol_dropdown = protocol_dropdown.clone();
-            let options_ui = options_ui.clone();
-            let e = entry.clone();
-            let connect = on_connect.clone();
-            let open = open_panel.clone();
-            trash.connect_clicked(move |_| {
-                if let Err(err) = remove_recent(&e) {
-                    tracing::warn!("viewer.json remove failed: {err}");
-                }
-                refill_hosts_grid(
-                    &grid,
-                    &empty,
-                    &host_entry,
-                    &port_entry,
-                    &user_entry,
-                    &label_entry,
-                    &protocol_dropdown,
-                    options_ui.clone(),
-                    connect.clone(),
-                    open.clone(),
-                );
-            });
-        }
-        card.append(&trash);
-
-        grid.append(&card);
+        section.append(&items_parent);
+        sections.append(&section);
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_host_card(
+    entry: &ViewerHost,
+    view: ViewerHostsView,
+    host_entry: &gtk::Entry,
+    port_entry: &gtk::Entry,
+    user_entry: &gtk::Entry,
+    label_entry: &gtk::Entry,
+    pass_entry: &gtk::PasswordEntry,
+    protocol_dropdown: &gtk::DropDown,
+    options_ui: Rc<OptionsUi>,
+    editing_secret: Rc<RefCell<Option<String>>>,
+    password_dirty: Rc<Cell<bool>>,
+    suppress_pass_dirty: Rc<Cell<bool>>,
+    on_connect: Option<ConnectFn>,
+    open_panel: Option<Rc<dyn Fn()>>,
+    sections: &gtk::Box,
+    empty: &gtk::Box,
+    no_match: &gtk::Box,
+    search: &str,
+) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    match view {
+        ViewerHostsView::Tile => card.add_css_class("metis-viewer-host-card"),
+        ViewerHostsView::List => card.add_css_class("metis-viewer-host-row"),
+    }
+    card.set_hexpand(true);
+
+    let btn = gtk::Button::new();
+    btn.set_has_frame(false);
+    btn.set_hexpand(true);
+    btn.set_tooltip_text(Some(&tr("Connect")));
+    btn.add_css_class("metis-viewer-host-card-body");
+
+    let body = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    body.set_hexpand(true);
+    let icon_wrap = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    icon_wrap.add_css_class("metis-viewer-host-card-icon-wrap");
+    icon_wrap.set_valign(gtk::Align::Center);
+    let icon = gtk::Image::from_icon_name(entry.protocol.icon_name());
+    icon.set_pixel_size(if view == ViewerHostsView::List {
+        18
+    } else {
+        22
+    });
+    icon.add_css_class("metis-viewer-host-card-icon");
+    icon_wrap.append(&icon);
+    body.append(&icon_wrap);
+
+    let (title, meta) = host_title_meta(entry);
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    col.set_hexpand(true);
+    col.set_valign(gtk::Align::Center);
+    let title_l = gtk::Label::new(Some(&title));
+    title_l.set_xalign(0.0);
+    title_l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title_l.add_css_class("metis-viewer-host-card-title");
+    let meta_l = gtk::Label::new(Some(&meta));
+    meta_l.set_xalign(0.0);
+    meta_l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    meta_l.add_css_class("metis-viewer-host-card-meta");
+    col.append(&title_l);
+    col.append(&meta_l);
+    body.append(&col);
+    btn.set_child(Some(&body));
+
+    {
+        let h = host_entry.clone();
+        let p = port_entry.clone();
+        let u = user_entry.clone();
+        let l = label_entry.clone();
+        let pw = pass_entry.clone();
+        let proto_dd = protocol_dropdown.clone();
+        let opts = options_ui.clone();
+        let editing = editing_secret.clone();
+        let dirty = password_dirty.clone();
+        let suppress = suppress_pass_dirty.clone();
+        let e = entry.clone();
+        let connect = on_connect.clone();
+        btn.connect_clicked(move |_| {
+            apply_host_to_form(
+                &e, &h, &p, &u, &l, &pw, &proto_dd, &opts, &editing, &dirty, &suppress,
+            );
+            let account = credentials::secret_account(&e);
+            if pw.text().is_empty()
+                && let Some(saved) = credentials::cached_password(&account)
+            {
+                suppress.set(true);
+                pw.set_text(&saved);
+                suppress.set(false);
+                dirty.set(false);
+            }
+            if let Some(f) = &connect {
+                f();
+            }
+        });
+    }
+    card.append(&btn);
+
+    let edit = gtk::Button::from_icon_name("document-edit-symbolic");
+    edit.set_has_frame(false);
+    edit.set_tooltip_text(Some(&tr("Edit")));
+    edit.add_css_class("flat");
+    edit.add_css_class("metis-viewer-host-card-remove");
+    edit.set_valign(gtk::Align::Center);
+    {
+        let h = host_entry.clone();
+        let p = port_entry.clone();
+        let u = user_entry.clone();
+        let l = label_entry.clone();
+        let pw = pass_entry.clone();
+        let proto_dd = protocol_dropdown.clone();
+        let opts = options_ui.clone();
+        let editing = editing_secret.clone();
+        let dirty = password_dirty.clone();
+        let suppress = suppress_pass_dirty.clone();
+        let e = entry.clone();
+        let open = open_panel.clone();
+        edit.connect_clicked(move |_| {
+            apply_host_to_form(
+                &e, &h, &p, &u, &l, &pw, &proto_dd, &opts, &editing, &dirty, &suppress,
+            );
+            if let Some(f) = &open {
+                f();
+            }
+        });
+    }
+    card.append(&edit);
+
+    let trash = gtk::Button::from_icon_name("user-trash-symbolic");
+    trash.set_has_frame(false);
+    trash.set_tooltip_text(Some(&tr("Remove")));
+    trash.add_css_class("flat");
+    trash.add_css_class("metis-viewer-host-card-remove");
+    trash.set_valign(gtk::Align::Center);
+    {
+        let sections = sections.clone();
+        let empty = empty.clone();
+        let no_match = no_match.clone();
+        let search = search.to_string();
+        let host_entry = host_entry.clone();
+        let port_entry = port_entry.clone();
+        let user_entry = user_entry.clone();
+        let label_entry = label_entry.clone();
+        let protocol_dropdown = protocol_dropdown.clone();
+        let options_ui = options_ui.clone();
+        let e = entry.clone();
+        let connect = on_connect.clone();
+        let open = open_panel.clone();
+        let pass_entry = pass_entry.clone();
+        let editing_secret = editing_secret.clone();
+        let password_dirty = password_dirty.clone();
+        let suppress_pass_dirty = suppress_pass_dirty.clone();
+        trash.connect_clicked(move |_| {
+            credentials::delete_password(&credentials::secret_account(&e));
+            if let Err(err) = remove_recent(&e) {
+                tracing::warn!("viewer.json remove failed: {err}");
+            }
+            refill_hosts_list(
+                &sections,
+                &empty,
+                &no_match,
+                &search,
+                view,
+                &host_entry,
+                &port_entry,
+                &user_entry,
+                &label_entry,
+                &pass_entry,
+                &protocol_dropdown,
+                options_ui.clone(),
+                editing_secret.clone(),
+                password_dirty.clone(),
+                suppress_pass_dirty.clone(),
+                connect.clone(),
+                open.clone(),
+            );
+        });
+    }
+    card.append(&trash);
+    card
 }

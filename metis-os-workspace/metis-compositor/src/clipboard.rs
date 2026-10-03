@@ -275,6 +275,7 @@ impl MetisState {
     pub fn drain_clipboard_reads(&mut self) {
         use std::io::ErrorKind;
 
+        let mut completed: Vec<(String, Vec<u8>)> = Vec::new();
         let mut budget = DRAIN_CLIPBOARD_BYTES_PER_TICK;
         self.pending_clipboard_reads.retain_mut(|pending| {
             let mut chunk = [0u8; 65_536];
@@ -285,11 +286,8 @@ impl MetisState {
                 match pending.read.read(&mut chunk) {
                     Ok(0) => {
                         if !pending.data.is_empty() {
-                            emit_clipboard_changed(
-                                &self.event_bus,
-                                &pending.mime,
-                                std::mem::take(&mut pending.data),
-                            );
+                            completed
+                                .push((pending.mime.clone(), std::mem::take(&mut pending.data)));
                         }
                         return false;
                     }
@@ -312,6 +310,28 @@ impl MetisState {
                 }
             }
         });
+        for (mime, data) in completed {
+            self.maybe_push_rudp_clipboard(&mime, &data);
+            emit_clipboard_changed(&self.event_bus, &mime, data);
+        }
+    }
+
+    /// Fan full text clipboard out to Metis Remote clients (not the 200-char preview).
+    fn maybe_push_rudp_clipboard(&self, mime: &str, data: &[u8]) {
+        if self.session_is_locked() {
+            return;
+        }
+        if !(mime.starts_with("text/") || matches!(mime, "UTF8_STRING" | "TEXT" | "STRING")) {
+            return;
+        }
+        let Some(host) = self.rudp_host.as_ref() else {
+            return;
+        };
+        let text = String::from_utf8_lossy(data);
+        if text.is_empty() {
+            return;
+        }
+        host.push_clipboard_text(mime, text.as_ref());
     }
 
     pub fn set_clipboard_from_command(

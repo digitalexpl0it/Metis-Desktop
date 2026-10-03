@@ -63,9 +63,10 @@ Security items from the **2026-09-27 code review** sit above product stretch.
 - [ ] **3. Metis-native remote host** — **Partial (2026-09-27 / 2026-09-30):**
       experimental FreeRDP shadow + Viewer host grid; **RUDP Phases 1–7** +
       **Settings → Metis Remote** (`rudp.json`, encode, PAM/TOFU, UDP firewall,
-      control-stream input, Viewer client). **Residual:** HW decode / clipboard;
+      control-stream input, Viewer client). **Residual:** HW decode; audio;
       AV1 encode; Wayland/portal capture for shadow; promote past
-      experimental (GRD remains on **Remote access**).
+      experimental (GRD remains on **Remote access**). Text clipboard
+      bidirectional on the RUDP control plane landed 2026-10-03.
       → Wave 4c, Phase 7 §B RUDP-Stream, Phase 15 §F,
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 - [x] **4. Per-Steam-appid Gamescope profile UI** — Settings → Gaming editor for
@@ -1040,8 +1041,17 @@ latency and clear setup docs.
       (FFmpeg software H.264/HEVC → RGBA); `metis-rudp-client` lib; Metis Viewer
       Metis Remote mode (TOFU UI, video present, PointerLock input switching);
       Settings bind address + **Connect with Metis Viewer…**; host relative
-      inject when locked. Residual: HW decode; clipboard; promote past
+      inject when locked. Residual: HW decode; audio; promote past
       experimental (GRD remains default under **Remote access**).
+- [x] **RUDP text clipboard** (2026-10-03) — `RudpControlMsg::ClipboardSet`
+      (UTF-8, ≤48 KiB) on the Quinn control stream; host fans local
+      `wl_data_device` captures to clients and installs Viewer sets via
+      `set_clipboard_from_command` (lock-gated, capture-suppressed echo);
+      Metis Viewer syncs GDK clipboard both ways with serial/dedupe.
+- [x] **RUDP auto-unlock Metis PAM lock** (2026-10-03) — after Quinn PAM auth
+      as the session owner, calloop posts `UnlockPamSession` → `unlock_session()`
+      when `lock.locked` (not `ext-session-lock`). Non-owner allowlist users stay
+      locked with input gated.
 - [x] **RUDP host crash containment** (2026-10-02) — enabling Metis Remote
       crashed the DRM session at login (Y-tiled export BO, `AVDictionary`
       double-free, then `av_hwframe_map` treating our DRM descriptor as an

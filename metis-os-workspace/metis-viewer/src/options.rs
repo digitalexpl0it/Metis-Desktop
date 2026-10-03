@@ -62,21 +62,18 @@ impl OptionsUi {
         let span_monitors = gtk::CheckButton::with_label(&tr("Span desktop across monitors"));
 
         let display = options_page();
-        display.append(&labeled_row(
-            &tr("Color depth"),
-            color_depth.clone().upcast(),
+        display.append(&two_col_row(
+            labeled_row(&tr("Color depth"), color_depth.clone().upcast()),
+            labeled_row(&tr("Display mode"), display_mode.clone().upcast()),
         ));
-        display.append(&labeled_row(
-            &tr("Display mode"),
-            display_mode.clone().upcast(),
+        display.append(&two_col_row(
+            labeled_row(&tr("Window size"), size_row.clone().upcast()),
+            labeled_row(&tr("Metis placement"), placement.clone().upcast()),
         ));
-        display.append(&labeled_row(&tr("Window size"), size_row.clone().upcast()));
-        display.append(&labeled_row(
-            &tr("Metis placement"),
-            placement.clone().upcast(),
+        display.append(&two_col_row(
+            check_row(&multi_monitor),
+            check_row(&span_monitors),
         ));
-        display.append(&check_row(&multi_monitor));
-        display.append(&check_row(&span_monitors));
         let display_hint = gtk::Label::new(Some(&tr(
             "Dedicated desktop moves FreeRDP onto its own workspace. Window mode keeps it on the current desk.",
         )));
@@ -100,10 +97,8 @@ impl OptionsUi {
         clip_hint.set_xalign(0.0);
         clip_hint.add_css_class("metis-viewer-hint");
         local.append(&clip_hint);
-        local.append(&check_row(&audio));
-        local.append(&check_row(&microphone));
-        local.append(&check_row(&printers));
-        local.append(&check_row(&smartcard));
+        local.append(&two_col_row(check_row(&audio), check_row(&microphone)));
+        local.append(&two_col_row(check_row(&printers), check_row(&smartcard)));
         notebook.append_page(&scroll(local), Some(&tab_label(&tr("Local resources"))));
 
         let network = string_dropdown(ViewerNetwork::all().iter().map(|v| v.label()));
@@ -121,14 +116,22 @@ impl OptionsUi {
             &tr("Connection speed"),
             network.clone().upcast(),
         ));
-        experience.append(&check_row(&wallpaper));
-        experience.append(&check_row(&font_smoothing));
-        experience.append(&check_row(&desktop_composition));
-        experience.append(&check_row(&window_drag));
-        experience.append(&check_row(&menu_animations));
-        experience.append(&check_row(&themes));
-        experience.append(&check_row(&bitmap_cache));
-        experience.append(&check_row(&auto_reconnect));
+        experience.append(&two_col_row(
+            check_row(&wallpaper),
+            check_row(&font_smoothing),
+        ));
+        experience.append(&two_col_row(
+            check_row(&desktop_composition),
+            check_row(&window_drag),
+        ));
+        experience.append(&two_col_row(
+            check_row(&menu_animations),
+            check_row(&themes),
+        ));
+        experience.append(&two_col_row(
+            check_row(&bitmap_cache),
+            check_row(&auto_reconnect),
+        ));
         notebook.append_page(&scroll(experience), Some(&tab_label(&tr("Experience"))));
 
         let cert = string_dropdown(ViewerCertPolicy::all().iter().map(|v| v.label()));
@@ -319,6 +322,7 @@ fn tab_label(text: &str) -> gtk::Label {
 fn labeled_row(title: &str, widget: gtk::Widget) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
     row.add_css_class("metis-viewer-field");
+    row.set_hexpand(true);
     let lbl = gtk::Label::new(Some(title));
     lbl.set_xalign(0.0);
     lbl.add_css_class("metis-viewer-field-label");
@@ -330,6 +334,21 @@ fn labeled_row(title: &str, widget: gtk::Widget) -> gtk::Box {
 fn check_row(check: &gtk::CheckButton) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 0);
     row.add_css_class("metis-viewer-field");
+    row.set_hexpand(true);
     row.append(check);
+    row
+}
+
+fn two_col_row(left: gtk::Box, right: gtk::Box) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("metis-viewer-field-row");
+    left.remove_css_class("metis-viewer-field");
+    right.remove_css_class("metis-viewer-field");
+    left.add_css_class("metis-viewer-field-col");
+    right.add_css_class("metis-viewer-field-col");
+    left.set_hexpand(true);
+    right.set_hexpand(true);
+    row.append(&left);
+    row.append(&right);
     row
 }

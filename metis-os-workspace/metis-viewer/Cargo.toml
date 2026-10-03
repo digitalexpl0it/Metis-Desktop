@@ -19,6 +19,7 @@ metis-i18n = { workspace = true }
 metis-protocol = { workspace = true }
 metis-rudp-client = { workspace = true }
 metis-decode = { workspace = true }
+metis-secrets = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

@@ -2745,6 +2745,7 @@ dependencies = [
  "metis-i18n",
  "metis-protocol",
  "metis-rudp-client",
+ "metis-secrets",
  "tokio",
  "tracing",
  "tracing-subscriber",

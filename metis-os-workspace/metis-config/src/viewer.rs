@@ -1,6 +1,7 @@
 //! RDP viewer recent / saved hosts — `~/.config/metis/viewer.json`.
 //!
-//! Passwords are never stored here. Per-host FreeRDP session options live on
+//! Passwords are never stored here — Metis Viewer keeps them in the freedesktop
+//! Secret Service (`metis-secrets`). Per-host FreeRDP session options live on
 //! each [`ViewerHost`] (Remmina-style Advanced Desktop Settings).
 
 use std::path::PathBuf;
@@ -50,6 +51,23 @@ impl ViewerProtocol {
             Self::Rudp => 7843,
         }
     }
+
+    /// Symbolic icon for host cards / rows in Metis Viewer.
+    pub fn icon_name(self) -> &'static str {
+        match self {
+            Self::Rdp => "computer-symbolic",
+            Self::Rudp => "network-workgroup-symbolic",
+        }
+    }
+}
+
+/// How Metis Viewer lays out the saved-hosts page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerHostsView {
+    #[default]
+    Tile,
+    List,
 }
 
 fn default_port() -> u16 {
@@ -395,6 +413,15 @@ fn toggle(on: &str, off: &str, enabled: bool) -> String {
 pub struct ViewerConfig {
     #[serde(default)]
     pub recent: Vec<ViewerHost>,
+    /// Tile (FlowBox cards) or compact list rows on the Hosts page.
+    #[serde(default, skip_serializing_if = "ViewerHostsView::is_default")]
+    pub hosts_view: ViewerHostsView,
+}
+
+impl ViewerHostsView {
+    fn is_default(&self) -> bool {
+        *self == Self::Tile
+    }
 }
 
 pub fn viewer_config_path() -> PathBuf {
@@ -462,6 +489,16 @@ pub fn remove_recent(entry: &ViewerHost) -> std::io::Result<()> {
     if cfg.recent.len() == before {
         return Ok(());
     }
+    save_viewer_config(&cfg)
+}
+
+/// Persist the Hosts page tile/list preference.
+pub fn save_hosts_view(view: ViewerHostsView) -> std::io::Result<()> {
+    let mut cfg = load_viewer_config();
+    if cfg.hosts_view == view {
+        return Ok(());
+    }
+    cfg.hosts_view = view;
     save_viewer_config(&cfg)
 }
 
@@ -553,6 +590,13 @@ mod tests {
         remove_recent(&entry).unwrap();
         let cfg = load_viewer_config();
         assert!(cfg.recent.is_empty());
+
+        save_hosts_view(ViewerHostsView::List).unwrap();
+        let cfg = load_viewer_config();
+        assert_eq!(cfg.hosts_view, ViewerHostsView::List);
+        save_hosts_view(ViewerHostsView::Tile).unwrap();
+        let cfg = load_viewer_config();
+        assert_eq!(cfg.hosts_view, ViewerHostsView::Tile);
 
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         let _ = std::fs::remove_dir_all(&dir);
