@@ -1042,6 +1042,8 @@ latency and clear setup docs.
       Settings bind address + **Connect with Metis Viewer…**; host relative
       inject when locked. GRD remains default under **Remote access**; Metis
       native RDP promoted past experimental via portal host (2026-10-03).
+      **2026-10-03:** client integration guide
+      [`docs/RUDP_CLIENT.md`](../docs/RUDP_CLIENT.md) (Win/mac deferred).
 - [x] **RUDP Viewer HW decode** (2026-10-03) — `metis-decode` Auto ladder
       VAAPI → NVDEC/cuvid → software; HW surfaces downloaded to CPU RGBA for
       GTK `MemoryTexture` (no dmabuf/GL zero-copy yet); Viewer status shows

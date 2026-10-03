@@ -14,6 +14,9 @@
 
 New to Metis? Start with the **[User Guide](docs/USER_GUIDE.md)**.
 
+Building a **Metis Remote (RUDP)** client for Windows/macOS (or another
+stack): see [`docs/RUDP_CLIENT.md`](docs/RUDP_CLIENT.md).
+
 **Security / trust model** (IPC peer credentials, XWayland isolation, gaming
 hooks, colour-management opt-in): **[SECURITY.md](SECURITY.md)**.
 

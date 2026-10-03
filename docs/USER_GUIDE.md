@@ -1069,6 +1069,11 @@ game session ends.
 **Settings → System → Metis Remote** is the primary low-latency desktop stream
 (compositor capture + Quinn). It is separate from classic RDP.
 
+**Building a client (Windows / macOS / third-party):** see
+[`docs/RUDP_CLIENT.md`](RUDP_CLIENT.md) — wire protocol, reference crates
+(`metis-rudp-client`, `metis-decode`), and a compliance checklist. Metis does
+not ship Win/mac clients yet; that doc is the integration contract.
+
 1. Open **Settings → Metis Remote**.
 2. Turn on **Allow Metis Remote connections**. Metis writes `~/.config/metis/rudp.json`
    and asks the compositor to listen (default UDP **7843**).
