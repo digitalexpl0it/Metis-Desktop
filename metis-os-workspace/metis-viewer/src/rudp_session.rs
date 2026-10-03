@@ -297,10 +297,8 @@ fn friendly_connect_error(err: &ClientError) -> String {
                 || m.contains("connection closed")
                 || m.contains("ConnectionClosed") =>
         {
-            tr(
-                "Sign-in failed or the host closed the connection. \
-                 Check username/password and that Metis Remote is enabled.",
-            )
+            tr("Sign-in failed or the host closed the connection. \
+                 Check username/password and that Metis Remote is enabled.")
         }
         other => other.to_string(),
     }

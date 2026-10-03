@@ -580,9 +580,11 @@ mod tests {
         assert!(!args.iter().any(|a| a == "/dynamic-resolution"));
         // FreeRDP 3.x (Ubuntu 26.04) rejects these as Unexpected keyword.
         assert!(!args.iter().any(|a| a == "+printers" || a == "-printers"));
-        assert!(!args
-            .iter()
-            .any(|a| a == "+bitmap-cache" || a == "-bitmap-cache"));
+        assert!(
+            !args
+                .iter()
+                .any(|a| a == "+bitmap-cache" || a == "-bitmap-cache")
+        );
     }
 
     #[test]

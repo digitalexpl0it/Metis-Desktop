@@ -42,6 +42,8 @@ struct UpdaterState {
     list: gtk::ListBox,
     scroller: gtk::ScrolledWindow,
     progress: gtk::ProgressBar,
+    /// Current package / app under the progress bar during install.
+    progress_item: gtk::Label,
     status: gtk::Label,
     log_view: gtk::TextView,
     log_revealer: gtk::Revealer,
@@ -205,8 +207,15 @@ fn ensure_opaque_css() {
         window.metis-updater label.metis-updater-hero-sub,
         window.metis-updater label.metis-updater-item-meta,
         window.metis-updater label.metis-updater-select-hint,
-        window.metis-updater label.metis-updater-section {{
+        window.metis-updater label.metis-updater-section,
+        window.metis-updater label.metis-updater-status,
+        window.metis-updater label.metis-updater-progress-item {{
             color: {muted};
+        }}
+        window.metis-updater label.metis-updater-progress-item {{
+            font-feature-settings: "tnum";
+            margin-top: 2px;
+            margin-bottom: 4px;
         }}
         window.metis-updater checkbutton.metis-updater-check,
         window.metis-updater checkbutton.metis-updater-check label,
@@ -453,6 +462,14 @@ fn build() -> UpdaterState {
     progress.add_css_class("metis-updater-progress");
     root.append(&progress);
 
+    let progress_item = gtk::Label::new(None);
+    progress_item.set_halign(gtk::Align::Start);
+    progress_item.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    progress_item.set_hexpand(true);
+    progress_item.add_css_class("metis-updater-progress-item");
+    progress_item.set_visible(false);
+    root.append(&progress_item);
+
     let log_toggle = gtk::ToggleButton::with_label(&metis_i18n::tr("Show log"));
     log_toggle.set_halign(gtk::Align::Start);
     log_toggle.add_css_class("metis-updater-log-toggle");
@@ -566,6 +583,7 @@ fn build() -> UpdaterState {
         list,
         scroller,
         progress,
+        progress_item,
         status,
         log_view,
         log_revealer: log_revealer.clone(),
@@ -581,6 +599,7 @@ fn build() -> UpdaterState {
 
     *state_for_install.borrow_mut() = Some(UpdaterHandles {
         progress: state.progress.clone(),
+        progress_item: state.progress_item.clone(),
         status: state.status.clone(),
         log_buffer: state.log_view.buffer(),
         log_revealer: state.log_revealer.clone(),
@@ -673,6 +692,8 @@ fn begin_apply(
     handles.progress.set_fraction(0.0);
     handles.progress.set_show_text(true);
     handles.progress.set_text(Some(&metis_i18n::tr("Waiting…")));
+    handles.progress_item.set_visible(true);
+    handles.progress_item.set_text("");
     handles.status.set_visible(true);
     // Flatpak-only installs usually need no polkit; don't imply a password
     // prompt that will never appear.
@@ -702,6 +723,7 @@ fn begin_apply(
     let pulse_stop = Rc::new(Cell::new(false));
     let saw_percent = Rc::new(Cell::new(false));
     let conffile_pending = Rc::new(Cell::new(false));
+    let current_item: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     {
         let progress = handles.progress.clone();
         let stop = pulse_stop.clone();
@@ -737,17 +759,24 @@ fn begin_apply(
                 if handles.log_revealer.reveals_child() {
                     flush_log(&handles.log_buffer, &pending_log);
                 }
+                if let Some(name) = item {
+                    *current_item.borrow_mut() = Some(name.clone());
+                    handles.progress_item.set_visible(true);
+                    handles.progress_item.set_text(&name);
+                }
+                let item_label = current_item.borrow().clone();
                 if percent > 0 {
                     saw_percent.set(true);
+                    let pct = percent.clamp(0, 100);
+                    handles.progress.set_fraction(f64::from(pct) / 100.0);
                     handles
                         .progress
-                        .set_fraction(f64::from(percent.clamp(0, 100)) / 100.0);
-                    handles
-                        .progress
-                        .set_text(Some(&format!("{}%", percent.clamp(0, 100))));
-                }
-                if let Some(name) = item {
-                    handles.status.set_text(&name);
+                        .set_text(Some(&match item_label.as_deref() {
+                            Some(name) => format!("{name} — {pct}%"),
+                            None => format!("{pct}%"),
+                        }));
+                } else if let Some(name) = item_label.as_deref() {
+                    handles.progress.set_text(Some(name));
                 }
             }
             UpdateProgressEvent::Phase { name } => {
@@ -756,7 +785,10 @@ fn begin_apply(
                 }
                 handles.status.set_text(&name);
                 if !saw_percent.get() {
-                    handles.progress.set_text(Some(&metis_i18n::tr("Working…")));
+                    match current_item.borrow().as_deref() {
+                        Some(pkg) => handles.progress.set_text(Some(pkg)),
+                        None => handles.progress.set_text(Some(&metis_i18n::tr("Working…"))),
+                    }
                 }
             }
             UpdateProgressEvent::ConffileConflict {
@@ -846,6 +878,8 @@ fn begin_apply(
                 if ok {
                     handles.progress.set_fraction(1.0);
                     handles.progress.set_text(Some("100%"));
+                    handles.progress_item.set_text("");
+                    handles.progress_item.set_visible(false);
                     handles
                         .status
                         .set_text(&metis_i18n::tr("Updates installed"));
@@ -865,6 +899,7 @@ fn begin_apply(
                         state.progress.set_visible(true);
                         state.progress.set_fraction(progress_frac);
                         state.progress.set_show_text(true);
+                        state.progress_item.set_visible(false);
                         if ok {
                             state.progress.set_text(Some("100%"));
                         }
@@ -936,6 +971,7 @@ fn flush_log(buffer: &gtk::TextBuffer, pending: &Rc<RefCell<String>>) {
 #[derive(Clone)]
 struct UpdaterHandles {
     progress: gtk::ProgressBar,
+    progress_item: gtk::Label,
     status: gtk::Label,
     log_buffer: gtk::TextBuffer,
     log_revealer: gtk::Revealer,
@@ -1291,6 +1327,7 @@ fn append_section(
             let applying = state.applying.clone();
             let handles_slot = Rc::new(RefCell::new(Some(UpdaterHandles {
                 progress: state.progress.clone(),
+                progress_item: state.progress_item.clone(),
                 status: state.status.clone(),
                 log_buffer: state.log_view.buffer(),
                 log_revealer: state.log_revealer.clone(),

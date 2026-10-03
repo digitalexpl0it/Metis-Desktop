@@ -853,11 +853,7 @@ async fn write_control_reject(
     reason: RudpRejectReason,
     detail: Option<String>,
 ) {
-    let _ = write_control_msg(
-        send,
-        &RudpControlMsg::Reject { reason, detail },
-    )
-    .await;
+    let _ = write_control_msg(send, &RudpControlMsg::Reject { reason, detail }).await;
     // Half-close so the peer's read completes with the Reject frame.
     let _ = send.finish();
 }

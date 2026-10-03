@@ -11,7 +11,7 @@ use std::thread;
 
 use serde::{Deserialize, Serialize};
 
-use crate::pkhelpers::{require_root, run_pkexec};
+use crate::pkhelpers::{ensure_polkit_agent, privileged_exe, require_root, run_pkexec};
 use metis_config::{UpdateSources, UpdatesConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -929,48 +929,15 @@ fn escalate_apply(
             },
         },
     );
-    let mut argv = vec!["pk-updates-apply".to_string()];
+    // Stream pkexec so apt Status-Fd / dpkg lines update the UI live
+    // (buffered `Output` left the bar stuck on "Working…" until exit).
+    ensure_polkit_agent();
+    let bin = privileged_exe();
+    let bin_s = bin.to_string_lossy().into_owned();
+    let mut argv = vec![bin_s, "pk-updates-apply".to_string()];
     argv.extend(packages.iter().cloned());
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    let output =
-        run_pkexec(&refs, std::time::Duration::from_secs(3600)).map_err(UpdatesError::Message)?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    for line in stdout.lines() {
-        emit(
-            progress,
-            UpdateProgressEvent::Log {
-                line: line.to_string(),
-            },
-        );
-        if let Some(pct) = parse_percent_line(line) {
-            emit(
-                progress,
-                UpdateProgressEvent::Progress {
-                    percent: pct,
-                    item: None,
-                },
-            );
-        }
-    }
-    for line in stderr.lines() {
-        emit(
-            progress,
-            UpdateProgressEvent::Log {
-                line: format!("! {line}"),
-            },
-        );
-    }
-    if !output.status.success() {
-        let combined = format!("{stdout}\n{stderr}");
-        emit_conffile_if_present(progress, &combined);
-        return Err(UpdatesError::Message(if stderr.trim().is_empty() {
-            format!("apply exited {}", output.status)
-        } else {
-            stderr.trim().to_string()
-        }));
-    }
-    Ok(())
+    run_streaming("pkexec", &refs, progress)
 }
 
 fn run_streaming(
@@ -1119,7 +1086,26 @@ fn drain_progress_pipe(
 }
 
 fn parse_percent_line(line: &str) -> Option<u32> {
-    // "Downloading… 42%" or "Percentage: 42"
+    let line = line.trim();
+    // PackageKit: "Percentage:	42" or "Percentage: 42%" (often no % sign).
+    if let Some(rest) = line
+        .strip_prefix("Percentage:")
+        .or_else(|| line.strip_prefix("percentage:"))
+    {
+        let num: String = rest
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if let Ok(v) = num.parse::<u32>() {
+            return Some(v.min(100));
+        }
+    }
+    // apt Status-Fd: "pmstatus:pkg:42.5:Installing pkg" / "dlstatus:pkg:12.0:…"
+    if let Some(pct) = parse_apt_status_fd_percent(line) {
+        return Some(pct);
+    }
+    // "Downloading… 42%" / "foo 87%"
     if let Some(idx) = line.find('%') {
         let before = &line[..idx];
         let num: String = before
@@ -1135,14 +1121,72 @@ fn parse_percent_line(line: &str) -> Option<u32> {
     None
 }
 
+fn parse_apt_status_fd_percent(line: &str) -> Option<u32> {
+    let lower = line.to_ascii_lowercase();
+    if !(lower.starts_with("pmstatus:")
+        || lower.starts_with("dlstatus:")
+        || lower.starts_with("pdstatus:"))
+    {
+        return None;
+    }
+    // kind:package:percent:message
+    let mut parts = line.splitn(4, ':');
+    let _kind = parts.next()?;
+    let _pkg = parts.next()?;
+    let pct_s = parts.next()?.trim();
+    let pct_f: f64 = pct_s.parse().ok()?;
+    Some(pct_f.clamp(0.0, 100.0).round() as u32)
+}
+
 fn extract_item_name(line: &str) -> Option<String> {
-    for prefix in ["Updating ", "Downloading ", "Installing "] {
+    let line = line.trim();
+    // PackageKit plain: "Package:	alsa-ucm-conf;1.2;amd64;ubuntu"
+    if let Some(rest) = line
+        .strip_prefix("Package:")
+        .or_else(|| line.strip_prefix("package:"))
+    {
+        let id = rest.trim().split_whitespace().next().unwrap_or("").trim();
+        if !id.is_empty() {
+            return Some(short_package_id(id));
+        }
+    }
+    // apt Status-Fd: "pmstatus:alsa-ucm-conf:42.0:Installing alsa-ucm-conf"
+    let lower = line.to_ascii_lowercase();
+    if lower.starts_with("pmstatus:")
+        || lower.starts_with("dlstatus:")
+        || lower.starts_with("pdstatus:")
+    {
+        let mut parts = line.splitn(4, ':');
+        let _kind = parts.next()?;
+        let pkg = parts.next()?.trim();
+        if !pkg.is_empty() && pkg != "…" && pkg != "..." {
+            return Some(short_package_id(pkg));
+        }
+    }
+    // Human lines — space or tab after the verb (PackageKit uses tabs).
+    for prefix in [
+        "Updating ",
+        "Downloading ",
+        "Installing ",
+        "Updating\t",
+        "Downloading\t",
+        "Installing\t",
+        "Waiting for ",
+    ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             let name = rest.split_whitespace().next()?;
-            return Some(name.trim_matches(|c| c == ':' || c == '.').to_string());
+            let clean = name.trim_matches(|c| c == ':' || c == '.' || c == '…');
+            if !clean.is_empty() && clean != "packages" && clean != "software" && clean != "cache" {
+                return Some(short_package_id(clean));
+            }
         }
     }
     None
+}
+
+/// `name;version;arch;distro` → `name`, else leave as-is.
+fn short_package_id(id: &str) -> String {
+    id.split(';').next().unwrap_or(id).trim().to_string()
 }
 
 /// Root: refresh package indexes for the host distro.
@@ -1190,11 +1234,15 @@ pub fn apply_as_root(packages: &[String]) -> Result<(), String> {
         for pkg in packages {
             cmd.arg(pkg);
         }
+        // Inherit so pkexec→escalate_apply can stream progress lines.
+        cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
         cmd.status()
     } else if id == "arch" || id == "manjaro" || command_exists("pacman") {
         if packages.is_empty() {
             Command::new("pacman")
                 .args(["-Syu", "--noconfirm"])
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
                 .status()
         } else {
             let mut cmd = Command::new("pacman");
@@ -1202,6 +1250,7 @@ pub fn apply_as_root(packages: &[String]) -> Result<(), String> {
             for pkg in packages {
                 cmd.arg(pkg);
             }
+            cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
             cmd.status()
         }
     } else if packages.is_empty() {
@@ -1309,12 +1358,16 @@ fn apt_noninteractive(
             ]);
         }
     }
+    // Machine-readable progress for the Metis updater (pmstatus/dlstatus).
+    cmd.args(["-o", "APT::Status-Fd=1"]);
     cmd.args(args);
     cmd.env("DEBIAN_FRONTEND", "noninteractive");
     cmd.env("NEEDRESTART_MODE", "a");
     if matches!(conf, AptConfPolicy::KeepLocal) {
         cmd.env("UCF_FORCE_CONFFOLD", "1");
     }
+    // Inherit so `pkexec metis-remote pk-updates-apply` can stream lines live.
+    cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     cmd.status()
 }
 
@@ -1412,7 +1465,29 @@ mod tests {
     fn parse_percent() {
         assert_eq!(parse_percent_line("Downloading foo 42%"), Some(42));
         assert_eq!(parse_percent_line("Percentage:	87%"), Some(87));
+        assert_eq!(parse_percent_line("Percentage:\t42"), Some(42));
         assert_eq!(parse_percent_line("Downloading foo 42%\r"), Some(42));
+        assert_eq!(
+            parse_percent_line("pmstatus:alsa-ucm-conf:42.5:Installing alsa-ucm-conf"),
+            Some(43)
+        );
+    }
+
+    #[test]
+    fn extract_package_names() {
+        assert_eq!(
+            extract_item_name("Package:\talsa-ucm-conf;1.2;amd64;ubuntu").as_deref(),
+            Some("alsa-ucm-conf")
+        );
+        assert_eq!(
+            extract_item_name("Downloading\tlinux-generic").as_deref(),
+            Some("linux-generic")
+        );
+        assert_eq!(
+            extract_item_name("pmstatus:alsa-ucm-conf:10.0:Installing alsa-ucm-conf").as_deref(),
+            Some("alsa-ucm-conf")
+        );
+        assert_eq!(extract_item_name("Downloading packages"), None);
     }
 
     #[test]
