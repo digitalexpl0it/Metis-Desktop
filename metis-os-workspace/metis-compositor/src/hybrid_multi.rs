@@ -65,6 +65,7 @@ smithay::backend::renderer::element::render_elements! {
     Overlay=SolidColorRenderElement,
     CropSurface=CropRenderElement<WaylandSurfaceRenderElement<UdevMultiRenderer<'a>>>,
     CropDeco=CropRenderElement<crate::decoration::DecorationElement<UdevMultiRenderer<'a>>>,
+    CropShader=CropRenderElement<HybridTexShaderElement>,
     CursorMemory=MemoryRenderBufferRenderElement<UdevMultiRenderer<'a>>,
     Shader=HybridTexShaderElement,
 }
@@ -512,20 +513,34 @@ fn build_hybrid_elements<'a>(
             }
         });
 
-        let decoded = if clip.is_none()
-            && state.should_decode_hdr_surfaces(target.output_name)
+        let content_max = state.hdr_decode_content_max_nits(target.output_name);
+        let decoded = if state.should_decode_hdr_surfaces(target.output_name)
             && let Some(tf) = state.window_hdr_transfer(window)
         {
             let gles: &mut GlesRenderer = renderer.as_mut();
-            state
-                .hdr_encode
-                .try_decode_window_hybrid(gles, window, loc, win_scale, alpha, tf)
+            state.hdr_encode.try_decode_window_hybrid(
+                gles,
+                window,
+                crate::hdr_encode::HdrWindowDecodeOpts {
+                    place_at: loc,
+                    scale: win_scale,
+                    alpha,
+                    transfer: tf,
+                    content_max_nits: content_max,
+                },
+            )
         } else {
             None
         };
 
         if let Some(decoded) = decoded {
-            render_elements.push(HybridOutputStack::Shader(decoded));
+            if let Some(clip) = clip {
+                if let Some(c) = CropRenderElement::from_element(decoded, win_scale, clip) {
+                    render_elements.push(HybridOutputStack::CropShader(c));
+                }
+            } else {
+                render_elements.push(HybridOutputStack::Shader(decoded));
+            }
         } else {
             let elems = AsRenderElements::<UdevMultiRenderer<'a>>::render_elements::<
                 WaylandSurfaceRenderElement<UdevMultiRenderer<'a>>,

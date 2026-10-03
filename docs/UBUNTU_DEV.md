@@ -22,9 +22,12 @@ sudo apt install -y \
   build-essential pkg-config libssl-dev libclang-dev \
   libgtk-4-dev libadwaita-1-dev \
   libpulse-dev \
+  libasound2-dev \
   libgtk4-layer-shell-dev \
   curl git
 ```
+
+`libasound2-dev` is required to build the Viewer (`cpal` → `alsa-sys`).
 
 To build/run the **standalone DRM session** (Metis on its own TTY/GPU, not nested),
 also install the session, input, and GPU libraries:

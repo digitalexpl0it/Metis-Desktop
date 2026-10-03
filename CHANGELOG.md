@@ -7,8 +7,18 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-10-03]
 
+### Fixed
+
+- **CI / build deps** — install `libasound2-dev` so Viewer `cpal` (`alsa-sys`)
+  links in Debian 13 / Ubuntu 26.04 containers and local dep scripts.
+
 ### Added
 
+- **HDR crop+decode + tone-map polish** — mixed SDR+HDR windows still decode
+  under scroll-column / genie clip (GLES and hybrid Multi); decode tone-map uses
+  an extended Reinhard shoulder keyed to content peak (output mastering when HDR
+  is active). Float scene-linear composite and default-on colour management remain
+  deferred.
 - **Hybrid MultiRenderer Wave A/B/C** — secondary GPUs present via Smithay
   `GpuManager::renderer` with textured SSD, bar blur, HDR decode/encode, and
   Stage-2 LUT on the Multi path; full-frame GBM dmabuf transfer is fail-fallback

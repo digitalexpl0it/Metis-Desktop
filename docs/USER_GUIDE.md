@@ -887,8 +887,11 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   testing; advertising it to Chromium/Ozone can crash the session (upstream
   wayland-rs server ObjectData bug). Hardware ICC / LUT / HDR do **not** need
   that env var. When a client advertises PQ/HLG via colour management (opt-in
-  protocol), the compositor **pass-through** skips SDR→HDR re-encode for that
-  output so HDR content is not double-transformed (mixed SDR+HDR is approximate).
+  protocol), the compositor **pass-through** skips SDR→HDR re-encode for
+  HDR-only / fullscreen outputs so that content is not double-transformed.
+  Mixed SDR+HDR (or HDR on an SDR panel) decodes those windows to sRGB with a
+  soft highlight roll-off, including when a scroll column or minimize animation
+  clips the window — clipped and unclipped mixed HDR should match.
   Rotation is still upcoming.
 - **Appearance** — Light/Dark style; accent, secondary, and semantic status
   colors; font. Edits write `themes/dark.json` / `themes/light.json` and survive
@@ -1154,7 +1157,8 @@ FFmpeg build with those decoders plus a working `libva` stack (Intel/AMD) or
 NVIDIA driver/CUDA for NVDEC; without them the Viewer falls back to software
 automatically. Preferred codec may be **AV1** when the GPU exposes `av1_vaapi` /
 `av1_nvenc` (otherwise the host ladder falls back). Build also needs
-`libopus-dev` (and runtime `libopus0`) for Metis Remote audio, and
+`libopus-dev` (and runtime `libopus0`) for Metis Remote audio,
+`libasound2-dev` for Viewer playback (`cpal` / ALSA), and
 `freerdp3-dev` / `libwinpr3-dev` to build the Metis native RDP host.
 
 Use a DRM Metis session (not nested winit) for the host.

@@ -65,6 +65,7 @@ jobs:
             libdisplay-info-dev libpam0g-dev \
             libpipewire-0.3-dev \
             libpulse-dev \
+            libasound2-dev \
             libopus-dev \
             liblcms2-dev \
             libwayland-dev wayland-protocols \
@@ -141,6 +142,7 @@ jobs:
             libdisplay-info-dev libpam0g-dev \
             libpipewire-0.3-dev \
             libpulse-dev \
+            libasound2-dev \
             libopus-dev \
             liblcms2-dev \
             libwayland-dev wayland-protocols \

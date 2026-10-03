@@ -125,6 +125,18 @@ impl MetisState {
         mode.needs_surface_decode(hdr_active)
     }
 
+    /// Content peak (nits) for the mixed-HDR decode tone-map shoulder.
+    ///
+    /// When the output is in HDR mode, use the advertised mastering peak; otherwise
+    /// fall back to a typical PQ/HLG grade peak so highlights still roll off softly.
+    pub fn hdr_decode_content_max_nits(&self, output_name: Option<&str>) -> f32 {
+        if output_name.is_some_and(|n| query_hdr_active(self, n)) {
+            crate::hdr_encode::OUTPUT_MASTERING_PEAK_NITS
+        } else {
+            crate::hdr_encode::DEFAULT_CONTENT_MAX_NITS
+        }
+    }
+
     /// HDR transfer hint for a window's root surface, when present.
     pub fn window_hdr_transfer(&self, window: &smithay::desktop::Window) -> Option<HdrTransfer> {
         let surface = window.wl_surface()?;

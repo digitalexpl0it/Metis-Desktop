@@ -36,12 +36,30 @@ use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, T
 /// BT.2408 reference white for mapping SDR peak to HDR (nits).
 pub const REFERENCE_WHITE_NITS: f32 = 203.0;
 
+/// Peak mastering luminance advertised on Metis HDR outputs (nits).
+/// Keep in sync with [`crate::output_hdr`] `max_display_mastering_luminance`.
+pub const OUTPUT_MASTERING_PEAK_NITS: f32 = 400.0;
+
+/// Fallback content peak for decode tone-map when the output is not in HDR mode
+/// (HDR client on an SDR panel). Typical PQ/HLG grade peak.
+pub const DEFAULT_CONTENT_MAX_NITS: f32 = 1000.0;
+
 /// Transfer function used for HDR encode + matching `HDR_OUTPUT_METADATA` EOTF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HdrTransfer {
     #[default]
     Pq,
     Hlg,
+}
+
+/// Placement and tone-map inputs for per-window PQ/HLG→sRGB decode.
+#[derive(Debug, Clone, Copy)]
+pub struct HdrWindowDecodeOpts {
+    pub place_at: Point<i32, Physical>,
+    pub scale: Scale<f64>,
+    pub alpha: f32,
+    pub transfer: HdrTransfer,
+    pub content_max_nits: f32,
 }
 
 /// Custom texture shader: sRGB → linear → BT.2020 → scale nits → ST.2084 PQ.
@@ -231,6 +249,7 @@ uniform sampler2D tex;
 uniform float alpha;
 varying vec2 v_coords;
 uniform float reference_white;
+uniform float content_max_nits;
 
 #if defined(DEBUG_FLAGS)
 uniform float tint;
@@ -279,9 +298,12 @@ void main() {
         pq_to_linear(pq.b)
     ) * 10000.0;
 
-    // Soft Reinhard-style map around reference white; preserves SDR mid-tones.
+    // Extended Reinhard: mid-tones near reference white, soft shoulder to content peak.
     float rw = max(reference_white, 1.0);
-    vec3 mapped = (lin / rw) / (vec3(1.0) + lin / rw);
+    float cmax = max(content_max_nits, rw);
+    float white_rel = cmax / rw;
+    vec3 x = lin / rw;
+    vec3 mapped = (x * (vec3(1.0) + x / (white_rel * white_rel))) / (vec3(1.0) + x);
     mapped = bt2020_to_rec709(mapped);
     mapped = clamp(mapped, 0.0, 1.0);
 
@@ -321,6 +343,7 @@ uniform sampler2D tex;
 uniform float alpha;
 varying vec2 v_coords;
 uniform float reference_white;
+uniform float content_max_nits;
 
 #if defined(DEBUG_FLAGS)
 uniform float tint;
@@ -369,7 +392,10 @@ void main() {
     vec3 lin = scene * 1000.0;
 
     float rw = max(reference_white, 1.0);
-    vec3 mapped = (lin / rw) / (vec3(1.0) + lin / rw);
+    float cmax = max(content_max_nits, rw);
+    float white_rel = cmax / rw;
+    vec3 x = lin / rw;
+    vec3 mapped = (x * (vec3(1.0) + x / (white_rel * white_rel))) / (vec3(1.0) + x);
     mapped = bt2020_to_rec709(mapped);
     mapped = clamp(mapped, 0.0, 1.0);
 
@@ -458,7 +484,10 @@ impl HdrEncodeRuntime {
                 }
                 match renderer.compile_custom_texture_shader(
                     PQ_DECODE_SHADER,
-                    &[UniformName::new("reference_white", UniformType::_1f)],
+                    &[
+                        UniformName::new("reference_white", UniformType::_1f),
+                        UniformName::new("content_max_nits", UniformType::_1f),
+                    ],
                 ) {
                     Ok(program) => {
                         tracing::info!("hdr: compiled PQ→sRGB decode shader");
@@ -475,7 +504,10 @@ impl HdrEncodeRuntime {
                 }
                 match renderer.compile_custom_texture_shader(
                     HLG_DECODE_SHADER,
-                    &[UniformName::new("reference_white", UniformType::_1f)],
+                    &[
+                        UniformName::new("reference_white", UniformType::_1f),
+                        UniformName::new("content_max_nits", UniformType::_1f),
+                    ],
                 ) {
                     Ok(program) => {
                         tracing::info!("hdr: compiled HLG→sRGB decode shader");
@@ -490,18 +522,15 @@ impl HdrEncodeRuntime {
     }
 
     /// Render `window` to an offscreen buffer, run PQ/HLG→sRGB decode, and return
-    /// a fullscreen-style texture element placed at `place_at` (render-target local).
+    /// a fullscreen-style texture element placed at `opts.place_at` (render-target local).
     pub fn try_decode_window_element(
         &mut self,
         renderer: &mut GlesRenderer,
         window: &Window,
-        place_at: Point<i32, Physical>,
-        scale: Scale<f64>,
-        alpha: f32,
-        transfer: HdrTransfer,
+        opts: HdrWindowDecodeOpts,
     ) -> Option<TextureShaderElement> {
-        self.ensure_decode_program(renderer, transfer);
-        let program = match transfer {
+        self.ensure_decode_program(renderer, opts.transfer);
+        let program = match opts.transfer {
             HdrTransfer::Pq => self.pq_decode_program.clone()?,
             HdrTransfer::Hlg => self.hlg_decode_program.clone()?,
         };
@@ -510,7 +539,7 @@ impl HdrEncodeRuntime {
         let width = geo.size.w.max(1);
         let height = geo.size.h.max(1);
         let size_phys: Size<i32, Physical> =
-            Size::<i32, Logical>::from((width, height)).to_physical_precise_round(scale);
+            Size::<i32, Logical>::from((width, height)).to_physical_precise_round(opts.scale);
         if size_phys.w <= 0 || size_phys.h <= 0 {
             return None;
         }
@@ -525,11 +554,11 @@ impl HdrEncodeRuntime {
         }
 
         let size_buf: Size<i32, Buffer> = Size::from((size_phys.w, size_phys.h));
-        let loc =
-            Point::<i32, Logical>::from((-geo.loc.x, -geo.loc.y)).to_physical_precise_round(scale);
+        let loc = Point::<i32, Logical>::from((-geo.loc.x, -geo.loc.y))
+            .to_physical_precise_round(opts.scale);
         let elems = AsRenderElements::<GlesRenderer>::render_elements::<
             WaylandSurfaceRenderElement<GlesRenderer>,
-        >(window, renderer, loc, scale, alpha);
+        >(window, renderer, loc, opts.scale, opts.alpha);
         if elems.is_empty() {
             return None;
         }
@@ -547,7 +576,7 @@ impl HdrEncodeRuntime {
                     Err(_) => continue,
                 };
                 let mut damage_tracker =
-                    OutputDamageTracker::new(size_phys, scale, Transform::Normal);
+                    OutputDamageTracker::new(size_phys, opts.scale, Transform::Normal);
                 damage_tracker
                     .render_output(renderer, &mut framebuffer, 0, &elems, DECODE_CLEAR)
                     .is_ok()
@@ -565,17 +594,21 @@ impl HdrEncodeRuntime {
             Size::from((size_phys.w as f64, size_phys.h as f64)),
         );
         let inner = TextureRenderElement::from_texture_buffer(
-            Point::<f64, Physical>::from((place_at.x as f64, place_at.y as f64)),
+            Point::<f64, Physical>::from((opts.place_at.x as f64, opts.place_at.y as f64)),
             &buffer,
             None,
             Some(src_rect),
             Some(Size::from((size_phys.w, size_phys.h))),
             Kind::Unspecified,
         );
+        let content_max = opts.content_max_nits.max(REFERENCE_WHITE_NITS);
         Some(TextureShaderElement::new(
             inner,
             program,
-            vec![Uniform::new("reference_white", REFERENCE_WHITE_NITS)],
+            vec![
+                Uniform::new("reference_white", REFERENCE_WHITE_NITS),
+                Uniform::new("content_max_nits", content_max),
+            ],
         ))
     }
 
@@ -585,13 +618,10 @@ impl HdrEncodeRuntime {
         &mut self,
         renderer: &mut GlesRenderer,
         window: &Window,
-        place_at: Point<i32, Physical>,
-        scale: Scale<f64>,
-        alpha: f32,
-        transfer: HdrTransfer,
+        opts: HdrWindowDecodeOpts,
     ) -> Option<crate::hybrid_shader::HybridTexShaderElement> {
-        self.ensure_decode_program(renderer, transfer);
-        let program = match transfer {
+        self.ensure_decode_program(renderer, opts.transfer);
+        let program = match opts.transfer {
             HdrTransfer::Pq => self.pq_decode_program.clone()?,
             HdrTransfer::Hlg => self.hlg_decode_program.clone()?,
         };
@@ -600,7 +630,7 @@ impl HdrEncodeRuntime {
         let width = geo.size.w.max(1);
         let height = geo.size.h.max(1);
         let size_phys: Size<i32, Physical> =
-            Size::<i32, Logical>::from((width, height)).to_physical_precise_round(scale);
+            Size::<i32, Logical>::from((width, height)).to_physical_precise_round(opts.scale);
         if size_phys.w <= 0 || size_phys.h <= 0 {
             return None;
         }
@@ -614,11 +644,11 @@ impl HdrEncodeRuntime {
         }
 
         let size_buf: Size<i32, Buffer> = Size::from((size_phys.w, size_phys.h));
-        let loc =
-            Point::<i32, Logical>::from((-geo.loc.x, -geo.loc.y)).to_physical_precise_round(scale);
+        let loc = Point::<i32, Logical>::from((-geo.loc.x, -geo.loc.y))
+            .to_physical_precise_round(opts.scale);
         let elems = AsRenderElements::<GlesRenderer>::render_elements::<
             WaylandSurfaceRenderElement<GlesRenderer>,
-        >(window, renderer, loc, scale, alpha);
+        >(window, renderer, loc, opts.scale, opts.alpha);
         if elems.is_empty() {
             return None;
         }
@@ -636,7 +666,7 @@ impl HdrEncodeRuntime {
                     Err(_) => continue,
                 };
                 let mut damage_tracker =
-                    OutputDamageTracker::new(size_phys, scale, Transform::Normal);
+                    OutputDamageTracker::new(size_phys, opts.scale, Transform::Normal);
                 damage_tracker
                     .render_output(renderer, &mut framebuffer, 0, &elems, DECODE_CLEAR)
                     .is_ok()
@@ -647,11 +677,12 @@ impl HdrEncodeRuntime {
             }
         }
         let scene = scene?;
-        let geometry = Rectangle::new(place_at, size_phys);
+        let geometry = Rectangle::new(opts.place_at, size_phys);
         let src = Rectangle::<f64, Buffer>::new(
             Point::from((0.0, 0.0)),
             Size::from((size_phys.w as f64, size_phys.h as f64)),
         );
+        let content_max = opts.content_max_nits.max(REFERENCE_WHITE_NITS);
         crate::hybrid_shader::HybridTexShaderElement::from_gles_texture(
             renderer,
             Id::new(),
@@ -660,8 +691,11 @@ impl HdrEncodeRuntime {
             src,
             scene,
             program,
-            vec![Uniform::new("reference_white", REFERENCE_WHITE_NITS)],
-            alpha,
+            vec![
+                Uniform::new("reference_white", REFERENCE_WHITE_NITS),
+                Uniform::new("content_max_nits", content_max),
+            ],
+            opts.alpha,
             Kind::Unspecified,
         )
     }

@@ -42,10 +42,13 @@ smithay::backend::renderer::element::render_elements! {
     // half-scrolled column never bleeds onto the adjacent display.
     CropSurface=CropRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     CropDeco=CropRenderElement<crate::decoration::GlesDecorationElement>,
+    // Scroll/genie clip around a decoded HDR window (TextureShaderElement).
+    CropHdrDecode=CropRenderElement<smithay::backend::renderer::gles::element::TextureShaderElement>,
     // Software/hardware pointer for the DRM backend (named-theme cursor). The
     // winit backend uses the host cursor and never emits this.
     CursorMemory=smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<GlesRenderer>,
     // HDR H2 / Stage 2 colour: fullscreen post-pass blit (DRM only).
+    // Also used for per-window PQ/HLG→sRGB decode elements.
     HdrEncode=smithay::backend::renderer::gles::element::TextureShaderElement,
 }
 
@@ -355,20 +358,34 @@ impl MetisState {
                         .map(|c| Rectangle::new(c.loc - render_origin, c.size))
                 }
             });
-            // Mixed SDR+HDR (or HDR on an SDR panel): decode the window through
-            // PQ/HLG→sRGB before it joins the stack. Skip when clipped (scroll
-            // columns) — CropRenderElement cannot wrap TextureShaderElement.
-            let decoded = if clip.is_none()
-                && self.should_decode_hdr_surfaces(target.output_name)
+            // Mixed SDR+HDR (or HDR on an SDR panel): decode PQ/HLG→sRGB before
+            // the window joins the stack. When scroll/genie clip is active, wrap
+            // the decode element in CropRenderElement (same as surfaces).
+            let decoded = if self.should_decode_hdr_surfaces(target.output_name)
                 && let Some(tf) = self.window_hdr_transfer(window)
             {
-                self.hdr_encode
-                    .try_decode_window_element(renderer, window, loc, win_scale, alpha, tf)
+                self.hdr_encode.try_decode_window_element(
+                    renderer,
+                    window,
+                    crate::hdr_encode::HdrWindowDecodeOpts {
+                        place_at: loc,
+                        scale: win_scale,
+                        alpha,
+                        transfer: tf,
+                        content_max_nits: self.hdr_decode_content_max_nits(target.output_name),
+                    },
+                )
             } else {
                 None
             };
             if let Some(decoded) = decoded {
-                render_elements.push(OutputStack::HdrEncode(decoded));
+                if let Some(clip) = clip {
+                    if let Some(c) = CropRenderElement::from_element(decoded, win_scale, clip) {
+                        render_elements.push(OutputStack::CropHdrDecode(c));
+                    }
+                } else {
+                    render_elements.push(OutputStack::HdrEncode(decoded));
+                }
             } else {
                 let elems = AsRenderElements::<GlesRenderer>::render_elements::<
                     WaylandSurfaceRenderElement<GlesRenderer>,

@@ -55,12 +55,14 @@ Security items from the **2026-09-27 code review** sit above product stretch.
       fail-fallback only (ExportMem still available).
       → Wave 3a, Phase 3 multi-GPU notes, Phase 18 §E.
       *(dmabuf transfer 2026-09-27; MultiRenderer Wave A/B/C 2026-10-03)*
-- [ ] **2. True per-surface HDR decode** — mixed SDR+HDR now decodes PQ/HLG
-      windows to sRGB (Reinhard @ 203 nits) before the encode pass; HDR-only /
-      fullscreen still pass-through. **Residual:** float scene-linear composite
-      (preserve highlight headroom), scroll-column crop+decode, fuller tone-map
-      / mastering metadata, default-on `wp_color_management_v1`.
-      → Phase 5 §B residual. *(decode path landed 2026-09-27)*
+- [ ] **2. True per-surface HDR decode** — mixed SDR+HDR decodes PQ/HLG windows
+      to sRGB (extended Reinhard @ 203 nits reference white + content-peak
+      shoulder) before the encode pass, including scroll/genie crop on GLES and
+      hybrid Multi; HDR-only / fullscreen still pass-through.
+      **Residual:** float scene-linear composite (preserve highlight headroom),
+      fuller BT.2390 tone-map, default-on `wp_color_management_v1`.
+      → Phase 5 §B residual. *(decode 2026-09-27; crop+decode + tone-map polish
+      2026-10-03)*
 - [x] **3. Metis-native remote host** — **Partial→landed core (2026-10-03):**
       **RUDP** Phases 1–8 + clipboard/audio/HW decode/AV1/packet queue;
       **Metis native RDP** via `metis-rdp-host` (portal ScreenCast + FreeRDP;
@@ -176,9 +178,11 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       wayland-rs server/sys ObjectData UAF; keep `METIS_COLOR_MGMT=1` opt-in
       ([docs/upstream/](../docs/upstream/README.md))
 - [x] **3c** Per-surface HDR **pass-through** into encode path (PQ/HLG hints;
-      mixed SDR+HDR approximate). **Partial (2026-09-27):** per-window PQ/HLG
-      decode into the SDR composite + HDR-only pass-through. **Residual:** float
-      scene-linear path + fuller tone-map — see **Urgent priorities**.
+      mixed SDR+HDR approximate). **Partial (2026-09-27 / 2026-10-03):**
+      per-window PQ/HLG decode into the SDR composite (incl. scroll/genie crop
+      on GLES + hybrid Multi) + content-peak tone-map shoulder + HDR-only
+      pass-through. **Residual:** float scene-linear path + fuller BT.2390 —
+      see **Urgent priorities**.
 
 ### Wave 4 — Remote
 - [x] **4a** `metis-remote rustdesk status|enable|disable` + firewall/Polkit +
@@ -713,9 +717,10 @@ Phase 3) — none of these are possible under the nested winit dev session.
       (hardware QA still welcome). **Still deferred (upstream):** default-on
       colour protocol
       ([wayland-rs#949](https://github.com/Smithay/wayland-rs/issues/949)).
-      **Urgent residual:** float scene-linear HDR composite + crop-aware decode
-      (per-window PQ/HLG→sRGB decode + smarter pass-through landed 2026-09-27;
-      see **Urgent priorities**).
+      **Urgent residual:** float scene-linear HDR composite (crop+decode +
+      content-peak tone-map polish landed 2026-10-03; per-window PQ/HLG→sRGB
+      decode + smarter pass-through landed 2026-09-27; see **Urgent
+      priorities**).
 ---
 
 ## Phase 6 — Flatpak, Steam & gaming

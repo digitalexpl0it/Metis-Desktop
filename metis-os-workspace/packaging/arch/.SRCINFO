@@ -18,6 +18,7 @@ depends = gtk4
 depends = libadwaita
 depends = gtk4-layer-shell
 depends = libpulse
+depends = alsa-lib
 depends = libinput
 depends = seatd
 depends = mesa

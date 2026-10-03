@@ -499,8 +499,8 @@ fn hdr_metadata_for(transfer: HdrTransfer) -> HdrOutputMetadata {
                 xy(0.131, 0.046), // B
             ],
             white_point: xy(0.3127, 0.3290),
-            // cd/m² — honest for SDR-mapped desktop
-            max_display_mastering_luminance: 400,
+            // cd/m² — honest for SDR-mapped desktop (matches OUTPUT_MASTERING_PEAK_NITS)
+            max_display_mastering_luminance: crate::hdr_encode::OUTPUT_MASTERING_PEAK_NITS as u16,
             // 0.0001 cd/m² units → 0.05 nits
             min_display_mastering_luminance: 500,
             max_cll: 203,
