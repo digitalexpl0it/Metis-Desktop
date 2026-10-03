@@ -829,7 +829,18 @@ fn spawn_nmcli_vpn(
         use std::os::unix::fs::OpenOptionsExt;
 
         let passwd_path = if let Some((ref pw, _)) = password {
-            let path = std::env::temp_dir().join(format!(
+            let dir = match metis_protocol::ensure_runtime_dir() {
+                Ok(dir) => dir,
+                Err(_) => {
+                    finish_vpn_op(
+                        &target,
+                        connecting,
+                        Some("XDG_RUNTIME_DIR unavailable for VPN password.".into()),
+                    );
+                    return;
+                }
+            };
+            let path = dir.join(format!(
                 "metis-vpn-passwd-{}-{}.tmp",
                 std::process::id(),
                 std::time::SystemTime::now()

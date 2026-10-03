@@ -13,13 +13,15 @@ file is the short map for auditors and contributors.
 | Boundary | Behaviour |
 |----------|-----------|
 | Runtime dir | `$XDG_RUNTIME_DIR/metis/` — mode `0700`; fails closed if `XDG_RUNTIME_DIR` is unset (no `/tmp/metis`) |
+| One-shot secrets / captures | Password files, VPN `passwd-file`s, and portal screenshot PNGs require `XDG_RUNTIME_DIR` (no `/tmp` fallback); pkexec password take only under `/run/user/` |
 | Sockets / command files | Mode `0600` |
 | Accept path | Linux `SO_PEERCRED` — peer UID must match the compositor euid (`metis_protocol::accept_same_euid`) |
 | Widgets process | Spawn-scoped `METIS_IPC_TOKEN` → **widgets** capability only (no EndSession, input inject, capture overlays); cleared when the widgets process exits (no wall-clock TTL) |
 | Command files | Verb allowlist + 512-byte cap (`parse_runtime_command`); same-UID poke channel, weaker than socket+token |
 | Rate limits | Sliding 1s windows on command IPC, event subscribe, and command-file write/dispatch (Phase 18 B) — bounds same-UID spam, not a sandbox |
 | Event bus | Cap on long-lived subscribers (16) |
-| Session lock | Rejects focus / launch / clipboard / capture / workspace / session-control and remote-input inject until unlock |
+| Session lock | Rejects focus / launch / clipboard / capture / workspace / session-control and remote-input inject until unlock; PAM `PAM_DISALLOW_NULL_AUTHTOK`; empty submit only with biometric cues |
+| SetClipboard images | `image_path` must canonicalize under `$XDG_RUNTIME_DIR` or Metis state/cache roots |
 
 Details: [User Guide — Session IPC trust model](docs/USER_GUIDE.md#session-ipc-trust-model),
 [Ubuntu/dev notes](docs/UBUNTU_DEV.md#ipc-trust-model).

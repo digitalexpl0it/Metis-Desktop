@@ -436,7 +436,7 @@ impl ScreenCastStream {
         }
 
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let pump = spawn_screencast_pump(
+        let Some(pump) = spawn_screencast_pump(
             Arc::clone(&self.hub.pipewire),
             handle.node_id,
             CaptureOptions {
@@ -445,7 +445,11 @@ impl ScreenCastStream {
                 output_index: 0,
             },
             Arc::clone(&cancel),
-        );
+        ) else {
+            return Err(fdo::Error::Failed(
+                "failed to spawn screencast pump thread".into(),
+            ));
+        };
         self.hub
             .sc_streams
             .lock()

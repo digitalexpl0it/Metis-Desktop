@@ -93,19 +93,19 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
 
 ### Security (P1 / P2)
 
-- [ ] **Fail-closed secret / capture paths** — never fall back to `/tmp` for
-      password files, VPN passwd files, or screenshot PNGs when
+- [x] **Fail-closed secret / capture paths** (2026-10-03) — never fall back to
+      `/tmp` for password files, VPN passwd files, or screenshot PNGs when
       `XDG_RUNTIME_DIR` is missing (`metis-remote` `pkhelpers`, portal
       `capture/mod.rs`, shell/settings VPN helpers). Match protocol’s
       fail-closed runtime dir.
-- [ ] **Biometric unlock vs empty PAM** — ensure empty-password / `nullok`
-      cannot unlock without a real biometric success (`lock.rs`,
-      `lock_auth_cues.rs`).
-- [ ] **Clipboard `image_path` allowlist** — `SetClipboard` should only read
-      under `$XDG_RUNTIME_DIR` (or Metis cache), not arbitrary readable paths.
-- [ ] **Portal / screensaver panic hygiene** — replace
-      `unwrap`/`expect` on locks and thread spawn in security-adjacent portal
-      paths with soft failure + tracing.
+- [x] **Biometric unlock vs empty PAM** (2026-10-03) — `PAM_DISALLOW_NULL_AUTHTOK`
+      on authenticate/acct; empty lock submit only when fingerprint/YubiKey
+      cues are present (`lock.rs`, `pam_auth.rs`).
+- [x] **Clipboard `image_path` allowlist** (2026-10-03) — `SetClipboard` only
+      reads under `$XDG_RUNTIME_DIR` or Metis state/cache roots.
+- [x] **Portal / screensaver panic hygiene** (2026-10-03) — soft-fail poisoned
+      screensaver owner locks + screencast pump thread spawn (no
+      `unwrap`/`expect` panic path).
 - [ ] **Session Secret Service story** — keep Secret Service as the contract
       (gnome-keyring / KWallet / KeePassXC all OK); prefer Metis owning the
       *default session provider* (not a private Metis-only store). Update

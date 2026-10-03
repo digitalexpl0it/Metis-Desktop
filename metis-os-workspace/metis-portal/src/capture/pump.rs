@@ -77,10 +77,12 @@ pub fn spawn_screencast_pump(
     node_id: u32,
     options: CaptureOptions,
     cancel: Arc<AtomicBool>,
-) -> thread::JoinHandle<()> {
-    thread::Builder::new()
+) -> Option<thread::JoinHandle<()>> {
+    let pipewire_thread = Arc::clone(&pipewire);
+    match thread::Builder::new()
         .name("metis-screencast".into())
         .spawn(move || {
+            let pipewire = pipewire_thread;
             let session = match CaptureSession::open(options) {
                 Ok(s) => s,
                 Err(err) => {
@@ -169,8 +171,14 @@ pub fn spawn_screencast_pump(
                 tracing::warn!(node_id, "screencast pump ended without sending any frames");
             }
             pipewire.destroy_stream(node_id);
-        })
-        .expect("spawn screencast pump thread")
+        }) {
+        Ok(handle) => Some(handle),
+        Err(err) => {
+            tracing::error!(%err, node_id, "screencast: failed to spawn pump thread");
+            pipewire.destroy_stream(node_id);
+            None
+        }
+    }
 }
 
 fn elapsed_under(start: std::time::Instant, interval: Duration) -> bool {

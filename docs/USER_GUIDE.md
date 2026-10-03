@@ -272,7 +272,8 @@ screen share, etc.) use the freedesktop portal stack through **`metis-portal`**:
 
 - The **first** capture / share from an app may show a permission dialog; grant
   it once and later requests proceed silently.
-- Portal screenshots are saved as PNGs under `$XDG_RUNTIME_DIR/metis-screenshot-*.png`
+- Portal screenshots are saved as PNGs under `$XDG_RUNTIME_DIR/metis/metis-screenshot-*.png`
+  (fails closed if `XDG_RUNTIME_DIR` is unset — no `/tmp` fallback)
   and returned to the requesting app as a `file://` URI.
 
 If screenshots fail after an upgrade, log out and back into Metis so the updated
@@ -803,7 +804,9 @@ no protocol locker is active; only one lock owner is allowed at a time.
 **Fingerprint / YubiKey (optional).** Metis does not enroll devices itself. When
 a fingerprint reader or Yubico USB key is detected, the lock screen shows a
 touch hint and may start one empty PAM attempt so `pam_fprintd` / `pam_u2f` can
-succeed without typing. Configure the host:
+succeed without typing. Empty password submit is refused when no biometric cue
+is present, and PAM runs with `PAM_DISALLOW_NULL_AUTHTOK` so a host `nullok`
+empty password cannot unlock on its own. Configure the host:
 
 1. Install (Ubuntu): `sudo apt install fprintd libpam-fprintd` and/or
    `sudo apt install libpam-u2f pamu2fcfg`
@@ -1374,7 +1377,10 @@ UID is not the session euid — that stops **cross-user** abuse. Any process
 running as **your** UID can still drive the DE (launch apps, inject input,
 end session); that is the intended same-session control plane. If
 `XDG_RUNTIME_DIR` is unset, Metis fails closed rather than falling back to
-`/tmp/metis`.
+`/tmp/metis`. The same fail-closed rule applies to one-shot password files,
+VPN `passwd-file`s, and portal screenshot PNGs (no `/tmp` secrets/captures).
+Compositor `SetClipboard` image paths must resolve under `$XDG_RUNTIME_DIR` or
+Metis state/cache directories.
 
 The isolated **desktop-widgets** process is spawned with a spawn-scoped
 `METIS_IPC_TOKEN` and may only use a **widgets** capability (Launch, list

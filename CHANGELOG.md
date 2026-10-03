@@ -12,6 +12,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **CI / build deps** — install `libasound2-dev` so Viewer `cpal` (`alsa-sys`)
   links in Debian 13 / Ubuntu 26.04 containers and local dep scripts.
 
+### Security
+
+- **Security P1 pack** — password / VPN / portal screenshot paths refuse `/tmp`
+  when `XDG_RUNTIME_DIR` is missing; lock PAM uses `PAM_DISALLOW_NULL_AUTHTOK`
+  and empty submit only with biometric cues; compositor `SetClipboard`
+  `image_path` allowlisted to runtime / Metis state+cache; portal screensaver
+  owner-map and screencast pump spawn soft-fail instead of panicking.
+
 ### Added
 
 - **HDR urgent #2 residuals** — float-scene encode uses a BT.2390-style EETF

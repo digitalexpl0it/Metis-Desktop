@@ -55,7 +55,7 @@ impl CaptureHub {
 }
 
 pub async fn capture_fullscreen_png() -> Result<CapturedPng, String> {
-    let path = screenshot_path();
+    let path = screenshot_path()?;
     capture_png(
         CaptureOptions {
             draw_cursor: true,
@@ -73,11 +73,13 @@ pub fn save_frame_png(frame: &Frame, path: &Path) -> Result<(), String> {
     write_png(path, frame.width, frame.height, &rgba)
 }
 
-fn screenshot_path() -> PathBuf {
-    let base = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+fn screenshot_path() -> Result<PathBuf, String> {
+    let base = metis_protocol::ensure_runtime_dir().map_err(|e| {
+        format!("XDG_RUNTIME_DIR unavailable for screenshot (refusing /tmp fallback): {e}")
+    })?;
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    Path::new(&base).join(format!("metis-screenshot-{millis}.png"))
+    Ok(base.join(format!("metis-screenshot-{millis}.png")))
 }

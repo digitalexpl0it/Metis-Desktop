@@ -374,13 +374,22 @@ impl MetisState {
             self.request_redraw();
             return;
         }
+        // Empty submit is only for biometric / security-key PAM stacks. Without
+        // cues, refuse locally so a `nullok` empty password cannot unlock.
+        if self.lock.password.is_empty() && !self.lock.auth_cues.any() {
+            self.lock.status = Some(metis_i18n::tr_ftl("lock-incorrect-password"));
+            self.lock.attempts = self.lock.attempts.wrapping_add(1);
+            self.damaged = true;
+            self.request_redraw();
+            return;
+        }
         self.lock.auth_generation = self.lock.auth_generation.wrapping_add(1);
         let generation = self.lock.auth_generation;
         self.lock.auth_in_flight = true;
         self.lock.status = Some(metis_i18n::tr_ftl("lock-authenticating"));
         // Move the password out (leaving the field empty) so only the worker
         // thread holds it, and it is zeroized there once the attempt completes.
-        // Empty password is intentional for pam_fprintd / pam_u2f.
+        // Empty password is intentional for pam_fprintd / pam_u2f when cues are set.
         let password = std::mem::take(&mut self.lock.password);
         let tx = self.lock.auth_tx.clone();
         let service = pam_service();

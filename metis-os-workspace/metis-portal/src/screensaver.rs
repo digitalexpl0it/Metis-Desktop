@@ -48,7 +48,14 @@ impl InhibitService {
             cookie = self.next_cookie.fetch_add(1, Ordering::Relaxed);
         }
         if let Some(owner) = owner {
-            self.owners.lock().unwrap().insert(cookie, owner);
+            match self.owners.lock() {
+                Ok(mut guard) => {
+                    guard.insert(cookie, owner);
+                }
+                Err(err) => {
+                    tracing::error!(%err, "screensaver: owners lock poisoned on engage");
+                }
+            }
         }
         let app = (!app_name.is_empty()).then_some(app_name);
         let why = (!reason.is_empty()).then_some(reason);
@@ -57,19 +64,35 @@ impl InhibitService {
     }
 
     fn release(&self, cookie: u32) {
-        self.owners.lock().unwrap().remove(&cookie);
+        match self.owners.lock() {
+            Ok(mut guard) => {
+                guard.remove(&cookie);
+            }
+            Err(err) => {
+                tracing::error!(%err, "screensaver: owners lock poisoned on release");
+            }
+        }
         tokio::task::spawn_blocking(move || compositor_ipc::uninhibit_idle(cookie));
     }
 
     fn has_any(&self) -> bool {
-        !self.owners.lock().unwrap().is_empty()
+        match self.owners.lock() {
+            Ok(guard) => !guard.is_empty(),
+            Err(err) => {
+                tracing::error!(%err, "screensaver: owners lock poisoned on has_any");
+                false
+            }
+        }
     }
 
     /// Release every cookie held by a peer that just dropped off the bus.
     fn release_peer(&self, owner: &str) {
-        let cookies = {
-            let mut guard = self.owners.lock().unwrap();
-            take_peer_cookies(&mut guard, owner)
+        let cookies = match self.owners.lock() {
+            Ok(mut guard) => take_peer_cookies(&mut guard, owner),
+            Err(err) => {
+                tracing::error!(%err, "screensaver: owners lock poisoned on release_peer");
+                return;
+            }
         };
         if cookies.is_empty() {
             return;

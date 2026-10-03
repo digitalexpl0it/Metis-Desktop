@@ -370,6 +370,17 @@ pub fn pkexec_failure_message(output: &std::process::Output, context: &str) -> S
     }
 }
 
+/// Resolve `$XDG_RUNTIME_DIR` for one-shot secrets. Refuses `/tmp` fallback.
+fn require_xdg_runtime_dir() -> Result<PathBuf, String> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .ok_or_else(|| {
+            "XDG_RUNTIME_DIR is unset or not a directory (refusing /tmp fallback)".to_string()
+        })?;
+    Ok(dir)
+}
+
 /// Write a one-shot password file under `$XDG_RUNTIME_DIR` (mode 0600).
 ///
 /// Prefer this over piping secrets into `pkexec`'s stdin — a piped stdin can
@@ -378,10 +389,7 @@ pub fn write_password_file(password: &str) -> Result<PathBuf, String> {
     if password.is_empty() || password.contains('\0') {
         return Err("password must not be empty".into());
     }
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    let dir = require_xdg_runtime_dir()?;
     let path = dir.join(format!(
         "metis-pw-{}-{}",
         std::process::id(),
@@ -419,6 +427,11 @@ pub fn take_password_file(path: &str) -> Result<String, String> {
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
         return Err("password file path must not contain ..".into());
+    }
+    // One-shot secrets live under the caller's XDG runtime (`/run/user/<uid>/…`).
+    // Refuse /tmp and other world-writable trees even if mode bits look private.
+    if !path.starts_with("/run/user/") {
+        return Err("password file must be under /run/user/".into());
     }
     let meta = fs::metadata(path).map_err(|e| format!("stat password file: {e}"))?;
     if !meta.is_file() {
@@ -466,5 +479,23 @@ mod tests {
     fn rejects_unknown_package() {
         assert!(!package_allowed("evil-package"));
         assert!(!package_allowed("mesa-vulkan-drivers;rm -rf /"));
+    }
+
+    #[test]
+    fn password_file_requires_xdg_runtime_dir() {
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+        let err = write_password_file("secret").unwrap_err();
+        assert!(err.contains("XDG_RUNTIME_DIR"));
+    }
+
+    #[test]
+    fn take_password_file_rejects_tmp() {
+        let err = take_password_file("/tmp/metis-pw-test").unwrap_err();
+        // Root check may fire first in test; either message is fail-closed.
+        assert!(
+            err.contains("/run/user/") || err.contains("root") || err.contains("must be root"),
+            "unexpected: {err}"
+        );
     }
 }

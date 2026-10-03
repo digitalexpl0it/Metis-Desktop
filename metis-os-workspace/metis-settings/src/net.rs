@@ -679,7 +679,10 @@ fn write_vpn_passwd_file(password: &str) -> Result<std::path::PathBuf, String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
-    let path = std::env::temp_dir().join(format!(
+    let dir = metis_protocol::ensure_runtime_dir().map_err(|e| {
+        format!("XDG_RUNTIME_DIR unavailable for VPN password (refusing /tmp fallback): {e}")
+    })?;
+    let path = dir.join(format!(
         "metis-vpn-passwd-{}-{}.tmp",
         std::process::id(),
         std::time::SystemTime::now()

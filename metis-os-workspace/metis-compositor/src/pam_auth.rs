@@ -22,6 +22,9 @@ const PAM_ERROR_MSG: c_int = 3;
 const PAM_TEXT_INFO: c_int = 4;
 const PAM_BUF_ERR: c_int = 5;
 const PAM_CONV_ERR: c_int = 19;
+/// Reject empty auth tokens so `pam_unix` `nullok` cannot unlock without a
+/// real password / biometric module success.
+const PAM_DISALLOW_NULL_AUTHTOK: c_int = 0x0001;
 
 #[repr(C)]
 struct PamMessage {
@@ -138,9 +141,9 @@ pub fn pam_check(service: &str, user: &str, password: &str) -> bool {
             tracing::warn!(service, "pam_start failed");
             return false;
         }
-        let auth = pam_authenticate(handle, 0);
+        let auth = pam_authenticate(handle, PAM_DISALLOW_NULL_AUTHTOK);
         let acct = if auth == PAM_SUCCESS {
-            pam_acct_mgmt(handle, 0)
+            pam_acct_mgmt(handle, PAM_DISALLOW_NULL_AUTHTOK)
         } else {
             auth
         };

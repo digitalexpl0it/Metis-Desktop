@@ -361,9 +361,7 @@ impl MetisState {
                 ClipboardHistory::Bytes(data),
             )
         } else if let Some(path) = image_path {
-            if !std::path::Path::new(&path).is_file() {
-                return Err(format!("image not found: {path}"));
-            }
+            let path = validate_set_clipboard_image_path(&path)?;
             let len = std::fs::metadata(&path)
                 .map_err(|err| format!("stat image: {err}"))?
                 .len() as usize;
@@ -574,4 +572,96 @@ fn clipboard_image_dir() -> std::path::PathBuf {
         let _ = metis_protocol::set_mode(&runtime.join("clipboard"), 0o700);
     }
     dir
+}
+
+/// Roots allowed for `SetClipboard` `image_path` (canonicalize + prefix check).
+fn clipboard_image_allow_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
+        roots.push(std::path::PathBuf::from(xdg));
+    }
+    if let Ok(state) = std::env::var("XDG_STATE_HOME") {
+        roots.push(std::path::PathBuf::from(state).join("metis"));
+    } else if let Some(home) = std::env::var_os("HOME") {
+        roots.push(std::path::PathBuf::from(home).join(".local/state/metis"));
+    }
+    if let Ok(cache) = std::env::var("XDG_CACHE_HOME") {
+        roots.push(std::path::PathBuf::from(cache).join("metis"));
+    } else if let Some(home) = std::env::var_os("HOME") {
+        roots.push(std::path::PathBuf::from(home).join(".cache/metis"));
+    }
+    roots
+}
+
+/// Reject arbitrary readable paths on the SetClipboard IPC path.
+fn validate_set_clipboard_image_path(path: &str) -> Result<String, String> {
+    let path = std::path::Path::new(path);
+    if !path.is_absolute() {
+        return Err("clipboard image_path must be absolute".into());
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("clipboard image_path must not contain ..".into());
+    }
+    let canon = path
+        .canonicalize()
+        .map_err(|e| format!("invalid clipboard image_path: {e}"))?;
+    if !canon.is_file() {
+        return Err(format!("image not found: {}", canon.display()));
+    }
+    let allowed = clipboard_image_allow_roots().into_iter().any(|root| {
+        let Ok(root) = root.canonicalize() else {
+            return false;
+        };
+        canon.starts_with(&root)
+    });
+    if !allowed {
+        return Err("clipboard image_path outside XDG runtime / Metis state or cache".into());
+    }
+    Ok(canon.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_clipboard_image_path_allowlist() {
+        let xdg = std::env::temp_dir().join(format!(
+            "metis-clip-allow-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&xdg);
+        std::fs::create_dir_all(&xdg).expect("mkdir xdg");
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &xdg) };
+
+        let allowed = xdg.join("ok.png");
+        std::fs::write(&allowed, b"png").expect("write");
+        let got = validate_set_clipboard_image_path(allowed.to_str().unwrap()).expect("allow");
+        assert_eq!(got, allowed.canonicalize().unwrap().to_string_lossy());
+
+        let outside = std::env::temp_dir().join(format!(
+            "metis-clip-deny-{}-{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&outside, b"nope").expect("write outside");
+        let err = validate_set_clipboard_image_path(outside.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("outside"));
+
+        // FIXME: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+        let _ = std::fs::remove_file(&outside);
+        let _ = std::fs::remove_dir_all(&xdg);
+    }
 }

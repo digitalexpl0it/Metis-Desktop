@@ -163,7 +163,7 @@ impl ScreencastImpl for MetisScreencast {
             .map_err(|err| PortalError::Failed(format!("create PipeWire stream: {err}")))?;
 
         let cancel = Arc::new(AtomicBool::new(false));
-        let pump = spawn_screencast_pump(
+        let Some(pump) = spawn_screencast_pump(
             Arc::clone(&self.pipewire),
             stream.node_id,
             CaptureOptions {
@@ -171,7 +171,11 @@ impl ScreencastImpl for MetisScreencast {
                 ..Default::default()
             },
             Arc::clone(&cancel),
-        );
+        ) else {
+            return Err(PortalError::Failed(
+                "failed to spawn screencast pump thread".into(),
+            ));
+        };
 
         if let Ok(mut sessions) = self.sessions.lock()
             && let Some(session) = sessions.get_mut(&session_token.to_string())
