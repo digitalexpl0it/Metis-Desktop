@@ -155,12 +155,14 @@ pub fn set_clipboard(
     text: Option<String>,
     image_path: Option<String>,
 ) -> std::io::Result<()> {
-    let _ = send_command(CompositorCommand::SetClipboard {
+    match send_command(CompositorCommand::SetClipboard {
         mime,
         text,
         image_path,
-    })?;
-    Ok(())
+    })? {
+        CompositorEvent::Error { message } => Err(std::io::Error::other(message)),
+        _ => Ok(()),
+    }
 }
 
 fn send_command(cmd: CompositorCommand) -> std::io::Result<CompositorEvent> {

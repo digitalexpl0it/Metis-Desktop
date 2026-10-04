@@ -387,23 +387,48 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             margin-top: 4px;
         }}
 
+        .metis-viewer-status-row {{
+            margin: 4px 20px 8px;
+        }}
+        .metis-viewer-status-banner {{
+            min-width: 0;
+        }}
+        .metis-viewer-status-banner.error {{
+            background-color: {surface};
+            border: 1px solid {error};
+            border-radius: {rs}px;
+            padding: 8px 10px 8px 14px;
+        }}
+        .metis-viewer-status-banner.ok {{
+            padding: 4px 0;
+        }}
         .metis-viewer-status, .metis-viewer-ready, .metis-viewer-empty {{
             font-size: 12px;
             color: {muted};
             padding: 0 20px 8px;
         }}
+        .metis-viewer-status-row .metis-viewer-status {{
+            padding: 0;
+            margin: 0;
+        }}
         .metis-viewer-status.error {{
             color: {error};
             font-weight: 500;
-            background-color: {surface};
-            border: 1px solid {error};
-            border-radius: {rs}px;
-            padding: 10px 14px;
-            margin: 4px 20px 8px;
         }}
         .metis-viewer-status.ok {{
             color: {success};
-            padding: 6px 20px 8px;
+        }}
+        .metis-viewer-status-dismiss {{
+            min-width: 28px;
+            min-height: 28px;
+            padding: 0;
+            color: {error};
+        }}
+        .metis-viewer-status-banner.ok .metis-viewer-status-dismiss {{
+            color: {muted};
+        }}
+        .metis-viewer-status-dismiss:hover {{
+            color: {text};
         }}
 
         button.suggested-action {{
@@ -475,6 +500,14 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
         .metis-viewer-host-card:hover {{
             border-color: {accent};
             background-image: linear-gradient(160deg, {card_grad_b} 0%, {surface} 100%);
+        }}
+        .metis-viewer-host-card.connecting,
+        .metis-viewer-host-row.connecting {{
+            opacity: 0.45;
+        }}
+        .metis-viewer-host-card.connecting:hover {{
+            border-color: {border};
+            background-image: linear-gradient(160deg, {card_grad_a} 0%, {card_grad_b} 100%);
         }}
         .metis-viewer-host-card-body {{
             margin: 0;

@@ -3,8 +3,9 @@
 use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 
 use gtk::gdk;
 use gtk::gio;
@@ -14,10 +15,49 @@ use metis_decode::{RudpCodec, open_decoder};
 use metis_i18n::tr;
 use metis_protocol::{RudpControlMsg, truncate_clipboard_text};
 use metis_rudp_client::{
-    ClientError, RudpClientConfig, SessionEvent, TofuMode, clear_host_pin, connect, pin_host,
-    resolve_host_port,
+    ClientError, RudpClientConfig, RudpSession, SessionEvent, TofuMode, clear_host_pin, connect,
+    pin_host, resolve_host_port,
 };
 use zeroize::Zeroize;
+
+enum ConnectAttempt {
+    Ok(RudpSession),
+    Cancelled,
+    Err(ClientError),
+}
+
+async fn connect_until_cancelled(cfg: RudpClientConfig, cancel: &AtomicBool) -> ConnectAttempt {
+    tokio::select! {
+        biased;
+        result = connect(cfg) => match result {
+            Ok(s) => ConnectAttempt::Ok(s),
+            Err(e) => ConnectAttempt::Err(e),
+        },
+        _ = async {
+            while !cancel.load(Ordering::Relaxed) {
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            }
+        } => ConnectAttempt::Cancelled,
+    }
+}
+
+/// Abort an in-flight [`open_rudp_session`] handshake (including TOFU wait).
+pub struct RudpConnectCancel {
+    cancel: Arc<AtomicBool>,
+    worker_tx: Sender<ToWorker>,
+}
+
+impl RudpConnectCancel {
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        let _ = self.worker_tx.send(ToWorker::Shutdown);
+    }
+}
+
+/// True when a failure string is a user-initiated cancel (no critical notify).
+pub fn is_cancelled_message(msg: &str) -> bool {
+    msg == tr("Connection cancelled.")
+}
 
 enum ToGtk {
     Connected,
@@ -43,35 +83,63 @@ enum ToWorker {
 }
 
 /// Open an RUDP session: TOFU (interactive), decode, present, send input.
+///
+/// `on_outcome` is invoked on the GTK thread: `Ok(())` when the session window
+/// opens, `Err(message)` when connect fails. Failures are reported only via
+/// this callback (no separate AlertDialog — those stack under the Viewer on
+/// Wayland and trap focus).
+///
+/// Returns a cancel handle while the handshake is in flight (or `None` when
+/// the attempt failed synchronously before a worker started).
 pub fn open_rudp_session(
     parent: &impl IsA<gtk::Window>,
     host: String,
     port: u16,
     username: String,
     mut password: String,
-) {
+    on_outcome: impl Fn(Result<(), String>) + 'static,
+) -> Option<RudpConnectCancel> {
     let host_key = format!("{host}:{port}");
+    let on_outcome = Rc::new(on_outcome);
     let addr: SocketAddr = match resolve_host_port(&host, port) {
         Ok(a) => a,
         Err(e) => {
-            show_alert(parent, &format!("{}: {e}", tr("Invalid host address")));
+            on_outcome(Err(format!("{}: {e}", tr("Invalid host address"))));
             password.zeroize();
-            return;
+            return None;
         }
     };
 
     let (gtk_tx, gtk_rx) = mpsc::channel::<ToGtk>();
     let (worker_tx, worker_rx) = mpsc::channel::<ToWorker>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_worker = cancel.clone();
     let pass = password.clone();
     password.zeroize();
     let host_key_worker = host_key.clone();
 
-    std::thread::Builder::new()
+    if let Err(err) = std::thread::Builder::new()
         .name("metis-viewer-rudp".into())
         .spawn(move || {
-            worker_main(addr, host_key_worker, username, pass, gtk_tx, worker_rx);
+            worker_main(
+                addr,
+                host_key_worker,
+                username,
+                pass,
+                gtk_tx,
+                worker_rx,
+                cancel_worker,
+            );
         })
-        .ok();
+    {
+        on_outcome(Err(format!("{}: {err}", tr("Could not start connection"))));
+        return None;
+    }
+
+    let handle = RudpConnectCancel {
+        cancel,
+        worker_tx: worker_tx.clone(),
+    };
 
     let parent = parent.as_ref().clone();
     let worker_tx = Rc::new(worker_tx);
@@ -88,13 +156,14 @@ pub fn open_rudp_session(
                 if !session_built.get() {
                     session_built.set(true);
                     build_session_window(&parent, worker_tx.clone(), gtk_rx.clone());
+                    on_outcome(Ok(()));
                 }
                 // Session window owns further event polling.
                 glib::ControlFlow::Break
             }
             Ok(ToGtk::Failed(msg)) => {
                 drop(rx);
-                show_alert(&parent, &msg);
+                on_outcome(Err(msg));
                 glib::ControlFlow::Break
             }
             Ok(ToGtk::TofuUnknown {
@@ -135,9 +204,16 @@ pub fn open_rudp_session(
             }
             Ok(ToGtk::Event(_)) => glib::ControlFlow::Continue,
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            Err(TryRecvError::Disconnected) => {
+                if !session_built.get() {
+                    on_outcome(Err(tr("Connection failed.")));
+                }
+                glib::ControlFlow::Break
+            }
         }
     });
+
+    Some(handle)
 }
 
 fn worker_main(
@@ -147,6 +223,7 @@ fn worker_main(
     mut password: String,
     gtk_tx: Sender<ToGtk>,
     worker_rx: Receiver<ToWorker>,
+    cancel: Arc<AtomicBool>,
 ) {
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -161,6 +238,11 @@ fn worker_main(
     };
 
     let mut session = loop {
+        if cancel.load(Ordering::SeqCst) {
+            let _ = gtk_tx.send(ToGtk::Failed(tr("Connection cancelled.")));
+            password.zeroize();
+            return;
+        }
         let cfg = RudpClientConfig {
             addr,
             host_key: host_key.clone(),
@@ -169,9 +251,14 @@ fn worker_main(
             tofu: TofuMode::Interactive,
         };
 
-        match rt.block_on(connect(cfg)) {
-            Ok(s) => break s,
-            Err(ClientError::TofuUnknown { fingerprint }) => {
+        match rt.block_on(connect_until_cancelled(cfg, &cancel)) {
+            ConnectAttempt::Ok(s) => break s,
+            ConnectAttempt::Cancelled => {
+                let _ = gtk_tx.send(ToGtk::Failed(tr("Connection cancelled.")));
+                password.zeroize();
+                return;
+            }
+            ConnectAttempt::Err(ClientError::TofuUnknown { fingerprint }) => {
                 if gtk_tx
                     .send(ToGtk::TofuUnknown {
                         fingerprint,
@@ -185,12 +272,13 @@ fn worker_main(
                 match wait_tofu_decision(&worker_rx) {
                     TofuWait::Accept => continue,
                     TofuWait::Decline | TofuWait::Shutdown => {
+                        let _ = gtk_tx.send(ToGtk::Failed(tr("Connection cancelled.")));
                         password.zeroize();
                         return;
                     }
                 }
             }
-            Err(ClientError::TofuMismatch { got, pinned }) => {
+            ConnectAttempt::Err(ClientError::TofuMismatch { got, pinned }) => {
                 if gtk_tx
                     .send(ToGtk::TofuMismatch {
                         got,
@@ -205,12 +293,13 @@ fn worker_main(
                 match wait_tofu_decision(&worker_rx) {
                     TofuWait::Accept => continue,
                     TofuWait::Decline | TofuWait::Shutdown => {
+                        let _ = gtk_tx.send(ToGtk::Failed(tr("Connection cancelled.")));
                         password.zeroize();
                         return;
                     }
                 }
             }
-            Err(e) => {
+            ConnectAttempt::Err(e) => {
                 let _ = gtk_tx.send(ToGtk::Failed(friendly_connect_error(&e)));
                 password.zeroize();
                 return;
@@ -218,6 +307,11 @@ fn worker_main(
         }
     };
     password.zeroize();
+
+    if cancel.load(Ordering::SeqCst) {
+        let _ = gtk_tx.send(ToGtk::Failed(tr("Connection cancelled.")));
+        return;
+    }
 
     let _ = gtk_tx.send(ToGtk::Connected);
     tracing::info!(id = %session.session_id(), "metis-viewer: RUDP SessionOk");
@@ -288,6 +382,15 @@ fn friendly_connect_error(err: &ClientError) -> String {
         }
         ClientError::Rejected { reason } => {
             format!("{}: {reason}", tr("Connection rejected"))
+        }
+        ClientError::Message(m)
+            if m.contains("timed out")
+                || m.contains("ConnectionRefused")
+                || m.contains("connection refused")
+                || m.to_ascii_lowercase().contains("unreachable") =>
+        {
+            tr("Could not reach Metis Remote. Enable it on the host \
+                 (Settings → Remote) and check the address/port.")
         }
         ClientError::Message(m)
             if m.contains("connection lost")
@@ -753,14 +856,4 @@ async fn clear_pin_dialog(parent: &gtk::Window, got: &str, pinned: &str) -> bool
         .cancel_button(0)
         .build();
     matches!(dialog.choose_future(Some(parent)).await, Ok(1))
-}
-
-fn show_alert(parent: &impl IsA<gtk::Window>, msg: &str) {
-    let d = gtk::AlertDialog::builder()
-        .modal(true)
-        .message(tr("Metis Remote"))
-        .detail(msg)
-        .buttons([tr("OK")])
-        .build();
-    d.show(Some(parent));
 }

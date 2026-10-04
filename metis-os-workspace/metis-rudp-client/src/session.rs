@@ -139,11 +139,22 @@ pub async fn connect(cfg: RudpClientConfig) -> Result<RudpSession, ClientError> 
     .map_err(|e| ClientError::msg(format!("client endpoint: {e}")))?;
     endpoint.set_default_client_config(client_config);
 
-    let conn = endpoint
+    // Bound handshake so a host with Metis Remote disabled fails fast instead of
+    // hanging on Quinn's default idle timeout with no Viewer feedback.
+    const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+    let connecting = endpoint
         .connect(cfg.addr, "localhost")
-        .map_err(|e| ClientError::msg(format!("connect: {e}")))?
-        .await
-        .map_err(|e| map_handshake_err(e, &verifier))?;
+        .map_err(|e| ClientError::msg(format!("connect: {e}")))?;
+    let conn = match tokio::time::timeout(HANDSHAKE_TIMEOUT, connecting).await {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return Err(map_handshake_err(e, &verifier)),
+        Err(_) => {
+            return Err(ClientError::msg(format!(
+                "timed out after {}s — is Metis Remote enabled on the host?",
+                HANDSHAKE_TIMEOUT.as_secs()
+            )));
+        }
+    };
 
     let (mut send, mut recv) = conn
         .open_bi()

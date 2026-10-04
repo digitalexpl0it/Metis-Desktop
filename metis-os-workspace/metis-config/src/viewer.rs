@@ -447,45 +447,89 @@ pub fn save_viewer_config(cfg: &ViewerConfig) -> std::io::Result<()> {
     std::fs::write(viewer_config_path(), json)
 }
 
+/// Same wire endpoint: protocol + host + port + username (label ignored).
 fn same_endpoint(a: &ViewerHost, b: &ViewerHost) -> bool {
-    a.host == b.host && a.port == b.port && a.username == b.username
+    a.protocol == b.protocol && a.host == b.host && a.port == b.port && a.username == b.username
 }
 
-/// Push `entry` to the front of recent hosts (dedupe by host+port+user).
-/// Preserves an existing label when the new entry's label is empty; keeps prior
-/// options when the new entry still has defaults and a prior custom set exists.
-pub fn remember_host(entry: ViewerHost) -> std::io::Result<()> {
-    let mut cfg = load_viewer_config();
-    let prior = cfg
-        .recent
-        .iter()
-        .find(|h| same_endpoint(h, &entry))
-        .cloned();
-    cfg.recent.retain(|h| !same_endpoint(h, &entry));
-    let mut stored = entry;
+/// Distinct saved card: endpoint plus display label.
+fn same_saved_host(a: &ViewerHost, b: &ViewerHost) -> bool {
+    same_endpoint(a, b) && a.label.trim() == b.label.trim()
+}
+
+fn matches_previous_card(h: &ViewerHost, previous: &ViewerHost) -> bool {
+    if previous.label.trim().is_empty() {
+        same_endpoint(h, previous) && h.label.trim().is_empty()
+    } else {
+        same_saved_host(h, previous)
+    }
+}
+
+fn merge_remembered(prior: Option<&ViewerHost>, mut stored: ViewerHost) -> ViewerHost {
     if stored.label.is_empty()
-        && let Some(p) = &prior
+        && let Some(p) = prior
     {
         stored.label = p.label.clone();
     }
     if stored.options.is_default()
-        && let Some(p) = &prior
+        && let Some(p) = prior
         && !p.options.is_default()
     {
         stored.options = p.options.clone();
     }
+    stored
+}
+
+fn push_recent(cfg: &mut ViewerConfig, stored: ViewerHost) {
     cfg.recent.insert(0, stored);
     if cfg.recent.len() > MAX_RECENT {
         cfg.recent.truncate(MAX_RECENT);
     }
+}
+
+/// Save a host card into `viewer.json`.
+///
+/// - `previous = Some(...)`: replace that specific card (edit / reconnect).
+/// - `previous = None`: add a new card. Only an exact match (same endpoint and
+///   label) is replaced — a second card for the same server is allowed.
+///
+/// When `entry.label` is empty, an existing label on the replaced/matched card
+/// is preserved. Default options likewise inherit prior custom options.
+pub fn remember_host(entry: ViewerHost, previous: Option<&ViewerHost>) -> std::io::Result<()> {
+    let mut cfg = load_viewer_config();
+    let prior = if let Some(prev) = previous {
+        let found = cfg
+            .recent
+            .iter()
+            .find(|h| matches_previous_card(h, prev))
+            .cloned();
+        cfg.recent.retain(|h| !matches_previous_card(h, prev));
+        found
+    } else {
+        let found = cfg
+            .recent
+            .iter()
+            .find(|h| same_saved_host(h, &entry))
+            .cloned();
+        cfg.recent.retain(|h| !same_saved_host(h, &entry));
+        found
+    };
+    let stored = merge_remembered(prior.as_ref().or(previous), entry);
+    push_recent(&mut cfg, stored);
     save_viewer_config(&cfg)
 }
 
-/// Remove a recent host matching host+port+user.
+/// Remove a recent host card (protocol+host+port+user+label when labeled;
+/// unlabeled cards match the endpoint only).
 pub fn remove_recent(entry: &ViewerHost) -> std::io::Result<()> {
     let mut cfg = load_viewer_config();
     let before = cfg.recent.len();
-    cfg.recent.retain(|h| !same_endpoint(h, entry));
+    if entry.label.trim().is_empty() {
+        cfg.recent
+            .retain(|h| !(same_endpoint(h, entry) && h.label.trim().is_empty()));
+    } else {
+        cfg.recent.retain(|h| !same_saved_host(h, entry));
+    }
     if cfg.recent.len() == before {
         return Ok(());
     }
@@ -568,26 +612,64 @@ mod tests {
             protocol: ViewerProtocol::Rdp,
             options: options.clone(),
         };
-        remember_host(entry.clone()).unwrap();
+        remember_host(entry.clone(), None).unwrap();
         let cfg = load_viewer_config();
         assert_eq!(cfg.recent.len(), 1);
         assert_eq!(cfg.recent[0], entry);
 
-        remember_host(ViewerHost {
-            host: "192.168.1.10".into(),
-            port: 3389,
-            username: "alice".into(),
-            label: String::new(),
-            protocol: ViewerProtocol::Rdp,
-            options: ViewerRdpOptions::default(),
-        })
+        // Reconnect / edit same card with empty label preserves label + options.
+        remember_host(
+            ViewerHost {
+                host: "192.168.1.10".into(),
+                port: 3389,
+                username: "alice".into(),
+                label: String::new(),
+                protocol: ViewerProtocol::Rdp,
+                options: ViewerRdpOptions::default(),
+            },
+            Some(&entry),
+        )
         .unwrap();
         let cfg = load_viewer_config();
+        assert_eq!(cfg.recent.len(), 1);
         assert_eq!(cfg.recent[0].label, "Home PC");
         assert!(cfg.recent[0].options.clipboard);
         assert_eq!(cfg.recent[0].options.cert, ViewerCertPolicy::Tofu);
 
+        // Add host with same server but a different label → second card.
+        let office = ViewerHost {
+            host: "192.168.1.10".into(),
+            port: 3389,
+            username: "alice".into(),
+            label: "Office".into(),
+            protocol: ViewerProtocol::Rdp,
+            options: ViewerRdpOptions::default(),
+        };
+        remember_host(office.clone(), None).unwrap();
+        let cfg = load_viewer_config();
+        assert_eq!(cfg.recent.len(), 2);
+        assert_eq!(cfg.recent[0], office);
+
+        // Metis Remote on the same host:port:user is a distinct card.
+        let rudp = ViewerHost {
+            host: "192.168.1.10".into(),
+            port: 3389,
+            username: "alice".into(),
+            label: "Home PC".into(),
+            protocol: ViewerProtocol::Rudp,
+            options: ViewerRdpOptions::default(),
+        };
+        remember_host(rudp.clone(), None).unwrap();
+        let cfg = load_viewer_config();
+        assert_eq!(cfg.recent.len(), 3);
+
         remove_recent(&entry).unwrap();
+        let cfg = load_viewer_config();
+        assert_eq!(cfg.recent.len(), 2);
+        assert!(!cfg.recent.iter().any(|h| same_saved_host(h, &entry)));
+
+        remove_recent(&office).unwrap();
+        remove_recent(&rudp).unwrap();
         let cfg = load_viewer_config();
         assert!(cfg.recent.is_empty());
 

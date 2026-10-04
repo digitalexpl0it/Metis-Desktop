@@ -9,6 +9,19 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- **Viewer RUDP connect feedback** — 8 s handshake timeout with a clear
+  “enable Metis Remote” message; inline status + spinner while connecting
+  (shows label/host:port); cancellable via the status X; connecting host card
+  greys out until success/failure/cancel; failures stay in the dismissible
+  status bar (no under-window AlertDialog). Host-card click connects without
+  opening the edit panel (Edit icon still does).
+- **Viewer saved hosts** — Add host creates a new card even when the server
+  matches an existing one (distinct labels); edit/reconnect updates only that
+  card. Protocol is part of host identity (RDP vs Metis Remote no longer collide).
+- **Screenshot Copy / Copy and save** — stage PNGs under
+  `$XDG_RUNTIME_DIR/metis/clipboard/` before `SetClipboard` so they pass the
+  image-path allowlist and appear in the edge-bar clipboard manager; surface
+  compositor reject errors instead of ignoring them.
 - **CI / build deps** — install `libasound2-dev` so Viewer `cpal` (`alsa-sys`)
   links in Debian 13 / Ubuntu 26.04 containers and local dep scripts.
 

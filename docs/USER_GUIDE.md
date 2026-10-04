@@ -1122,6 +1122,9 @@ not ship Win/mac clients yet; that doc is the integration contract.
    `metis-viewer --rudp --host HOST --port 7843 --user "$USER"`.
 2. Choose protocol **Metis Remote** in the Viewer hosts UI (port defaults to **7843**).
 3. Enter the PAM password (never saved). Trust the host fingerprint on first connect (TOFU).
+   Click a saved host to connect; use the pencil icon to edit. While connecting,
+   that host card greys out and the status line shows a spinner (with an X to
+   cancel); failures stay inline there (no separate modal).
 
 Metis Remote accepts pointer and keyboard on the Quinn control stream (absolute /
 relative pointer, buttons, scroll, keys). **Session lock:** if the host uses the

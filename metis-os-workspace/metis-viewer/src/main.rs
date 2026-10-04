@@ -114,6 +114,8 @@ fn parse_cli() -> CliPrefill {
 }
 
 type ConnectFn = Rc<dyn Fn()>;
+type CancelFn = Rc<dyn Fn()>;
+type CancelSlot = Rc<RefCell<Option<CancelFn>>>;
 type RefreshFn = Rc<dyn Fn()>;
 
 fn build_ui(app: &gtk::Application, prefill: CliPrefill) {
@@ -386,6 +388,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
 
     // When editing a saved host, migrate the keyring item if the endpoint changes.
     let editing_secret: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    // Card being edited/reconnected — `None` means Add host (always insert new).
+    let editing_host: Rc<RefCell<Option<ViewerHost>>> = Rc::new(RefCell::new(None));
     // True after the user types in the password field — async keyring fill must
     // never overwrite in-progress keystrokes (that looked like a 5s stutter).
     let password_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(false));
@@ -498,20 +502,62 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         });
     }
 
+    // Cancel / dismiss: while connecting, X aborts; otherwise it clears the banner.
+    let cancel_action: CancelSlot = Rc::new(RefCell::new(None));
+    // Greys out the matching host card while a connect is in flight.
+    let connecting_key: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
     // Always visible — card connects close the panel, so status must live outside it.
+    let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    status_row.add_css_class("metis-viewer-status-row");
+    status_row.set_visible(false);
+    let connect_spinner = gtk::Spinner::new();
+    connect_spinner.set_visible(false);
+    connect_spinner.set_valign(gtk::Align::Center);
+    let status_banner = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    status_banner.add_css_class("metis-viewer-status-banner");
+    status_banner.set_hexpand(true);
     let status = gtk::Label::new(None);
     status.set_xalign(0.0);
     status.set_wrap(true);
+    status.set_hexpand(true);
     status.add_css_class("metis-viewer-status");
-    status.set_visible(false);
+    let status_dismiss = gtk::Button::from_icon_name("window-close-symbolic");
+    status_dismiss.set_has_frame(false);
+    status_dismiss.set_tooltip_text(Some(&tr("Dismiss")));
+    status_dismiss.add_css_class("flat");
+    status_dismiss.add_css_class("metis-viewer-status-dismiss");
+    status_dismiss.set_valign(gtk::Align::Start);
+    status_dismiss.set_visible(false);
+    status_banner.append(&status);
+    status_banner.append(&status_dismiss);
+    status_row.append(&connect_spinner);
+    status_row.append(&status_banner);
+    {
+        let status_row = status_row.clone();
+        let connect_spinner = connect_spinner.clone();
+        let cancel_action = cancel_action.clone();
+        status_dismiss.connect_clicked(move |btn| {
+            if let Some(cancel) = cancel_action.borrow().clone() {
+                cancel();
+                return;
+            }
+            clear_status(&status_row, &connect_spinner);
+            btn.set_visible(false);
+        });
+    }
     if !freerdp_ok {
         set_status(
+            &status_row,
+            &status_banner,
             &status,
+            &connect_spinner,
+            &status_dismiss,
             &tr("Connect disabled — install FreeRDP first."),
             StatusKind::Error,
         );
     }
-    page.append(&status);
+    page.append(&status_row);
 
     let hosts_scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -588,10 +634,12 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let revealer = revealer.clone();
         let add_btn = add_btn.clone();
         let editing_secret = editing_secret.clone();
+        let editing_host = editing_host.clone();
         move || {
             revealer.set_reveal_child(false);
             add_btn.set_label(&tr("Add host"));
             *editing_secret.borrow_mut() = None;
+            *editing_host.borrow_mut() = None;
         }
     });
 
@@ -600,6 +648,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let close_panel = close_panel.clone();
         let pass_entry = pass_entry.clone();
         let editing_secret = editing_secret.clone();
+        let editing_host = editing_host.clone();
         let password_dirty = password_dirty.clone();
         let suppress_pass_dirty = suppress_pass_dirty.clone();
         add_btn.connect_clicked(move |_| {
@@ -608,6 +657,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             } else {
                 // Fresh "Add host" — don't keep a previous edit's password.
                 *editing_secret.borrow_mut() = None;
+                *editing_host.borrow_mut() = None;
                 password_dirty.set(false);
                 suppress_pass_dirty.set(true);
                 pass_entry.set_text("");
@@ -625,6 +675,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     let connect_busy = Rc::new(RefCell::new(false));
     let watched_child: Rc<RefCell<Option<Child>>> = Rc::new(RefCell::new(None));
     let connect_slot: Rc<RefCell<Option<ConnectFn>>> = Rc::new(RefCell::new(None));
+    let rudp_cancel: Rc<RefCell<Option<rudp_session::RudpConnectCancel>>> =
+        Rc::new(RefCell::new(None));
 
     let refresh_hosts: RefreshFn = {
         let hosts_sections = hosts_sections.clone();
@@ -642,10 +694,13 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let open_panel = open_panel.clone();
         let options_ui = options_ui.clone();
         let editing_secret = editing_secret.clone();
+        let editing_host = editing_host.clone();
         let password_dirty = password_dirty.clone();
         let suppress_pass_dirty = suppress_pass_dirty.clone();
+        let connecting_key = connecting_key.clone();
         Rc::new(move || {
             let on_connect = connect_slot.borrow().clone();
+            let connecting = connecting_key.borrow().clone();
             refill_hosts_list(
                 &hosts_sections,
                 &hosts_empty,
@@ -660,10 +715,12 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 &protocol_dropdown,
                 options_ui.clone(),
                 editing_secret.clone(),
+                editing_host.clone(),
                 password_dirty.clone(),
                 suppress_pass_dirty.clone(),
                 on_connect,
                 Some(open_panel.clone()),
+                connecting.as_deref(),
             );
         })
     };
@@ -711,6 +768,10 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let label_entry = label_entry.clone();
         let pass_entry = pass_entry.clone();
         let status = status.clone();
+        let status_row = status_row.clone();
+        let status_banner = status_banner.clone();
+        let connect_spinner = connect_spinner.clone();
+        let status_dismiss = status_dismiss.clone();
         let watched_child = watched_child.clone();
         let refresh_hosts = refresh_hosts.clone();
         let close_panel = close_panel.clone();
@@ -718,8 +779,12 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let options_ui = options_ui.clone();
         let protocol_dropdown = protocol_dropdown.clone();
         let editing_secret = editing_secret.clone();
+        let editing_host = editing_host.clone();
         let password_dirty = password_dirty.clone();
         let suppress_pass_dirty = suppress_pass_dirty.clone();
+        let connecting_key = connecting_key.clone();
+        let cancel_action = cancel_action.clone();
+        let rudp_cancel = rudp_cancel.clone();
 
         move || {
             if *connect_busy.borrow() {
@@ -732,7 +797,11 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             };
             if protocol == ViewerProtocol::Rdp && freerdp::resolve_freerdp().is_none() {
                 set_status(
+                    &status_row,
+                    &status_banner,
                     &status,
+                    &connect_spinner,
+                    &status_dismiss,
                     &freerdp::freerdp_install_hint_full(),
                     StatusKind::Error,
                 );
@@ -752,7 +821,11 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             let port: u16 = match port_text.trim().parse() {
                 Ok(0) | Err(_) => {
                     set_status(
+                        &status_row,
+                        &status_banner,
                         &status,
+                        &connect_spinner,
+                        &status_dismiss,
                         &tr("Enter a valid port (1–65535)."),
                         StatusKind::Error,
                     );
@@ -765,7 +838,11 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             };
             if host.trim().is_empty() {
                 set_status(
+                    &status_row,
+                    &status_banner,
                     &status,
+                    &connect_spinner,
+                    &status_dismiss,
                     &tr("Enter a host name or IP address."),
                     StatusKind::Error,
                 );
@@ -793,22 +870,31 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 suppress_pass_dirty.set(false);
                 password_dirty.set(false);
             }
-            let previous = editing_secret.borrow().clone();
+            let previous_secret = editing_secret.borrow().clone();
+            let previous_host = editing_host.borrow().clone();
             if let Err(e) =
-                credentials::save_host_password(&account, &password, previous.as_deref())
+                credentials::save_host_password(&account, &password, previous_secret.as_deref())
             {
                 tracing::warn!("viewer keyring save failed: {e}");
             }
-            *editing_secret.borrow_mut() = Some(account);
-            if let Err(e) = remember_host(entry) {
+            *editing_secret.borrow_mut() = Some(account.clone());
+            if let Err(e) = remember_host(entry.clone(), previous_host.as_ref()) {
                 tracing::warn!("viewer.json save failed: {e}");
             }
+            *editing_host.borrow_mut() = Some(entry.clone());
+            *connecting_key.borrow_mut() = Some(account.clone());
             refresh_hosts();
 
             if protocol == ViewerProtocol::Rudp {
                 if username.trim().is_empty() {
+                    *connecting_key.borrow_mut() = None;
+                    refresh_hosts();
                     set_status(
+                        &status_row,
+                        &status_banner,
                         &status,
+                        &connect_spinner,
+                        &status_dismiss,
                         &tr("Enter a username for Metis Remote."),
                         StatusKind::Error,
                     );
@@ -818,8 +904,14 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     return;
                 }
                 if password.is_empty() {
+                    *connecting_key.borrow_mut() = None;
+                    refresh_hosts();
                     set_status(
+                        &status_row,
+                        &status_banner,
                         &status,
+                        &connect_spinner,
+                        &status_dismiss,
                         &tr("Enter the host PAM password for Metis Remote."),
                         StatusKind::Error,
                     );
@@ -828,29 +920,95 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     connect_btn.set_sensitive(true);
                     return;
                 }
-                if let Some(parent) = host_entry.root().and_downcast::<gtk::Window>() {
-                    rudp_session::open_rudp_session(
-                        &parent,
-                        host.trim().to_string(),
-                        port,
-                        username.trim().to_string(),
-                        password,
-                    );
+                let Some(parent) = host_entry.root().and_downcast::<gtk::Window>() else {
+                    *connecting_key.borrow_mut() = None;
+                    refresh_hosts();
                     set_status(
+                        &status_row,
+                        &status_banner,
                         &status,
-                        &tr("Opening Metis Remote session…"),
-                        StatusKind::Ok,
-                    );
-                    close_panel();
-                } else {
-                    set_status(
-                        &status,
+                        &connect_spinner,
+                        &status_dismiss,
                         &tr("Could not open session window."),
                         StatusKind::Error,
                     );
+                    *connect_busy.borrow_mut() = false;
+                    connect_btn.set_sensitive(true);
+                    return;
+                };
+
+                set_connecting(
+                    &status_row,
+                    &status_banner,
+                    &status,
+                    &connect_spinner,
+                    &status_dismiss,
+                    &format!(
+                        "{} {}…",
+                        tr("Connecting to"),
+                        connect_target_display(&label, host.trim(), port)
+                    ),
+                );
+                // Keep the edit panel closed for card-click connect; status lives
+                // outside it. Only Edit / Add host / validation gaps open the panel.
+
+                let status_cb = status.clone();
+                let status_row_cb = status_row.clone();
+                let status_banner_cb = status_banner.clone();
+                let spinner_cb = connect_spinner.clone();
+                let status_dismiss_cb = status_dismiss.clone();
+                let busy = connect_busy.clone();
+                let btn = connect_btn.clone();
+                let close = close_panel.clone();
+                let connecting_key_cb = connecting_key.clone();
+                let refresh_cb = refresh_hosts.clone();
+                let cancel_action_cb = cancel_action.clone();
+                let rudp_cancel_cb = rudp_cancel.clone();
+                let handle = rudp_session::open_rudp_session(
+                    &parent,
+                    host.trim().to_string(),
+                    port,
+                    username.trim().to_string(),
+                    password,
+                    move |outcome| {
+                        *rudp_cancel_cb.borrow_mut() = None;
+                        *cancel_action_cb.borrow_mut() = None;
+                        *connecting_key_cb.borrow_mut() = None;
+                        refresh_cb();
+                        *busy.borrow_mut() = false;
+                        btn.set_sensitive(true);
+                        match outcome {
+                            Ok(()) => {
+                                clear_status(&status_row_cb, &spinner_cb);
+                                close();
+                            }
+                            Err(msg) if rudp_session::is_cancelled_message(&msg) => {
+                                clear_status(&status_row_cb, &spinner_cb);
+                            }
+                            Err(msg) => {
+                                set_status(
+                                    &status_row_cb,
+                                    &status_banner_cb,
+                                    &status_cb,
+                                    &spinner_cb,
+                                    &status_dismiss_cb,
+                                    &msg,
+                                    StatusKind::Error,
+                                );
+                                notify_desktop(&tr("Connection failed"), &msg, "critical");
+                            }
+                        }
+                    },
+                );
+                *rudp_cancel.borrow_mut() = handle;
+                {
+                    let rudp_cancel = rudp_cancel.clone();
+                    *cancel_action.borrow_mut() = Some(Rc::new(move || {
+                        if let Some(h) = rudp_cancel.borrow().as_ref() {
+                            h.cancel();
+                        }
+                    }) as Rc<dyn Fn()>);
                 }
-                *connect_busy.borrow_mut() = false;
-                connect_btn.set_sensitive(true);
                 return;
             }
 
@@ -867,25 +1025,79 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 options: options.clone(),
             };
 
+            let target = connect_target_display(&label, host.trim(), port);
+            set_connecting(
+                &status_row,
+                &status_banner,
+                &status,
+                &connect_spinner,
+                &status_dismiss,
+                &format!("{} {target}…", tr("Connecting to")),
+            );
+
             match freerdp::spawn_freerdp(req) {
                 Ok(spawned) => {
-                    set_status(
+                    set_connecting(
+                        &status_row,
+                        &status_banner,
                         &status,
-                        &format!("{} {}", tr("Connecting with"), spawned.binary.display()),
-                        StatusKind::Ok,
+                        &connect_spinner,
+                        &status_dismiss,
+                        &format!(
+                            "{} {target} ({})",
+                            tr("Connecting to"),
+                            spawned.binary.display()
+                        ),
                     );
                     close_panel();
 
                     let started = Instant::now();
                     *watched_child.borrow_mut() = Some(spawned.child);
+                    let rdp_cancelled = Rc::new(Cell::new(false));
+                    {
+                        let watched = watched_child.clone();
+                        let cancelled = rdp_cancelled.clone();
+                        let busy = connect_busy.clone();
+                        let btn = connect_btn.clone();
+                        let connecting_key = connecting_key.clone();
+                        let refresh_hosts = refresh_hosts.clone();
+                        let status_row = status_row.clone();
+                        let connect_spinner = connect_spinner.clone();
+                        let cancel_slot = cancel_action.clone();
+                        let cancel_clear = cancel_action.clone();
+                        *cancel_slot.borrow_mut() = Some(Rc::new(move || {
+                            cancelled.set(true);
+                            if let Some(mut child) = watched.borrow_mut().take() {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                            *cancel_clear.borrow_mut() = None;
+                            *connecting_key.borrow_mut() = None;
+                            refresh_hosts();
+                            clear_status(&status_row, &connect_spinner);
+                            *busy.borrow_mut() = false;
+                            btn.set_sensitive(freerdp::resolve_freerdp().is_some());
+                        })
+                            as Rc<dyn Fn()>);
+                    }
                     let watched = watched_child.clone();
                     let status_watch = status.clone();
+                    let status_row_watch = status_row.clone();
+                    let status_banner_watch = status_banner.clone();
+                    let spinner_watch = connect_spinner.clone();
+                    let status_dismiss_watch = status_dismiss.clone();
                     let busy = connect_busy.clone();
                     let btn = connect_btn.clone();
-                    let reopen = open_panel.clone();
+                    let connecting_key_watch = connecting_key.clone();
+                    let refresh_watch = refresh_hosts.clone();
+                    let cancel_action_watch = cancel_action.clone();
+                    let rdp_cancelled = rdp_cancelled.clone();
                     glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
                         let mut slot = watched.borrow_mut();
                         let Some(child) = slot.as_mut() else {
+                            *cancel_action_watch.borrow_mut() = None;
+                            *connecting_key_watch.borrow_mut() = None;
+                            refresh_watch();
                             *busy.borrow_mut() = false;
                             btn.set_sensitive(freerdp::resolve_freerdp().is_some());
                             return glib::ControlFlow::Break;
@@ -894,16 +1106,33 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                             freerdp::EarlyWatch::Running => glib::ControlFlow::Continue,
                             freerdp::EarlyWatch::Done => {
                                 *slot = None;
-                                status_watch.set_visible(false);
+                                *cancel_action_watch.borrow_mut() = None;
+                                *connecting_key_watch.borrow_mut() = None;
+                                refresh_watch();
+                                clear_status(&status_row_watch, &spinner_watch);
                                 *busy.borrow_mut() = false;
                                 btn.set_sensitive(freerdp::resolve_freerdp().is_some());
                                 glib::ControlFlow::Break
                             }
                             freerdp::EarlyWatch::Failed(msg) => {
                                 *slot = None;
-                                set_status(&status_watch, &msg, StatusKind::Error);
-                                notify_desktop(&tr("Connection failed"), &msg, "critical");
-                                reopen();
+                                *cancel_action_watch.borrow_mut() = None;
+                                *connecting_key_watch.borrow_mut() = None;
+                                refresh_watch();
+                                if rdp_cancelled.get() {
+                                    clear_status(&status_row_watch, &spinner_watch);
+                                } else {
+                                    set_status(
+                                        &status_row_watch,
+                                        &status_banner_watch,
+                                        &status_watch,
+                                        &spinner_watch,
+                                        &status_dismiss_watch,
+                                        &msg,
+                                        StatusKind::Error,
+                                    );
+                                    notify_desktop(&tr("Connection failed"), &msg, "critical");
+                                }
                                 *busy.borrow_mut() = false;
                                 btn.set_sensitive(freerdp::resolve_freerdp().is_some());
                                 glib::ControlFlow::Break
@@ -912,9 +1141,19 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     });
                 }
                 Err(e) => {
-                    set_status(&status, &e, StatusKind::Error);
+                    *connecting_key.borrow_mut() = None;
+                    *cancel_action.borrow_mut() = None;
+                    refresh_hosts();
+                    set_status(
+                        &status_row,
+                        &status_banner,
+                        &status,
+                        &connect_spinner,
+                        &status_dismiss,
+                        &e,
+                        StatusKind::Error,
+                    );
                     notify_desktop(&tr("Connection failed"), &e, "critical");
-                    open_panel();
                     *connect_busy.borrow_mut() = false;
                     connect_btn.set_sensitive(freerdp::resolve_freerdp().is_some());
                 }
@@ -934,12 +1173,17 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let user_entry = user_entry.clone();
         let label_entry = label_entry.clone();
         let status = status.clone();
+        let status_row = status_row.clone();
+        let status_banner = status_banner.clone();
+        let connect_spinner = connect_spinner.clone();
+        let status_dismiss = status_dismiss.clone();
         let refresh_hosts = refresh_hosts.clone();
         let close_panel = close_panel.clone();
         let options_ui = options_ui.clone();
         let protocol_dropdown = protocol_dropdown.clone();
         let pass_entry = pass_entry.clone();
         let editing_secret = editing_secret.clone();
+        let editing_host = editing_host.clone();
         save_btn.connect_clicked(move |_| {
             let host = host_entry.text();
             let port_text = port_entry.text();
@@ -949,7 +1193,11 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             let port: u16 = match port_text.trim().parse() {
                 Ok(0) | Err(_) => {
                     set_status(
+                        &status_row,
+                        &status_banner,
                         &status,
+                        &connect_spinner,
+                        &status_dismiss,
                         &tr("Enter a valid port (1–65535)."),
                         StatusKind::Error,
                     );
@@ -959,7 +1207,11 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
             };
             if host.trim().is_empty() {
                 set_status(
+                    &status_row,
+                    &status_banner,
                     &status,
+                    &connect_spinner,
+                    &status_dismiss,
                     &tr("Enter a host name or IP address."),
                     StatusKind::Error,
                 );
@@ -978,21 +1230,32 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 options: options_ui.collect(),
             };
             let account = credentials::secret_account(&entry);
-            let previous = editing_secret.borrow().clone();
+            let previous_secret = editing_secret.borrow().clone();
+            let previous_host = editing_host.borrow().clone();
             if let Err(e) =
-                credentials::save_host_password(&account, &password, previous.as_deref())
+                credentials::save_host_password(&account, &password, previous_secret.as_deref())
             {
                 set_status(
+                    &status_row,
+                    &status_banner,
                     &status,
+                    &connect_spinner,
+                    &status_dismiss,
                     &tr(&format!("Could not save password to keyring: {e}")),
                     StatusKind::Error,
                 );
                 return;
             }
-            match remember_host(entry) {
+            match remember_host(entry.clone(), previous_host.as_ref()) {
                 Ok(()) => {
+                    *editing_secret.borrow_mut() = Some(account);
+                    *editing_host.borrow_mut() = Some(entry);
                     set_status(
+                        &status_row,
+                        &status_banner,
                         &status,
+                        &connect_spinner,
+                        &status_dismiss,
                         &tr("Host saved (password in system keyring)."),
                         StatusKind::Ok,
                     );
@@ -1000,7 +1263,11 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     close_panel();
                 }
                 Err(e) => set_status(
+                    &status_row,
+                    &status_banner,
                     &status,
+                    &connect_spinner,
+                    &status_dismiss,
                     &tr(&format!("Could not save host: {e}")),
                     StatusKind::Error,
                 ),
@@ -1194,16 +1461,68 @@ enum StatusKind {
     Error,
 }
 
-fn set_status(label: &gtk::Label, text: &str, kind: StatusKind) {
-    label.set_text(text);
-    label.set_visible(true);
+fn stop_connect_spinner(spinner: &gtk::Spinner) {
+    spinner.stop();
+    spinner.set_visible(false);
+}
+
+fn clear_banner_classes(banner: &gtk::Box, label: &gtk::Label) {
+    banner.remove_css_class("error");
+    banner.remove_css_class("ok");
     label.remove_css_class("error");
     label.remove_css_class("ok");
     label.remove_css_class("metis-viewer-ready");
+}
+
+fn set_connecting(
+    row: &gtk::Box,
+    banner: &gtk::Box,
+    label: &gtk::Label,
+    spinner: &gtk::Spinner,
+    dismiss: &gtk::Button,
+    text: &str,
+) {
+    spinner.set_visible(true);
+    spinner.start();
+    dismiss.set_tooltip_text(Some(&tr("Cancel connection")));
+    dismiss.set_visible(true);
+    label.set_text(text);
+    row.set_visible(true);
+    clear_banner_classes(banner, label);
+    banner.add_css_class("ok");
+    label.add_css_class("ok");
+}
+
+fn set_status(
+    row: &gtk::Box,
+    banner: &gtk::Box,
+    label: &gtk::Label,
+    spinner: &gtk::Spinner,
+    dismiss: &gtk::Button,
+    text: &str,
+    kind: StatusKind,
+) {
+    stop_connect_spinner(spinner);
+    dismiss.set_tooltip_text(Some(&tr("Dismiss")));
+    dismiss.set_visible(true);
+    label.set_text(text);
+    row.set_visible(true);
+    clear_banner_classes(banner, label);
     match kind {
-        StatusKind::Error => label.add_css_class("error"),
-        StatusKind::Ok => label.add_css_class("ok"),
+        StatusKind::Error => {
+            banner.add_css_class("error");
+            label.add_css_class("error");
+        }
+        StatusKind::Ok => {
+            banner.add_css_class("ok");
+            label.add_css_class("ok");
+        }
     }
+}
+
+fn clear_status(row: &gtk::Box, spinner: &gtk::Spinner) {
+    stop_connect_spinner(spinner);
+    row.set_visible(false);
 }
 
 /// Desktop notification via `notify-send` so Metis Notification Center picks it up.
@@ -1251,6 +1570,7 @@ fn apply_host_to_form(
     protocol_dropdown: &gtk::DropDown,
     options_ui: &OptionsUi,
     editing_secret: &Rc<RefCell<Option<String>>>,
+    editing_host: &Rc<RefCell<Option<ViewerHost>>>,
     password_dirty: &Rc<Cell<bool>>,
     suppress_pass_dirty: &Rc<Cell<bool>>,
 ) {
@@ -1265,6 +1585,7 @@ fn apply_host_to_form(
     options_ui.apply_host(entry);
     let account = credentials::secret_account(entry);
     *editing_secret.borrow_mut() = Some(account.clone());
+    *editing_host.borrow_mut() = Some(entry.clone());
     // Clear without marking dirty, then fill from cache/keyring off-thread.
     password_dirty.set(false);
     suppress_pass_dirty.set(true);
@@ -1293,6 +1614,18 @@ fn host_matches_search(entry: &ViewerHost, query: &str) -> bool {
     .join(" ")
     .to_lowercase();
     hay.contains(&q)
+}
+
+/// Status-line target: `"Label (host:port)"` when a label is set, else `"host:port"`.
+fn connect_target_display(label: &str, host: &str, port: u16) -> String {
+    let endpoint = format!("{host}:{port}");
+    let label = label.trim();
+    if label.is_empty() || label.eq_ignore_ascii_case(&endpoint) || label.eq_ignore_ascii_case(host)
+    {
+        endpoint
+    } else {
+        format!("{label} ({endpoint})")
+    }
 }
 
 fn host_title_meta(entry: &ViewerHost) -> (String, String) {
@@ -1334,10 +1667,12 @@ fn refill_hosts_list(
     protocol_dropdown: &gtk::DropDown,
     options_ui: Rc<OptionsUi>,
     editing_secret: Rc<RefCell<Option<String>>>,
+    editing_host: Rc<RefCell<Option<ViewerHost>>>,
     password_dirty: Rc<Cell<bool>>,
     suppress_pass_dirty: Rc<Cell<bool>>,
     on_connect: Option<ConnectFn>,
     open_panel: Option<Rc<dyn Fn()>>,
+    connecting_key: Option<&str>,
 ) {
     while let Some(child) = sections.first_child() {
         sections.remove(&child);
@@ -1435,6 +1770,7 @@ fn refill_hosts_list(
                 protocol_dropdown,
                 options_ui.clone(),
                 editing_secret.clone(),
+                editing_host.clone(),
                 password_dirty.clone(),
                 suppress_pass_dirty.clone(),
                 on_connect.clone(),
@@ -1443,6 +1779,7 @@ fn refill_hosts_list(
                 empty,
                 no_match,
                 search,
+                connecting_key,
             );
             if let Some(grid) = items_parent.downcast_ref::<gtk::FlowBox>() {
                 grid.append(&card);
@@ -1467,6 +1804,7 @@ fn build_host_card(
     protocol_dropdown: &gtk::DropDown,
     options_ui: Rc<OptionsUi>,
     editing_secret: Rc<RefCell<Option<String>>>,
+    editing_host: Rc<RefCell<Option<ViewerHost>>>,
     password_dirty: Rc<Cell<bool>>,
     suppress_pass_dirty: Rc<Cell<bool>>,
     on_connect: Option<ConnectFn>,
@@ -1475,6 +1813,7 @@ fn build_host_card(
     empty: &gtk::Box,
     no_match: &gtk::Box,
     search: &str,
+    connecting_key: Option<&str>,
 ) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     match view {
@@ -1482,12 +1821,17 @@ fn build_host_card(
         ViewerHostsView::List => card.add_css_class("metis-viewer-host-row"),
     }
     card.set_hexpand(true);
+    let is_connecting = connecting_key.is_some_and(|k| k == credentials::secret_account(entry));
+    if is_connecting {
+        card.add_css_class("connecting");
+    }
 
     let btn = gtk::Button::new();
     btn.set_has_frame(false);
     btn.set_hexpand(true);
     btn.set_tooltip_text(Some(&tr("Connect")));
     btn.add_css_class("metis-viewer-host-card-body");
+    btn.set_sensitive(!is_connecting);
 
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     body.set_hexpand(true);
@@ -1530,13 +1874,25 @@ fn build_host_card(
         let proto_dd = protocol_dropdown.clone();
         let opts = options_ui.clone();
         let editing = editing_secret.clone();
+        let editing_host_ref = editing_host.clone();
         let dirty = password_dirty.clone();
         let suppress = suppress_pass_dirty.clone();
         let e = entry.clone();
         let connect = on_connect.clone();
         btn.connect_clicked(move |_| {
             apply_host_to_form(
-                &e, &h, &p, &u, &l, &pw, &proto_dd, &opts, &editing, &dirty, &suppress,
+                &e,
+                &h,
+                &p,
+                &u,
+                &l,
+                &pw,
+                &proto_dd,
+                &opts,
+                &editing,
+                &editing_host_ref,
+                &dirty,
+                &suppress,
             );
             let account = credentials::secret_account(&e);
             if pw.text().is_empty()
@@ -1560,6 +1916,7 @@ fn build_host_card(
     edit.add_css_class("flat");
     edit.add_css_class("metis-viewer-host-card-remove");
     edit.set_valign(gtk::Align::Center);
+    edit.set_sensitive(!is_connecting);
     {
         let h = host_entry.clone();
         let p = port_entry.clone();
@@ -1569,13 +1926,25 @@ fn build_host_card(
         let proto_dd = protocol_dropdown.clone();
         let opts = options_ui.clone();
         let editing = editing_secret.clone();
+        let editing_host_ref = editing_host.clone();
         let dirty = password_dirty.clone();
         let suppress = suppress_pass_dirty.clone();
         let e = entry.clone();
         let open = open_panel.clone();
         edit.connect_clicked(move |_| {
             apply_host_to_form(
-                &e, &h, &p, &u, &l, &pw, &proto_dd, &opts, &editing, &dirty, &suppress,
+                &e,
+                &h,
+                &p,
+                &u,
+                &l,
+                &pw,
+                &proto_dd,
+                &opts,
+                &editing,
+                &editing_host_ref,
+                &dirty,
+                &suppress,
             );
             if let Some(f) = &open {
                 f();
@@ -1590,6 +1959,8 @@ fn build_host_card(
     trash.add_css_class("flat");
     trash.add_css_class("metis-viewer-host-card-remove");
     trash.set_valign(gtk::Align::Center);
+    trash.set_sensitive(!is_connecting);
+    let connecting_owned = connecting_key.map(str::to_string);
     {
         let sections = sections.clone();
         let empty = empty.clone();
@@ -1606,6 +1977,7 @@ fn build_host_card(
         let open = open_panel.clone();
         let pass_entry = pass_entry.clone();
         let editing_secret = editing_secret.clone();
+        let editing_host = editing_host.clone();
         let password_dirty = password_dirty.clone();
         let suppress_pass_dirty = suppress_pass_dirty.clone();
         trash.connect_clicked(move |_| {
@@ -1627,10 +1999,12 @@ fn build_host_card(
                 &protocol_dropdown,
                 options_ui.clone(),
                 editing_secret.clone(),
+                editing_host.clone(),
                 password_dirty.clone(),
                 suppress_pass_dirty.clone(),
                 connect.clone(),
                 open.clone(),
+                connecting_owned.as_deref(),
             );
         });
     }

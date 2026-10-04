@@ -1043,14 +1043,26 @@ fn launch_recorder(config: &ScreenshotConfig, connector: Option<&str>, crop: Pix
 }
 
 fn after_capture_action(config: &ScreenshotConfig, path: &PathBuf, action: AfterCaptureAction) {
+    let mut copy_err = None;
     match action {
         AfterCaptureAction::Copy | AfterCaptureAction::CopyAndSave => {
-            if let Err(err) = crate::compositor::set_clipboard(
-                "image/png".into(),
-                None,
-                Some(path.display().to_string()),
-            ) {
-                tracing::warn!(%err, "failed to copy screenshot to clipboard");
+            // SetClipboard only accepts paths under `$XDG_RUNTIME_DIR` / Metis
+            // state+cache — stage out of Pictures before offering.
+            match stage_clipboard_png(path) {
+                Ok(staged) => {
+                    if let Err(err) = crate::compositor::set_clipboard(
+                        "image/png".into(),
+                        None,
+                        Some(staged.to_string_lossy().into_owned()),
+                    ) {
+                        tracing::warn!(%err, "failed to copy screenshot to clipboard");
+                        copy_err = Some(err.to_string());
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "failed to stage screenshot for clipboard");
+                    copy_err = Some(err);
+                }
             }
         }
         _ => {}
@@ -1088,7 +1100,30 @@ fn after_capture_action(config: &ScreenshotConfig, path: &PathBuf, action: After
         toast_message(&metis_i18n::tr("Could not open screenshot editor"));
         return;
     }
+    if let Some(err) = copy_err {
+        toast_message(&format!(
+            "{}: {err}",
+            metis_i18n::tr("Screenshot saved but copy to clipboard failed")
+        ));
+        return;
+    }
     toast_message(&metis_i18n::tr("Screenshot captured"));
+}
+
+/// Copy `path` into `$XDG_RUNTIME_DIR/metis/clipboard/` for SetClipboard allowlist.
+fn stage_clipboard_png(path: &PathBuf) -> Result<PathBuf, String> {
+    let dir = metis_protocol::ensure_runtime_dir()
+        .map_err(|e| format!("XDG_RUNTIME_DIR unavailable: {e}"))?
+        .join("clipboard");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("clipboard dir: {e}"))?;
+    let _ = metis_protocol::set_mode(&dir, 0o700);
+    let stamp = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dest = dir.join(format!("shot-{stamp}.png"));
+    std::fs::copy(path, &dest).map_err(|e| format!("stage clipboard image: {e}"))?;
+    Ok(dest)
 }
 
 fn toast_message(message: &str) {
