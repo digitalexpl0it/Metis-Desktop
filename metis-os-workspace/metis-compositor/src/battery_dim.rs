@@ -4,6 +4,8 @@
 //! wash sits above the desktop (same stacking slot as night light). HDR-active
 //! outputs skip the overlay so PQ/HLG metadata is not washed out.
 
+use std::time::{Duration, Instant};
+
 use smithay::backend::renderer::Color32F;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::{Id, Kind};
@@ -15,11 +17,16 @@ use crate::state::MetisState;
 /// Soft black wash (~12% after premultiply) — readable, not a blank.
 const DIM_ALPHA: f32 = 0.12;
 
+/// AC/battery sysfs sample cadence — housekeeping runs at 16 ms; do not walk
+/// `/sys/class/power_supply` on every tick.
+const BATTERY_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Cached power preference + last battery sample for the dim overlay.
 pub struct BatteryDimRuntime {
     pub dim_on_battery: bool,
-    /// Last `on_battery()` sample; polled on a slow timer.
+    /// Last `on_battery()` sample; sampled every 2 s from housekeeping.
     pub on_battery: bool,
+    last_poll: Instant,
     pub id: Id,
     pub commit: smithay::backend::renderer::utils::CommitCounter,
 }
@@ -29,6 +36,10 @@ impl BatteryDimRuntime {
         Self {
             dim_on_battery,
             on_battery: metis_config::on_battery(),
+            // Allow the next housekeeping tick to refresh immediately after init.
+            last_poll: Instant::now()
+                .checked_sub(BATTERY_POLL_INTERVAL)
+                .unwrap_or_else(Instant::now),
             id: Id::new(),
             commit: smithay::backend::renderer::utils::CommitCounter::default(),
         }
@@ -43,8 +54,13 @@ impl BatteryDimRuntime {
         true
     }
 
-    /// Refresh AC/battery sample. Returns true when the effective dim state changed.
+    /// Refresh AC/battery sample (throttled to 2 s). Returns true when the
+    /// effective dim state changed.
     pub fn poll_battery(&mut self) -> bool {
+        if self.last_poll.elapsed() < BATTERY_POLL_INTERVAL {
+            return false;
+        }
+        self.last_poll = Instant::now();
         let now = metis_config::on_battery();
         if now == self.on_battery {
             return false;
@@ -52,6 +68,14 @@ impl BatteryDimRuntime {
         self.on_battery = now;
         self.commit.increment();
         true
+    }
+
+    /// Force a sysfs sample now (power config reload / preference change).
+    pub fn poll_battery_now(&mut self) -> bool {
+        self.last_poll = Instant::now()
+            .checked_sub(BATTERY_POLL_INTERVAL)
+            .unwrap_or_else(Instant::now);
+        self.poll_battery()
     }
 
     pub fn active(&self) -> bool {

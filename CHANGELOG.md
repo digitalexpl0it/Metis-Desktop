@@ -12,6 +12,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **CI / build deps** — install `libasound2-dev` so Viewer `cpal` (`alsa-sys`)
   links in Debian 13 / Ubuntu 26.04 containers and local dep scripts.
 
+### Performance
+
+- **Perf pack** — dim-on-battery sysfs poll throttled to 2 s; ScreenCast DmaBuf
+  path skips full-frame `to_vec` with faster MemFd BGRx convert; notification
+  center date/calendar timers run only while the panel is open.
+
 ### Security
 
 - **Security P1 pack** — password / VPN / portal screenshot paths refuse `/tmp`

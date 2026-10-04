@@ -14,6 +14,7 @@ mod notif_list;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::mpsc::Receiver;
 use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone};
@@ -67,7 +68,13 @@ struct Center {
     events_body: gtk::Revealer,
     calendar: CalendarPage,
     world: WorldClocksPage,
+    date_label: gtk::Label,
     cal_tx: std::sync::mpsc::Sender<CalCommand>,
+    cal_rx: RefCell<Receiver<Vec<CalendarEvent>>>,
+    /// 1 s date / world refresh — only while the panel is open.
+    date_tick: RefCell<Option<glib::SourceId>>,
+    /// 500 ms calendar `try_recv` — only while the panel is open.
+    cal_tick: RefCell<Option<glib::SourceId>>,
 }
 
 thread_local! {
@@ -257,6 +264,7 @@ pub fn reload_for_locale() {
             old.anim_gen.set(old.anim_gen.get().wrapping_add(1));
             old.animating.set(false);
             old.open.set(false);
+            disarm_nc_timers(&old);
             crate::ui::toast::set_panel_open(false);
             old.window.set_visible(false);
             old.window.destroy();
@@ -382,6 +390,8 @@ pub fn show() {
 
     center.open.set(true);
     crate::ui::toast::set_panel_open(true);
+    refresh_date_label(&center);
+    arm_nc_timers(&center);
 
     if !center.window.is_visible() {
         set_slide_margin(&center, HIDDEN_SLIDE_MARGIN);
@@ -404,6 +414,7 @@ pub fn dismiss() {
             return;
         }
         center.open.set(false);
+        disarm_nc_timers(&center);
         center.calendar.hide_create();
         crate::ui::toast::set_panel_open(false);
         SUPPRESS_SHOW_UNTIL_MS.with(|cell| cell.set(now_ms().saturating_add(350)));
@@ -420,6 +431,61 @@ pub fn dismiss() {
             }
         });
     });
+}
+
+fn refresh_date_label(center: &Center) {
+    center
+        .date_label
+        .set_label(&Local::now().format("%A %-d %B").to_string());
+}
+
+fn disarm_nc_timers(center: &Center) {
+    if let Some(id) = center.date_tick.borrow_mut().take() {
+        id.remove();
+    }
+    if let Some(id) = center.cal_tick.borrow_mut().take() {
+        id.remove();
+    }
+}
+
+fn arm_nc_timers(center: &Rc<Center>) {
+    if center.date_tick.borrow().is_none() {
+        let date_label = center.date_label.clone();
+        let id = glib::timeout_add_local(StdDuration::from_secs(1), move || {
+            date_label.set_label(&Local::now().format("%A %-d %B").to_string());
+            CENTER.with(|c| {
+                if let Some(center) = c.borrow().as_ref()
+                    && center.open.get()
+                {
+                    center.world.refresh();
+                }
+            });
+            glib::ControlFlow::Continue
+        });
+        *center.date_tick.borrow_mut() = Some(id);
+    }
+
+    if center.cal_tick.borrow().is_none() {
+        let center_rx = center.clone();
+        let id = glib::timeout_add_local(StdDuration::from_millis(500), move || {
+            let mut latest = None;
+            {
+                let rx = center_rx.cal_rx.borrow_mut();
+                while let Ok(events) = rx.try_recv() {
+                    latest = Some(events);
+                }
+            }
+            if let Some(events) = latest {
+                let views: Vec<EventView> = events.iter().map(event_to_view).collect();
+                center_rx.calendar.set_events(views);
+                center_rx
+                    .events_body
+                    .set_reveal_child(center_rx.calendar.selected_day_has_events());
+            }
+            glib::ControlFlow::Continue
+        });
+        *center.cal_tick.borrow_mut() = Some(id);
+    }
 }
 
 fn ensure() -> Rc<Center> {
@@ -639,19 +705,6 @@ fn build_center() -> Rc<Center> {
     });
     window.add_controller(key);
 
-    let date_label_tick = date_label.clone();
-    glib::timeout_add_local(StdDuration::from_secs(1), move || {
-        date_label_tick.set_label(&Local::now().format("%A %-d %B").to_string());
-        CENTER.with(|c| {
-            if let Some(center) = c.borrow().as_ref()
-                && center.open.get()
-            {
-                center.world.refresh();
-            }
-        });
-        glib::ControlFlow::Continue
-    });
-
     if std::env::var("METIS_DEMO_NOTIFICATIONS").is_ok() {
         notif_list::seed_demo_notifications();
     }
@@ -668,26 +721,14 @@ fn build_center() -> Rc<Center> {
         events_body: events_body.clone(),
         calendar,
         world,
+        date_label,
         cal_tx: cal_tx_for_center,
+        cal_rx: RefCell::new(cal_rx),
+        date_tick: RefCell::new(None),
+        cal_tick: RefCell::new(None),
     });
     apply_window_layout(&center, &layout, HIDDEN_SLIDE_MARGIN);
     apply_scroll_budgets(&center);
-
-    let center_rx = center.clone();
-    glib::timeout_add_local(StdDuration::from_millis(500), move || {
-        let mut latest = None;
-        while let Ok(events) = cal_rx.try_recv() {
-            latest = Some(events);
-        }
-        if let Some(events) = latest {
-            let views: Vec<EventView> = events.iter().map(event_to_view).collect();
-            center_rx.calendar.set_events(views);
-            center_rx
-                .events_body
-                .set_reveal_child(center_rx.calendar.selected_day_has_events());
-        }
-        glib::ControlFlow::Continue
-    });
 
     center
 }

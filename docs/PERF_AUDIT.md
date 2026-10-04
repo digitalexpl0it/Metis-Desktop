@@ -40,6 +40,12 @@ hybrid NVIDIA MemFd fallbacks and shell poll wakeups.
 - **`input.json`** reload throttled to ~1 s.
 - **Wallpaper decode** debounced off the render path.
 - **Portal stack** started on a detached thread (login no longer blocks 10+ s).
+- **Dim-on-battery** samples `/sys/class/power_supply` every **2 s** from the
+  16 ms housekeeping tick (`battery_dim::BatteryDimRuntime`) — not every frame.
+- **Notification Center** 1 s date/world + 500 ms calendar poll sources are
+  armed only while the panel is open (`notification_center` arm/disarm).
+- **ScreenCast DmaBuf** success path skips CPU `mmap`→`Vec` copy; MemFd BGRx
+  fallback uses row-wise copy + opaque alpha fill.
 
 ### Cheap bar blur
 
@@ -72,9 +78,9 @@ The compositor renders ScreenCast frames into client GBM buffers (no
 (e.g. some GRD paths). Nested winit remains SHM-only.
 
 **Remaining gap:** multi-plane / non-linear modifiers may still take the MemFd
-fallback; profile on hybrid NVIDIA stacks. Full multi-GPU (`GpuManager`) is
-**validated 2026-07-26** on hybrid iGPU+dGPU; explicit `MultiRenderer` transfer
-remains deferred.
+fallback; profile on hybrid NVIDIA stacks. DmaBuf-success no longer `to_vec`s
+the mmap (2026-10-03). Full multi-GPU (`GpuManager`) is **validated 2026-07-26**
+on hybrid iGPU+dGPU; MultiRenderer Wave A/B/C landed 2026-10-03.
 
 **Recommendation:** validate OBS / gnome-remote-desktop under a live DRM
 session; watch portal logs for `dmabuf` vs MemFd negotiation.

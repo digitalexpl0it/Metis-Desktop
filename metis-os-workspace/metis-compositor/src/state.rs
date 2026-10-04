@@ -1299,7 +1299,7 @@ impl MetisState {
 
         crate::night_light::maybe_tick_schedule(self);
 
-        // Slow AC/battery sample for dim-on-battery (sysfs; cheap).
+        // AC/battery sample for dim-on-battery (sysfs; throttled to 2 s).
         if self.battery_dim.poll_battery() {
             self.damaged = true;
         }
@@ -8888,7 +8888,10 @@ impl MetisState {
                     self.damaged = true;
                     self.request_redraw();
                 }
-                let _ = self.battery_dim.poll_battery();
+                if self.battery_dim.poll_battery_now() {
+                    self.damaged = true;
+                    self.request_redraw();
+                }
                 tracing::info!(
                     blank_after_minutes = cfg.blank_after_minutes,
                     dim_on_battery = cfg.dim_on_battery,

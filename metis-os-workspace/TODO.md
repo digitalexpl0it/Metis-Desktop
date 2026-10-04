@@ -113,20 +113,20 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
 
 ### Performance / resources
 
-- [ ] **ScreenCast MemFd path** — avoid full-frame `to_vec` / BGRx copies when
-      PipeWire rejects DmaBuf (`metis-portal` capture session/pump; hybrid
-      NVIDIA). Dmabuf-success path is fine.
-- [ ] **Throttle DRM housekeeping** — `tick_housekeeping` / sysfs
-      `on_battery()` should not run every 16 ms when undamaged; poll battery /
-      config on a 1–5 s cadence (`udev.rs`, `state.rs`).
+- [x] **ScreenCast MemFd path** (2026-10-03) — DmaBuf success path skips mmap
+      `to_vec`; MemFd BGRx convert uses row `copy_from_slice` + opaque alpha
+      (`metis-portal` capture session/pump).
+- [x] **Throttle DRM housekeeping** (2026-10-03) — `on_battery()` sysfs sample
+      throttled to 2 s inside `BatteryDimRuntime` (16 ms heartbeat kept for IPC /
+      reap / FX).
 - [x] **Portal / polkit watchdogs** (2026-09-30) — portal watchdog backoff +
       terminate stale owner when Mutter ScreenCast is missing (avoids NameTaken
       spawn-storm). ashpd `build_with_connection` blocks on `connection.closed()`;
       Mutter / PowerProfile / screensaver register *before* that await so GRD
       sees capture APIs.
       when D-Bus name claim is slow (`metis-compositor` `main.rs`).
-- [ ] **Pause NC timers when closed** — 1 s date/world + 500 ms calendar
-      `try_recv` only while the panel is open.
+- [x] **Pause NC timers when closed** (2026-10-03) — 1 s date/world + 500 ms
+      calendar `try_recv` armed only while the notification center is open.
 - [ ] **Refresh `PERF_AUDIT.md`** — re-measure release binary sizes (~52 MB
       four-bin vs ~40 MB June audit) and DRM idle/`perf` under ScreenCast.
 - [ ] Shell poll: keep pushing D-Bus signals; reduce `nmcli` /

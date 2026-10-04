@@ -28,9 +28,27 @@ fn bgra_to_bgrx(data: &[u8], width: u32, height: u32, stride: u32) -> Vec<u8> {
     let src_stride = stride as usize;
     let dst_stride = w * 4;
     let mut out = vec![0u8; dst_stride * h];
+    if src_stride == dst_stride {
+        let nbytes = dst_stride * h;
+        if data.len() >= nbytes {
+            out.copy_from_slice(&data[..nbytes]);
+            for px in out.as_chunks_mut::<4>().0 {
+                px[3] = 255;
+            }
+            return out;
+        }
+    }
     for y in 0..h {
         let src_row = y * src_stride;
         let dst_row = y * dst_stride;
+        let row_bytes = w * 4;
+        if src_row + row_bytes <= data.len() && dst_row + row_bytes <= out.len() {
+            out[dst_row..dst_row + row_bytes].copy_from_slice(&data[src_row..src_row + row_bytes]);
+            for px in out[dst_row..dst_row + row_bytes].as_chunks_mut::<4>().0 {
+                px[3] = 255;
+            }
+            continue;
+        }
         for x in 0..w {
             let si = src_row + x * 4;
             let di = dst_row + x * 4;
@@ -183,4 +201,24 @@ pub fn spawn_screencast_pump(
 
 fn elapsed_under(start: std::time::Instant, interval: Duration) -> bool {
     start.elapsed() < interval
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bgra_to_bgrx_tight_stride_forces_opaque() {
+        // Two BGRA pixels: blue+green+red+0, then white with zero alpha.
+        let src = [10u8, 20, 30, 0, 255, 255, 255, 0];
+        let out = bgra_to_bgrx(&src, 2, 1, 8);
+        assert_eq!(out, vec![10, 20, 30, 255, 255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn bgra_to_bgrx_padded_stride() {
+        let src = [1u8, 2, 3, 4, 0, 0, 0, 0, 5, 6, 7, 8, 0, 0, 0, 0];
+        let out = bgra_to_bgrx(&src, 1, 2, 8);
+        assert_eq!(out, vec![1, 2, 3, 255, 5, 6, 7, 255]);
+    }
 }

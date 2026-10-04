@@ -210,12 +210,15 @@ impl AppState {
                     return;
                 }
             };
+            // Skip mmap→Vec on the DmaBuf path; PipeWire installs plane fds.
+            // MemFd fallback needs CPU pixels and only runs for SHM frames
+            // (or after `dmabuf_failed` forces SHM).
             Frame {
                 width: dmabuf.width,
                 height: dmabuf.height,
                 stride: dmabuf.stride,
                 shm_format: Format::Argb8888,
-                data: dmabuf.pixels().map_or_else(Vec::new, <[u8]>::to_vec),
+                data: Vec::new(),
                 dmabuf: Some(planes),
             }
         } else if let Some(shm) = session.shm.as_ref() {
