@@ -18,6 +18,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **Viewer saved hosts** — Add host creates a new card even when the server
   matches an existing one (distinct labels); edit/reconnect updates only that
   card. Protocol is part of host identity (RDP vs Metis Remote no longer collide).
+  Passwords are stored per card (label included) so a new card no longer inherits
+  another card’s keyring password for the same host; deleting one card does not
+  remove another card’s keyring secret.
 - **Screenshot Copy / Copy and save** — stage PNGs under
   `$XDG_RUNTIME_DIR/metis/clipboard/` before `SetClipboard` so they pass the
   image-path allowlist and appear in the edge-bar clipboard manager; surface

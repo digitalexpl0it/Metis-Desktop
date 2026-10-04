@@ -1686,17 +1686,19 @@ fn refill_hosts_list(
         return;
     }
 
-    // Warm the session password cache in the background so Edit/Connect
-    // do not stall the GTK loop on Secret Service.
-    for entry in &cfg.recent {
-        let account = credentials::secret_account(entry);
-        if credentials::cached_password(&account).is_none() {
-            let _ = std::thread::Builder::new()
-                .name("metis-viewer-keyring-warm".into())
-                .spawn(move || {
+    // Migrate legacy shared endpoint secrets → per-card keys, then warm cache.
+    // Never block the GTK loop on Secret Service.
+    {
+        let hosts = cfg.recent.clone();
+        let _ = std::thread::Builder::new()
+            .name("metis-viewer-keyring-migrate".into())
+            .spawn(move || {
+                credentials::migrate_legacy_passwords(&hosts);
+                for entry in &hosts {
+                    let account = credentials::secret_account(entry);
                     let _ = credentials::load_password_blocking(&account);
-                });
-        }
+                }
+            });
     }
 
     let filtered: Vec<ViewerHost> = cfg
@@ -1981,9 +1983,11 @@ fn build_host_card(
         let password_dirty = password_dirty.clone();
         let suppress_pass_dirty = suppress_pass_dirty.clone();
         trash.connect_clicked(move |_| {
-            credentials::delete_password(&credentials::secret_account(&e));
             if let Err(err) = remove_recent(&e) {
                 tracing::warn!("viewer.json remove failed: {err}");
+            } else {
+                let remaining = load_viewer_config().recent;
+                credentials::delete_host_password_if_unshared(&e, &remaining);
             }
             refill_hosts_list(
                 &sections,

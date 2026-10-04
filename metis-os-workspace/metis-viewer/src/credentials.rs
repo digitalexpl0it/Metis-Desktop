@@ -21,9 +21,30 @@ fn cache() -> &'static Mutex<HashMap<String, String>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Stable Secret Service account id for a saved host endpoint.
+fn protocol_tag(protocol: ViewerProtocol) -> &'static str {
+    match protocol {
+        ViewerProtocol::Rdp => "rdp",
+        ViewerProtocol::Rudp => "rudp",
+    }
+}
+
+/// Per-card Secret Service account id (protocol + host + port + user + label).
+///
+/// Label is included so two saved cards for the same server keep separate
+/// passwords. Unlabeled cards keep the legacy account shape.
 pub fn secret_account(host: &ViewerHost) -> String {
-    secret_account_parts(host.protocol, &host.host, host.port, &host.username)
+    secret_account_parts(
+        host.protocol,
+        &host.host,
+        host.port,
+        &host.username,
+        &host.label,
+    )
+}
+
+/// Pre-label account id shared by every card on an endpoint (migration only).
+pub fn secret_account_legacy(host: &ViewerHost) -> String {
+    secret_account_parts(host.protocol, &host.host, host.port, &host.username, "")
 }
 
 pub fn secret_account_parts(
@@ -31,17 +52,54 @@ pub fn secret_account_parts(
     host: &str,
     port: u16,
     username: &str,
+    label: &str,
 ) -> String {
-    let proto = match protocol {
-        ViewerProtocol::Rdp => "rdp",
-        ViewerProtocol::Rudp => "rudp",
-    };
-    format!(
-        "viewer:{proto}:{}:{}:{}",
-        host.trim(),
-        port,
-        username.trim()
-    )
+    let proto = protocol_tag(protocol);
+    let host = host.trim();
+    let user = username.trim();
+    let label = label.trim();
+    if label.is_empty() {
+        format!("viewer:{proto}:{host}:{port}:{user}")
+    } else {
+        format!("viewer:{proto}:{host}:{port}:{user}:label:{label}")
+    }
+}
+
+/// Copy a pre-label shared endpoint password onto the oldest labeled card for
+/// that endpoint (last in `hosts`, since newer cards are prepended). Newer
+/// cards on the same server keep an empty secret until the user sets one.
+///
+/// Call from a worker thread — touches the Secret Service.
+pub fn migrate_legacy_passwords(hosts: &[ViewerHost]) {
+    use std::collections::HashMap;
+    static DONE: OnceLock<()> = OnceLock::new();
+    if DONE.set(()).is_err() {
+        return;
+    }
+
+    let mut by_legacy: HashMap<String, Vec<&ViewerHost>> = HashMap::new();
+    for host in hosts {
+        let legacy = secret_account_legacy(host);
+        by_legacy.entry(legacy).or_default().push(host);
+    }
+
+    for (legacy, group) in by_legacy {
+        // Oldest card is last in recent order.
+        let Some(owner) = group.last() else {
+            continue;
+        };
+        let primary = secret_account(owner);
+        if primary == legacy {
+            continue;
+        }
+        if cache_get(&primary).is_some() || load_password_blocking(&primary).is_some() {
+            continue;
+        }
+        let Some(pw) = load_password_blocking(&legacy) else {
+            continue;
+        };
+        let _ = store_password_blocking(&primary, &pw);
+    }
 }
 
 fn with_runtime<T>(f: impl FnOnce(&tokio::runtime::Runtime) -> T) -> Option<T> {
@@ -115,6 +173,35 @@ pub fn delete_password(account: &str) {
                 rt.block_on(async { metis_secrets::delete(&account, VIEWER_PASSWORD).await })
             });
         });
+}
+
+/// Delete the removed card's keyring secret only when no remaining card still
+/// needs it. Never wipe a legacy shared endpoint secret while another card for
+/// the same host/port/user/protocol remains.
+///
+/// Call after the card has been removed from `viewer.json`, passing the hosts
+/// that are still saved.
+pub fn delete_host_password_if_unshared(removed: &ViewerHost, remaining: &[ViewerHost]) {
+    let account = secret_account(removed);
+    let legacy = secret_account_legacy(removed);
+    let endpoint_still_used = remaining.iter().any(|h| secret_account_legacy(h) == legacy);
+    let account_still_used = remaining.iter().any(|h| secret_account(h) == account);
+
+    if !account_still_used {
+        if account == legacy {
+            // Unlabeled card → shared legacy key. Keep it if siblings remain.
+            if !endpoint_still_used {
+                delete_password(&account);
+            }
+        } else {
+            delete_password(&account);
+        }
+    }
+
+    // Drop an orphan legacy entry only when this was the last card on the endpoint.
+    if legacy != account && !endpoint_still_used {
+        delete_password(&legacy);
+    }
 }
 
 /// Persist password for `new_account`. Empty password keeps / migrates the
