@@ -114,9 +114,12 @@ gating; continue incremental splits when touching areas.
 
 **File:** `metis-shell/src/services/poll.rs`
 
-Background thread (~400 ms) with D-Bus-driven updates where available
-(NetworkManager / UPower / Pulse) and a slow fallback tick for sources without
-signals. Occasional subprocess I/O remains for Bluetooth / Solaar.
+Background thread (~200–800 ms adaptive) with D-Bus dirty wakes for
+NetworkManager, BlueZ, and UPower; slow fallback ticks when signals are quiet.
+UPower peripheral batteries are read over zbus (no `upower` CLI). Volume/mic
+still use `pactl`. Occasional subprocess I/O remains for `nmcli`,
+`bluetoothctl` inventory (and `info` / `solaar` only when %/charging is still
+missing).
 
 **Impact:** Low average CPU; not on compositor thread.
 

@@ -24,6 +24,16 @@ static AUDIO_CMD_TX: OnceLock<Sender<AudioCommand>> = OnceLock::new();
 /// state immediately instead of waiting for the next slow tick.
 static NETWORK_DIRTY: AtomicBool = AtomicBool::new(true);
 
+/// True once the NM D-Bus watcher has subscribed — enables a longer timed
+/// nmcli heartbeat (dirty wakes still refresh immediately).
+static NM_WATCHER_ALIVE: AtomicBool = AtomicBool::new(false);
+
+/// BlueZ PropertiesChanged / ObjectManager → refresh BT inventory + batteries.
+static BT_DIRTY: AtomicBool = AtomicBool::new(true);
+
+/// UPower device changes → refresh laptop + peripheral batteries.
+static POWER_DIRTY: AtomicBool = AtomicBool::new(true);
+
 /// Ignore `nmcli radio wifi` writes until this instant. Display modesets / HDMI
 /// hotplug briefly make NetworkManager look flaky; a false "off" sync must not
 /// permanently kill the radio.
@@ -169,11 +179,26 @@ pub fn spawn_bar_pollers() -> Receiver<BarSnapshot> {
     let _ = NETWORK_CMD_TX.set(network_tx);
     spawn_vpn_session_autoconnect();
     spawn_network_dbus_watcher();
+    spawn_bluetooth_dbus_watcher();
+    spawn_upower_dbus_watcher();
     thread::Builder::new()
         .name("metis-bar-poll".into())
         .spawn(move || poll_loop(tx, audio_rx, network_rx))
         .expect("spawn bar poller");
     rx
+}
+
+fn spawn_current_thread_runtime(name: &str) -> Option<tokio::runtime::Runtime> {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => Some(rt),
+        Err(err) => {
+            tracing::debug!(%err, "{name}: no tokio runtime");
+            None
+        }
+    }
 }
 
 /// Subscribe to NetworkManager D-Bus signals so Wi-Fi/VPN/Ethernet changes wake
@@ -182,15 +207,8 @@ fn spawn_network_dbus_watcher() {
     thread::Builder::new()
         .name("metis-nm-dbus".into())
         .spawn(|| {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(err) => {
-                    tracing::debug!(%err, "nm dbus watcher: no tokio runtime");
-                    return;
-                }
+            let Some(rt) = spawn_current_thread_runtime("nm dbus watcher") else {
+                return;
             };
             rt.block_on(async {
                 let Ok(conn) = zbus::Connection::system().await else {
@@ -211,7 +229,7 @@ fn spawn_network_dbus_watcher() {
                         return;
                     }
                 };
-                // StateChanged is the stable NM signal for connectivity changes.
+                use futures_util::StreamExt;
                 let mut state_changed = match proxy.receive_signal("StateChanged").await {
                     Ok(s) => s,
                     Err(err) => {
@@ -219,9 +237,223 @@ fn spawn_network_dbus_watcher() {
                         return;
                     }
                 };
+                let mut device_added = proxy.receive_signal("DeviceAdded").await.ok();
+                let mut device_removed = proxy.receive_signal("DeviceRemoved").await.ok();
+                NM_WATCHER_ALIVE.store(true, Ordering::Relaxed);
+                tracing::debug!("nm dbus watcher: subscribed");
+                loop {
+                    tokio::select! {
+                        msg = state_changed.next() => {
+                            if msg.is_none() { break; }
+                            NETWORK_DIRTY.store(true, Ordering::Relaxed);
+                        }
+                        msg = async {
+                            match device_added.as_mut() {
+                                Some(s) => s.next().await,
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            if msg.is_none() { break; }
+                            NETWORK_DIRTY.store(true, Ordering::Relaxed);
+                        }
+                        msg = async {
+                            match device_removed.as_mut() {
+                                Some(s) => s.next().await,
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            if msg.is_none() { break; }
+                            NETWORK_DIRTY.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
+                NM_WATCHER_ALIVE.store(false, Ordering::Relaxed);
+            });
+        })
+        .ok();
+}
+
+/// BlueZ on the system bus — adapter power / device connect / Battery1.
+fn spawn_bluetooth_dbus_watcher() {
+    thread::Builder::new()
+        .name("metis-bt-dbus".into())
+        .spawn(|| {
+            let Some(rt) = spawn_current_thread_runtime("bt dbus watcher") else {
+                return;
+            };
+            rt.block_on(async {
+                let Ok(conn) = zbus::Connection::system().await else {
+                    tracing::debug!("bt dbus watcher: system bus unavailable");
+                    return;
+                };
                 use futures_util::StreamExt;
-                while state_changed.next().await.is_some() {
-                    NETWORK_DIRTY.store(true, Ordering::Relaxed);
+                use zbus::MatchRule;
+                use zbus::MessageStream;
+                use zbus::message::Type as MsgType;
+
+                let props_rule = match (|| -> zbus::Result<_> {
+                    Ok(MatchRule::builder()
+                        .msg_type(MsgType::Signal)
+                        .sender("org.bluez")?
+                        .interface("org.freedesktop.DBus.Properties")?
+                        .member("PropertiesChanged")?
+                        .build())
+                })() {
+                    Ok(r) => r,
+                    Err(err) => {
+                        tracing::debug!(%err, "bt dbus watcher: props match failed");
+                        return;
+                    }
+                };
+                let mut props = match MessageStream::for_match_rule(props_rule, &conn, Some(8)).await
+                {
+                    Ok(s) => s,
+                    Err(err) => {
+                        tracing::debug!(%err, "bt dbus watcher: props subscribe failed");
+                        return;
+                    }
+                };
+
+                let om = zbus::Proxy::new(
+                    &conn,
+                    "org.bluez",
+                    "/",
+                    "org.freedesktop.DBus.ObjectManager",
+                )
+                .await
+                .ok();
+                let mut added = if let Some(ref p) = om {
+                    p.receive_signal("InterfacesAdded").await.ok()
+                } else {
+                    None
+                };
+                let mut removed = if let Some(ref p) = om {
+                    p.receive_signal("InterfacesRemoved").await.ok()
+                } else {
+                    None
+                };
+
+                tracing::debug!("bt dbus watcher: subscribed");
+                loop {
+                    tokio::select! {
+                        msg = props.next() => {
+                            match msg {
+                                None => break,
+                                Some(Err(_)) => break,
+                                Some(Ok(_)) => BT_DIRTY.store(true, Ordering::Relaxed),
+                            }
+                        }
+                        msg = async {
+                            match added.as_mut() {
+                                Some(s) => s.next().await,
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            if msg.is_none() { break; }
+                            BT_DIRTY.store(true, Ordering::Relaxed);
+                        }
+                        msg = async {
+                            match removed.as_mut() {
+                                Some(s) => s.next().await,
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            if msg.is_none() { break; }
+                            BT_DIRTY.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
+            });
+        })
+        .ok();
+}
+
+/// UPower device add/remove / property changes (laptop + BT peripherals).
+fn spawn_upower_dbus_watcher() {
+    thread::Builder::new()
+        .name("metis-upower-dbus".into())
+        .spawn(|| {
+            let Some(rt) = spawn_current_thread_runtime("upower dbus watcher") else {
+                return;
+            };
+            rt.block_on(async {
+                let Ok(conn) = zbus::Connection::system().await else {
+                    tracing::debug!("upower dbus watcher: system bus unavailable");
+                    return;
+                };
+                let proxy = match zbus::Proxy::new(
+                    &conn,
+                    "org.freedesktop.UPower",
+                    "/org/freedesktop/UPower",
+                    "org.freedesktop.UPower",
+                )
+                .await
+                {
+                    Ok(p) => p,
+                    Err(err) => {
+                        tracing::debug!(%err, "upower dbus watcher: proxy failed");
+                        return;
+                    }
+                };
+                use futures_util::StreamExt;
+                use zbus::MatchRule;
+                use zbus::MessageStream;
+                use zbus::message::Type as MsgType;
+
+                let mut device_added = proxy.receive_signal("DeviceAdded").await.ok();
+                let mut device_removed = proxy.receive_signal("DeviceRemoved").await.ok();
+                let props_rule = match (|| -> zbus::Result<_> {
+                    Ok(MatchRule::builder()
+                        .msg_type(MsgType::Signal)
+                        .sender("org.freedesktop.UPower")?
+                        .interface("org.freedesktop.DBus.Properties")?
+                        .member("PropertiesChanged")?
+                        .build())
+                })() {
+                    Ok(r) => r,
+                    Err(err) => {
+                        tracing::debug!(%err, "upower dbus watcher: props match failed");
+                        return;
+                    }
+                };
+                let mut props = match MessageStream::for_match_rule(props_rule, &conn, Some(8)).await
+                {
+                    Ok(s) => s,
+                    Err(err) => {
+                        tracing::debug!(%err, "upower dbus watcher: props subscribe failed");
+                        return;
+                    }
+                };
+
+                tracing::debug!("upower dbus watcher: subscribed");
+                loop {
+                    tokio::select! {
+                        msg = props.next() => {
+                            match msg {
+                                None => break,
+                                Some(Err(_)) => break,
+                                Some(Ok(_)) => POWER_DIRTY.store(true, Ordering::Relaxed),
+                            }
+                        }
+                        msg = async {
+                            match device_added.as_mut() {
+                                Some(s) => s.next().await,
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            if msg.is_none() { break; }
+                            POWER_DIRTY.store(true, Ordering::Relaxed);
+                        }
+                        msg = async {
+                            match device_removed.as_mut() {
+                                Some(s) => s.next().await,
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            if msg.is_none() { break; }
+                            POWER_DIRTY.store(true, Ordering::Relaxed);
+                        }
+                    }
                 }
             });
         })
@@ -353,14 +585,22 @@ fn poll_loop(
         let audio_changed = drain_audio_commands(&audio_rx);
         drain_network_commands(&network_rx, &mut wifi_scan_grace_until);
         let network_dirty = NETWORK_DIRTY.swap(false, Ordering::Relaxed);
+        let bt_dirty = BT_DIRTY.swap(false, Ordering::Relaxed);
+        let power_dirty = POWER_DIRTY.swap(false, Ordering::Relaxed);
 
-        // Battery/BT: slow fallback (~12–24 s). Network: D-Bus dirty or timed tick.
-        if tick.is_multiple_of(30) {
+        // Battery/BT: D-Bus dirty or slow fallback (~48–72 s at 800 ms idle).
+        if bt_dirty || power_dirty || tick.is_multiple_of(90) {
             cached.battery_percent = read_battery_percent();
             cached.battery_charging = read_battery_charging();
             cached.bluetooth = read_bluetooth_status();
         }
-        if network_dirty || tick.is_multiple_of(5) {
+        // Network: dirty immediate; timed heartbeat stretches when NM watcher lives.
+        let network_tick = if NM_WATCHER_ALIVE.load(Ordering::Relaxed) {
+            20
+        } else {
+            5
+        };
+        if network_dirty || tick.is_multiple_of(network_tick) {
             cached.wifi_enabled = read_wifi_radio_enabled();
             if let Some(eth) = read_ethernet_status() {
                 cached.ethernet = eth;
@@ -413,7 +653,7 @@ fn poll_loop(
             }
         }
         tick = tick.wrapping_add(1);
-        let sleep_ms = if audio_changed || network_dirty {
+        let sleep_ms = if audio_changed || network_dirty || bt_dirty || power_dirty {
             200
         } else if changed {
             400
@@ -1299,7 +1539,13 @@ fn read_bluetooth_status() -> BluetoothStatus {
                 }
             }
         }
-        apply_solaar_overrides(&mut devices);
+        // Solaar is ~2s CLI — only when HID/UPower left gaps on connected devices.
+        let needs_solaar = devices
+            .iter()
+            .any(|d| d.battery_percent.is_none() || d.battery_charging.is_none());
+        if needs_solaar {
+            apply_solaar_overrides(&mut devices);
+        }
     }
     let device_name = devices.first().map(|d| d.name.clone());
     BluetoothStatus {
@@ -1337,14 +1583,17 @@ fn read_bluetooth_device_battery(
     if let Some(batt) = read_hid_battery_for_address(address) {
         return batt;
     }
-    if let Some(batt) = upower.get(&address.to_ascii_uppercase())
-        && batt.percent.is_some()
-    {
-        return *batt;
+    let mut batt = upower
+        .get(&address.to_ascii_uppercase())
+        .copied()
+        .unwrap_or_default();
+    if batt.percent.is_some() {
+        return batt;
     }
+    // BlueZ Battery1 via CLI only when HID/UPower left percentage empty.
     let mut cmd = std::process::Command::new("bluetoothctl");
     cmd.args(["info", address]);
-    let percent = run_command(&mut cmd).and_then(|output| {
+    batt.percent = run_command(&mut cmd).and_then(|output| {
         let text = String::from_utf8_lossy(&output.stdout);
         text.lines().find_map(|line| {
             line.trim()
@@ -1352,64 +1601,84 @@ fn read_bluetooth_device_battery(
                 .and_then(parse_battery_percentage)
         })
     });
-    DeviceBattery {
-        percent,
-        charging: None,
-    }
+    batt
 }
 
 /// Enumerate UPower peripheral batteries once, keyed by uppercased MAC.
 ///
-/// UPower device paths embed the address as `…_dev_AA_BB_CC_DD_EE_FF`; we use
-/// that to filter to Bluetooth/peripheral devices (skipping the laptop battery,
-/// AC line, and DisplayDevice) and to map each back to its BlueZ address.
+/// Uses zbus `EnumerateDevices` + device properties (no `upower` CLI forks).
+/// Paths embed the address as `…_dev_AA_BB_CC_DD_EE_FF`.
 fn read_upower_bt_batteries() -> HashMap<String, DeviceBattery> {
+    let Some(rt) = spawn_current_thread_runtime("upower enumerate") else {
+        return HashMap::new();
+    };
+    rt.block_on(read_upower_bt_batteries_async())
+}
+
+async fn read_upower_bt_batteries_async() -> HashMap<String, DeviceBattery> {
     let mut map = HashMap::new();
-    let mut enum_cmd = std::process::Command::new("upower");
-    enum_cmd.arg("-e");
-    let Some(output) = run_command(&mut enum_cmd) else {
+    let Ok(conn) = zbus::Connection::system().await else {
         return map;
     };
-    let text = String::from_utf8_lossy(&output.stdout);
-    for path in text.lines() {
-        let path = path.trim();
-        let Some(idx) = path.find("_dev_") else {
+    let Ok(proxy) = zbus::Proxy::new(
+        &conn,
+        "org.freedesktop.UPower",
+        "/org/freedesktop/UPower",
+        "org.freedesktop.UPower",
+    )
+    .await
+    else {
+        return map;
+    };
+    let devices: Vec<zbus::zvariant::OwnedObjectPath> =
+        match proxy.call("EnumerateDevices", &()).await {
+            Ok(d) => d,
+            Err(err) => {
+                tracing::debug!(%err, "upower EnumerateDevices failed");
+                return map;
+            }
+        };
+    for path in devices {
+        let path_str = path.as_str();
+        let Some(idx) = path_str.find("_dev_") else {
             continue;
         };
-        let mac = path[idx + "_dev_".len()..]
+        let mac = path_str[idx + "_dev_".len()..]
             .replace('_', ":")
             .to_ascii_uppercase();
         if !mac.contains(':') {
             continue;
         }
-        if let Some(batt) = read_upower_device(path) {
+        if let Some(batt) = read_upower_device_dbus(&conn, path_str).await {
             map.insert(mac, batt);
         }
     }
     map
 }
 
-/// Parse `percentage:`/`state:` out of `upower -i <path>` for one device.
-fn read_upower_device(path: &str) -> Option<DeviceBattery> {
-    let mut cmd = std::process::Command::new("upower");
-    cmd.args(["-i", path]);
-    let output = run_command(&mut cmd)?;
-    let text = String::from_utf8_lossy(&output.stdout);
+async fn read_upower_device_dbus(
+    conn: &zbus::Connection,
+    path: &str,
+) -> Option<DeviceBattery> {
+    let proxy = zbus::Proxy::new(
+        conn,
+        "org.freedesktop.UPower",
+        path,
+        "org.freedesktop.UPower.Device",
+    )
+    .await
+    .ok()?;
     let mut batt = DeviceBattery::default();
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("percentage:") {
-            if let Ok(v) = rest.trim().trim_end_matches('%').parse::<f32>() {
-                batt.percent = Some(v.round().clamp(0.0, 100.0) as u8);
-            }
-        } else if let Some(rest) = line.strip_prefix("state:") {
-            batt.charging = match rest.trim() {
-                "charging" | "fully-charged" => Some(true),
-                "discharging" | "pending-discharge" => Some(false),
-                // "unknown" / "pending-charge" carry no reliable signal.
-                _ => None,
-            };
-        }
+    if let Ok(pct) = proxy.get_property::<f64>("Percentage").await {
+        batt.percent = Some(pct.round().clamp(0.0, 100.0) as u8);
+    }
+    // UPower Device.State: 1=charging, 2=discharging, 4=fully-charged, …
+    if let Ok(state) = proxy.get_property::<u32>("State").await {
+        batt.charging = match state {
+            1 | 4 => Some(true),
+            2 | 3 => Some(false), // discharging / empty
+            _ => None,
+        };
     }
     (batt.percent.is_some() || batt.charging.is_some()).then_some(batt)
 }

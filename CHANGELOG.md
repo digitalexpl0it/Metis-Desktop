@@ -9,6 +9,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **Shell bar poll** — BlueZ/UPower D-Bus dirty wakes (alongside NetworkManager);
+  peripheral batteries via zbus UPower; `bluetoothctl info` / `solaar` only when
+  HID/UPower leave gaps; nmcli timed heartbeat stretches when the NM watcher is
+  alive. Volume still uses `pactl`.
 - **Metis Secret Service (`metis-secretsd`)** — first-party `org.freedesktop.secrets`
   provider is the session default (vault under `~/.local/share/metis/secrets/`);
   third-party providers left alone if already on the bus; portal `Secret=` no

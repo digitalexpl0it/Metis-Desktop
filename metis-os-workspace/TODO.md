@@ -131,8 +131,10 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       calendar `try_recv` armed only while the notification center is open.
 - [ ] **Refresh `PERF_AUDIT.md`** — re-measure release binary sizes (~52 MB
       four-bin vs ~40 MB June audit) and DRM idle/`perf` under ScreenCast.
-- [ ] Shell poll: keep pushing D-Bus signals; reduce `nmcli` /
-      `bluetoothctl` / `solaar` forks on the slow tick.
+- [x] **Shell poll D-Bus dirty + fewer forks** (2026-10-07) — BlueZ/UPower
+      dirty wakes; UPower via zbus; gate `bluetoothctl info` / `solaar`; stretch
+      nmcli heartbeat when NM watcher is alive. Residual: Pulse still `pactl`;
+      BlueZ inventory still `bluetoothctl show` / `devices Connected`.
 
 ### Code quality / maintainability
 
@@ -1816,6 +1818,9 @@ big-bang `state.rs` rewrite; Sober/Flatpak app bugs unrelated to Metis portals.
 
 - [x] **D-Bus-driven network dirty flag** — NetworkManager `StateChanged` →
       immediate refresh; slower battery/BT ticks; adaptive sleep
+- [x] **BlueZ / UPower dirty wakes + fewer CLI forks** (2026-10-07) — `BT_DIRTY` /
+      `POWER_DIRTY`; UPower enumerate via zbus; gate `bluetoothctl info` /
+      `solaar`; nmcli timed heartbeat ×4 when NM watcher lives
 - [x] **GSK env documented** — `METIS_SHELL_GSK_RENDERER=gl` opt-in; Cairo default
       for shell. Settings defaults to Cairo too (`METIS_SETTINGS_GSK_RENDERER`,
       2026-09-19)
