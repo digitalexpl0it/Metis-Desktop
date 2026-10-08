@@ -443,8 +443,7 @@ pub fn load_viewer_config() -> ViewerConfig {
 
 pub fn save_viewer_config(cfg: &ViewerConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(cfg).map_err(std::io::Error::other)?;
-    std::fs::write(viewer_config_path(), json)
+    crate::persist::write_json_atomic(&viewer_config_path(), cfg)
 }
 
 /// Same wire endpoint: protocol + host + port + username (label ignored).
@@ -566,10 +565,7 @@ pub fn set_viewer_pending_placement(placement: ViewerPlacement) {
         ViewerPlacement::Window => "window",
     };
     let path = viewer_pending_placement_path();
-    let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, body).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    let _ = crate::persist::write_bytes_atomic(&path, body.as_bytes());
 }
 
 /// Consume the pending FreeRDP placement stamp (defaults to dedicated workspace).

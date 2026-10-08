@@ -94,6 +94,5 @@ pub fn load_remote_config() -> RemoteConfig {
 
 pub fn save_remote_config(cfg: &RemoteConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(cfg).map_err(std::io::Error::other)?;
-    std::fs::write(remote_config_path(), json)
+    crate::persist::write_json_atomic(&remote_config_path(), cfg)
 }

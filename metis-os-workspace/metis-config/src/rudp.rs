@@ -221,14 +221,7 @@ pub fn load_rudp_identity_meta() -> Option<RudpIdentityMeta> {
 pub fn save_rudp_identity_meta(meta: &RudpIdentityMeta) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
     std::fs::create_dir_all(rudp_dir())?;
-    let path = rudp_identity_meta_path();
-    let json = serde_json::to_string_pretty(meta).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(&tmp, &path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })?;
-    Ok(())
+    crate::persist::write_json_atomic(&rudp_identity_meta_path(), meta)
 }
 
 /// Read SHA-256 fingerprint from `identity.json`, or compute from `host.crt` PEM.
@@ -349,12 +342,7 @@ pub fn known_hosts_pin(host_port: &str, fingerprint: &str) -> std::io::Result<()
         Vec::new()
     };
     lines.push(format!("{key} {fp}"));
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, lines.join("\n") + "\n")?;
-    std::fs::rename(&tmp, &path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })?;
-    Ok(())
+    crate::persist::write_bytes_atomic(&path, (lines.join("\n") + "\n").as_bytes())
 }
 
 pub fn known_hosts_remove(host_port: &str) -> std::io::Result<bool> {
@@ -383,7 +371,7 @@ pub fn known_hosts_remove(host_port: &str) -> std::io::Result<bool> {
         .map(str::to_string)
         .collect();
     if removed {
-        std::fs::write(&path, lines.join("\n") + "\n")?;
+        crate::persist::write_bytes_atomic(&path, (lines.join("\n") + "\n").as_bytes())?;
     }
     Ok(removed)
 }
@@ -410,14 +398,7 @@ pub fn load_rudp_config() -> RudpConfig {
 pub fn save_rudp_config(cfg: &RudpConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
     let cfg = cfg.clone().sanitize();
-    let path = rudp_config_path();
-    let json = serde_json::to_string_pretty(&cfg).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(&tmp, &path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })?;
-    Ok(())
+    crate::persist::write_json_atomic(&rudp_config_path(), &cfg)
 }
 
 /// True when `path` looks like an existing PEM certificate file.

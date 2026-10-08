@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use gtk::glib;
 use gtk::prelude::*;
 
 use crate::gtk_cb::ClipboardItemCells;
@@ -149,9 +150,14 @@ impl ClipboardWidget {
             })
         };
 
-        let settings_popover = gtk::Popover::builder().has_arrow(true).build();
+        // Nested under the clipboard layer-shell popover — autohide grabs fail.
+        let settings_popover = gtk::Popover::builder()
+            .autohide(false)
+            .has_arrow(true)
+            .build();
         settings_popover.add_css_class("metis-bar-popover");
         settings_popover.set_parent(&settings_btn);
+        super::super::dropdown::register(&settings_popover);
         let settings_panel = super::super::dropdown::build_panel();
         settings_panel.add_css_class("metis-clipboard-settings-menu");
         settings_panel.set_spacing(2);
@@ -205,7 +211,17 @@ impl ClipboardWidget {
             let items = settings_items.clone();
             move |_| {
                 sync_settings_selection(&items, page_size());
-                settings_popover.popup();
+                if settings_popover.is_visible() {
+                    let pop = settings_popover.clone();
+                    glib::idle_add_local_once(move || {
+                        pop.popdown();
+                    });
+                    return;
+                }
+                let pop = settings_popover.clone();
+                glib::idle_add_local_once(move || {
+                    pop.popup();
+                });
             }
         });
 

@@ -147,11 +147,7 @@ pub fn save_updates_config(config: &UpdatesConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
     let mut clean = config.clone();
     sanitize_updates_config(&mut clean);
-    let json = serde_json::to_string_pretty(&clean).map_err(std::io::Error::other)?;
-    let path = updates_config_path();
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(tmp, path)
+    crate::persist::write_json_atomic(&updates_config_path(), &clean)
 }
 
 #[cfg(test)]

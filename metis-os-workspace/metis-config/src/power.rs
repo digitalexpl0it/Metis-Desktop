@@ -81,6 +81,5 @@ pub fn load_power_config() -> PowerConfig {
 
 pub fn save_power_config(cfg: &PowerConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(cfg).map_err(std::io::Error::other)?;
-    std::fs::write(power_config_path(), json)
+    crate::persist::write_json_atomic(&power_config_path(), cfg)
 }

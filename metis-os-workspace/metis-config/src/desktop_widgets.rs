@@ -667,11 +667,7 @@ pub fn load_desktop_widgets_config() -> DesktopWidgetsConfig {
 pub fn save_desktop_widgets_config(cfg: &DesktopWidgetsConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
     let cfg = sanitize(cfg.clone());
-    let json = serde_json::to_string_pretty(&cfg).map_err(std::io::Error::other)?;
-    let path = desktop_widgets_config_path();
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(tmp, path)
+    crate::persist::write_json_atomic(&desktop_widgets_config_path(), &cfg)
 }
 
 fn sanitize(mut cfg: DesktopWidgetsConfig) -> DesktopWidgetsConfig {

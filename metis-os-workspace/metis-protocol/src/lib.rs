@@ -623,6 +623,7 @@ pub const BAR_RUNTIME_VERBS: &[&str] = &[
 
 /// Verbs accepted on `$XDG_RUNTIME_DIR/metis/command-widgets`.
 pub const WIDGETS_RUNTIME_VERBS: &[&str] = &[
+    "close-popovers",
     "reload-desktop-widgets",
     "reload-theme",
     "reload-locale",
@@ -926,6 +927,7 @@ mod tests {
                 .verb,
             "reload-theme"
         );
+        assert!(parse_runtime_command("close-popovers", WIDGETS_RUNTIME_VERBS).is_ok());
         assert!(parse_runtime_command("toggle-menu", WIDGETS_RUNTIME_VERBS).is_err());
         assert!(write_runtime_command("not-a-verb").is_err());
     }

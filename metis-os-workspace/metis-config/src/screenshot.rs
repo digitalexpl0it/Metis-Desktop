@@ -120,9 +120,10 @@ pub fn save_default_screenshot_config() -> std::io::Result<()> {
 
 pub fn save_screenshot_config(config: &ScreenshotConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(&sanitize_screenshot_config(config.clone()))
-        .map_err(std::io::Error::other)?;
-    std::fs::write(screenshot_config_path(), json)
+    crate::persist::write_json_atomic(
+        &screenshot_config_path(),
+        &sanitize_screenshot_config(config.clone()),
+    )
 }
 
 fn sanitize_screenshot_config(mut cfg: ScreenshotConfig) -> ScreenshotConfig {

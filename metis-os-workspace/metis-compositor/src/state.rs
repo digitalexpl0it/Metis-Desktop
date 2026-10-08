@@ -3136,13 +3136,28 @@ impl MetisState {
             .is_some_and(|until| std::time::Instant::now() < until)
     }
 
-    /// Dismiss bar popovers / NC and briefly pause edge-hover IPC so the shell
-    /// actually receives `close-popovers` (same command file as edge hover).
+    /// Dismiss bar popovers / NC and briefly pause edge-hover IPC.
     pub(crate) fn request_close_bar_popovers(&mut self) {
+        self.request_close_shell_popovers(None);
+    }
+
+    /// Dismiss bar popovers, and desktop-widget popovers when the press is not
+    /// already on the widgets layer (widgets dismiss those locally in GTK).
+    pub(crate) fn request_close_shell_popovers(
+        &mut self,
+        pos: Option<smithay::utils::Point<f64, smithay::utils::Logical>>,
+    ) {
         self.suppress_bar_edge_cmd_until =
             Some(std::time::Instant::now() + std::time::Duration::from_millis(350));
         if let Err(err) = metis_protocol::write_runtime_command("close-popovers") {
             tracing::debug!(%err, "failed to write close-popovers");
+        }
+        let on_widgets = pos.is_some_and(|p| self.metis_desktop_widgets_hit(p));
+        if on_widgets {
+            return;
+        }
+        if let Err(err) = metis_protocol::write_runtime_command_widgets("close-popovers") {
+            tracing::debug!(%err, "failed to write widgets close-popovers");
         }
     }
 

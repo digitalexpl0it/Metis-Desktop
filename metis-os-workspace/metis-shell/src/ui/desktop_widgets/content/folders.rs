@@ -425,6 +425,34 @@ fn menu_button(label: &str, popover: &gtk::Popover, on_click: Rc<dyn Fn()>) -> g
     item
 }
 
+/// Layer-shell popovers cannot use GTK autohide (popup grab is ignored). Match
+/// bar/dashboard: `autohide(false)`, register for compositor close-popovers, idle popup.
+fn layer_shell_popover(has_arrow: bool) -> gtk::Popover {
+    gtk::Popover::builder()
+        .autohide(false)
+        .has_arrow(has_arrow)
+        .build()
+}
+
+fn present_layer_popover(popover: gtk::Popover, after_popup: impl FnOnce() + 'static) {
+    // Layer-shell popovers skip GTK autohide, so without this every right-click
+    // stacks another menu (same single-open rule as bar dropdowns).
+    crate::ui::bar::close_bar_popovers();
+    crate::ui::bar::register_bar_popover(&popover);
+    let weak = popover.downgrade();
+    popover.connect_closed(move |_| {
+        if let Some(p) = weak.upgrade()
+            && p.parent().is_some()
+        {
+            p.unparent();
+        }
+    });
+    glib::idle_add_local_once(move || {
+        popover.popup();
+        after_popup();
+    });
+}
+
 fn attach_entry_menu(btn: &gtk::Button, entry: &DirEntry, parent_dir: &Path) {
     let gesture = gtk::GestureClick::builder()
         .button(gdk::BUTTON_SECONDARY)
@@ -438,10 +466,7 @@ fn attach_entry_menu(btn: &gtk::Button, entry: &DirEntry, parent_dir: &Path) {
         let Some(btn) = btn_weak.upgrade() else {
             return;
         };
-        let popover = gtk::Popover::builder()
-            .autohide(true)
-            .has_arrow(true)
-            .build();
+        let popover = layer_shell_popover(true);
         popover.set_parent(&btn);
         let panel = gtk::Box::new(gtk::Orientation::Vertical, 2);
         panel.set_margin_start(6);
@@ -522,7 +547,7 @@ fn attach_entry_menu(btn: &gtk::Button, entry: &DirEntry, parent_dir: &Path) {
             ));
         }
 
-        popover.popup();
+        present_layer_popover(popover, || {});
     });
 
     btn.add_controller(gesture);
@@ -579,10 +604,7 @@ fn attach_background_menu_box(list: &gtk::Box, parent_dir: Rc<PathBuf>) {
 }
 
 fn show_background_menu(parent: &impl IsA<gtk::Widget>, parent_dir: &Path, x: f64, y: f64) {
-    let popover = gtk::Popover::builder()
-        .autohide(true)
-        .has_arrow(false)
-        .build();
+    let popover = layer_shell_popover(false);
     popover.set_parent(parent);
     let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
     popover.set_pointing_to(Some(&rect));
@@ -606,7 +628,7 @@ fn show_background_menu(parent: &impl IsA<gtk::Widget>, parent_dir: &Path, x: f6
         Rc::new(move || crate::services::open_in_file_manager(&dir)),
     ));
 
-    popover.popup();
+    present_layer_popover(popover, || {});
 }
 
 fn create_new_folder(parent: &Path) {
@@ -631,10 +653,7 @@ fn confirm_delete(anchor: &impl IsA<gtk::Widget>, path: &Path, name: &str) {
     // A separate gtk::Window is an RGBA buffer under the shell stylesheet
     // (`window { background-color: transparent }`); CSS never fills those pixels,
     // and Metis SSD draws a hollow/ghost titlebar around them.
-    let popover = gtk::Popover::builder()
-        .autohide(true)
-        .has_arrow(false)
-        .build();
+    let popover = layer_shell_popover(false);
     popover.add_css_class("metis-dw-confirm");
     popover.set_parent(anchor);
 
@@ -685,7 +704,7 @@ fn confirm_delete(anchor: &impl IsA<gtk::Widget>, path: &Path, name: &str) {
         });
     }
 
-    popover.popup();
+    present_layer_popover(popover, || {});
 }
 
 fn prompt_rename(anchor: &impl IsA<gtk::Widget>, parent: &Path, path: &Path, old_name: &str) {
@@ -693,10 +712,7 @@ fn prompt_rename(anchor: &impl IsA<gtk::Widget>, parent: &Path, path: &Path, old
     let path = path.to_path_buf();
     let old_name = old_name.to_string();
 
-    let popover = gtk::Popover::builder()
-        .autohide(true)
-        .has_arrow(false)
-        .build();
+    let popover = layer_shell_popover(false);
     popover.add_css_class("metis-dw-confirm");
     popover.set_parent(anchor);
 
@@ -760,8 +776,10 @@ fn prompt_rename(anchor: &impl IsA<gtk::Widget>, parent: &Path, path: &Path, old
         entry.connect_activate(move |_| do_rename());
     }
 
-    popover.popup();
-    entry.grab_focus();
+    let entry_focus = entry.clone();
+    present_layer_popover(popover, move || {
+        entry_focus.grab_focus();
+    });
 }
 
 /// Popover panel with a Cairo-painted opaque backdrop under the content.

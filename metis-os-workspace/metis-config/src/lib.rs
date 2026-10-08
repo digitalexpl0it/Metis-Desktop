@@ -24,6 +24,7 @@ pub mod locale;
 pub mod lock;
 pub mod menu;
 pub mod outputs;
+pub mod persist;
 pub mod power;
 pub mod remote;
 pub mod reset;
@@ -177,38 +178,7 @@ pub fn save_app_config(config: &AppConfig) -> std::io::Result<()> {
     ensure_config_dirs()?;
     let path = app_config_path();
     let config = sanitize_app_config(config.clone());
-    let json = serde_json::to_string_pretty(&config).map_err(std::io::Error::other)?;
-    // Atomic replace so a partial write cannot leave a corrupt file.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &json).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            std::io::Error::new(
-                e.kind(),
-                format!(
-                    "permission denied writing {} — is the file owned by root? \
-                     Run: sudo chown -R \"$USER:$USER\" ~/.config/metis",
-                    path.display()
-                ),
-            )
-        } else {
-            e
-        }
-    })?;
-    std::fs::rename(&tmp, &path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            std::io::Error::new(
-                e.kind(),
-                format!(
-                    "permission denied replacing {} — is it owned by root? \
-                     Run: sudo chown -R \"$USER:$USER\" ~/.config/metis",
-                    path.display()
-                ),
-            )
-        } else {
-            e
-        }
-    })
+    persist::write_json_atomic(&path, &config)
 }
 
 pub fn load_theme_preference() -> Option<ThemeMode> {
@@ -244,9 +214,7 @@ pub fn write_appearance_mode_stamp(mode: ThemeMode) -> std::io::Result<()> {
         ThemeMode::System => "system",
     };
     let path = config_dir().join("appearance.mode");
-    let tmp = path.with_extension("mode.tmp");
-    std::fs::write(&tmp, format!("{label}\n"))?;
-    std::fs::rename(tmp, path)
+    persist::write_bytes_atomic(&path, format!("{label}\n").as_bytes())
 }
 
 /// Read [`write_appearance_mode_stamp`], if present.
@@ -395,14 +363,9 @@ pub fn mark_gaming_setup_complete() -> std::io::Result<()> {
 pub fn save_theme_tokens(name: &str, tokens: &theme::ThemeTokens) -> std::io::Result<()> {
     ensure_config_dirs()?;
     let path = theme_file_path_for_name(name);
-    let json = serde_json::to_string_pretty(tokens).map_err(std::io::Error::other)?;
-    // Atomic replace — same pattern as save_app_config — so a crash mid-write
-    // cannot leave a corrupt theme that falls back to stock accents.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(&tmp, &path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+    // Atomic replace so a crash mid-write cannot leave a corrupt theme that
+    // falls back to stock accents.
+    persist::write_json_atomic(&path, tokens)
 }
 
 /// Load a theme token set from `themes/<name>.json`, falling back to the embedded
@@ -502,6 +465,7 @@ pub use outputs::{
     minutes_to_hhmm, night_light_effective, output_prefs, outputs_config_path, parse_hhmm,
     parse_schedule_input, save_outputs_config, schedule_half_hour_presets,
 };
+pub use persist::{write_bytes_atomic, write_json_atomic};
 pub use power::{
     LidCloseAction, PowerConfig, PowerProfile, load_power_config, power_config_path,
     save_power_config,

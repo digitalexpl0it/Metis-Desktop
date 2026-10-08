@@ -43,7 +43,5 @@ pub fn load_locale_config() -> LocaleConfig {
 
 pub fn save_locale_config(cfg: &LocaleConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let text = serde_json::to_string_pretty(cfg)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(locale_config_path(), text)
+    crate::persist::write_json_atomic(&locale_config_path(), cfg)
 }

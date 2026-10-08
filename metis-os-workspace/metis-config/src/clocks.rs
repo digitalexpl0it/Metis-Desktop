@@ -85,15 +85,7 @@ pub fn clocks_config_path() -> std::path::PathBuf {
 /// Load clock.json, creating it on first run seeded with `seed_timezones`.
 pub fn load_clocks_config(seed_timezones: &[String]) -> ClocksConfig {
     let path = clocks_config_path();
-    if path.exists()
-        && let Ok(text) = std::fs::read_to_string(&path)
-    {
-        if let Ok(cfg) = serde_json::from_str::<ClocksConfig>(&text) {
-            return cfg;
-        }
-        tracing::warn!("clock.json parse failed — using defaults");
-    }
-    let seeded = ClocksConfig {
+    let seeded = || ClocksConfig {
         world_clocks: seed_timezones
             .iter()
             .filter(|tz| tz.as_str() != "UTC" || seed_timezones.len() == 1)
@@ -101,12 +93,71 @@ pub fn load_clocks_config(seed_timezones: &[String]) -> ClocksConfig {
             .collect(),
         alarms: Vec::new(),
     };
+    if path.exists() {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            match serde_json::from_str::<ClocksConfig>(&text) {
+                Ok(cfg) => return cfg,
+                Err(err) => {
+                    // Match bar.json: never rewrite a corrupt file (watcher loops).
+                    tracing::warn!(%err, "clock.json parse failed — using defaults (not rewriting disk)");
+                    return seeded();
+                }
+            }
+        }
+        tracing::warn!("clock.json unreadable — using defaults (not rewriting disk)");
+        return seeded();
+    }
+    let seeded = seeded();
     let _ = save_clocks_config(&seeded);
     seeded
 }
 
 pub fn save_clocks_config(config: &ClocksConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
-    std::fs::write(clocks_config_path(), json)
+    crate::persist::write_json_atomic(&clocks_config_path(), config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn parse_fail_does_not_rewrite_disk() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let dir = std::env::temp_dir().join(format!(
+            "metis-clocks-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
+
+        let path = clocks_config_path();
+        fs::create_dir_all(path.parent().expect("parent")).expect("metis dir");
+        let corrupt = "{not valid json";
+        fs::write(&path, corrupt).expect("write corrupt");
+
+        let cfg = load_clocks_config(&["UTC".into()]);
+        assert_eq!(cfg.world_clocks, vec!["UTC".to_string()]);
+        assert_eq!(
+            fs::read_to_string(&path).expect("read after"),
+            corrupt,
+            "corrupt file must not be rewritten"
+        );
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

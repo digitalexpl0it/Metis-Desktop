@@ -279,11 +279,7 @@ pub fn load_outputs_config_with_fallback(fallback: &OutputsConfig) -> OutputsCon
 
 pub fn save_outputs_config(cfg: &OutputsConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let path = outputs_config_path();
-    let json = serde_json::to_string_pretty(cfg).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(tmp, path)
+    crate::persist::write_json_atomic(&outputs_config_path(), cfg)
 }
 
 /// Merge saved prefs for `name`, creating defaults when missing.

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use gtk::gdk;
 use gtk::gio;
+use gtk::glib;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use metis_config::{
@@ -451,6 +452,7 @@ fn build_host(monitor: &gdk::Monitor, output: String, is_primary: bool) -> HostS
     canvas.add_css_class("metis-desktop-widgets-canvas");
     canvas.set_hexpand(true);
     canvas.set_vexpand(true);
+    wire_canvas_popover_dismiss(&canvas);
     window.set_child(Some(&canvas));
     window.present();
 
@@ -460,6 +462,38 @@ fn build_host(monitor: &gdk::Monitor, output: String, is_primary: bool) -> HostS
         output,
         is_primary,
     }
+}
+
+/// Layer-shell popovers use `autohide(false)`. Compositor `close-popovers` only
+/// helps for presses outside this fullscreen host — clicks on empty canvas /
+/// other cards must dismiss here (same pattern as the dashboard process menu).
+fn wire_canvas_popover_dismiss(canvas: &gtk::Fixed) {
+    let dismiss = gtk::GestureClick::builder()
+        .button(gdk::BUTTON_PRIMARY)
+        .propagation_phase(gtk::PropagationPhase::Capture)
+        .build();
+    dismiss.connect_pressed(move |gesture, _, x, y| {
+        if !crate::ui::bar::dropdown_is_open() {
+            return;
+        }
+        let target = gesture
+            .widget()
+            .and_then(|host| host.pick(x, y, gtk::PickFlags::DEFAULT));
+        if let Some(target) = target {
+            let mut node = Some(target);
+            while let Some(w) = node {
+                if w.is::<gtk::Popover>()
+                    || w.has_css_class("metis-dw-confirm")
+                    || w.has_css_class("metis-dw-menu-item")
+                {
+                    return;
+                }
+                node = w.parent();
+            }
+        }
+        crate::ui::bar::close_bar_popovers();
+    });
+    canvas.add_controller(dismiss);
 }
 
 fn populate_host(host: &HostSurface, cfg: &DesktopWidgetsConfig) {
@@ -898,6 +932,7 @@ fn watch_widgets_commands() {
                             tracing::warn!("widgets runtime command dispatch rate limited");
                         } else {
                             match parsed.verb {
+                                "close-popovers" => crate::ui::bar::close_bar_popovers(),
                                 "reload-desktop-widgets" => reload(),
                                 "reload-theme" => {
                                     let _ = crate::ui::theme::init_theme();

@@ -112,8 +112,7 @@ pub fn load_wallpaper_config() -> WallpaperConfig {
 
 pub fn save_wallpaper_config(cfg: &WallpaperConfig) -> std::io::Result<()> {
     ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(cfg).map_err(std::io::Error::other)?;
-    std::fs::write(wallpaper_config_path(), json)
+    crate::persist::write_json_atomic(&wallpaper_config_path(), cfg)
 }
 
 /// On-disk RGBA cache for full wallpaper decodes (`~/.cache/metis/wallpaper-rgba/`).
@@ -198,10 +197,7 @@ pub fn store_wallpaper_rgba_cache(path: &Path, w: u32, h: u32, rgba: &[u8]) -> s
     out.extend_from_slice(&w.to_le_bytes());
     out.extend_from_slice(&h.to_le_bytes());
     out.extend_from_slice(rgba);
-    let tmp = cache.with_extension("rgba.tmp");
-    std::fs::write(&tmp, &out)?;
-    std::fs::rename(&tmp, &cache)?;
-    Ok(())
+    crate::persist::write_bytes_atomic(&cache, &out)
 }
 
 /// True when a valid RGBA cache entry already exists for `path`.

@@ -206,11 +206,7 @@ pub fn save_default_decorations_config() -> std::io::Result<()> {
 
 pub fn save_decorations_config(cfg: &DecorationsConfig) -> std::io::Result<()> {
     ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(cfg).map_err(std::io::Error::other)?;
-    let path = decorations_config_path();
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(tmp, path)
+    crate::persist::write_json_atomic(&decorations_config_path(), cfg)
 }
 
 #[cfg(test)]

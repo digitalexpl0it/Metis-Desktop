@@ -66,8 +66,7 @@ pub fn load_startup_config() -> StartupConfig {
 pub fn save_startup_config(cfg: &StartupConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
     let clean = sanitize_startup_config(cfg.clone());
-    let json = serde_json::to_string_pretty(&clean).map_err(std::io::Error::other)?;
-    std::fs::write(startup_config_path(), json)
+    crate::persist::write_json_atomic(&startup_config_path(), &clean)
 }
 
 /// Drop invalid ids, clamp delays, dedupe by id (first wins), cap list length.

@@ -1,5 +1,7 @@
 mod dropdown;
-pub(crate) use dropdown::{close_all as close_bar_popovers, register as register_bar_popover};
+pub(crate) use dropdown::{
+    close_all as close_bar_popovers, is_open as dropdown_is_open, register as register_bar_popover,
+};
 pub(crate) mod widgets;
 
 use std::cell::{Cell, RefCell};

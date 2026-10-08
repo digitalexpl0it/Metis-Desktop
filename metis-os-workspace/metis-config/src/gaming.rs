@@ -152,9 +152,7 @@ pub fn load_gaming_config() -> GamingConfig {
 
 pub fn save_gaming_config(cfg: &GamingConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json =
-        serde_json::to_string_pretty(&sanitize(cfg.clone())).map_err(std::io::Error::other)?;
-    std::fs::write(gaming_config_path(), json)
+    crate::persist::write_json_atomic(&gaming_config_path(), &sanitize(cfg.clone()))
 }
 
 pub fn save_default_gaming_config() -> std::io::Result<()> {
@@ -178,8 +176,7 @@ pub fn load_gaming_flatpak_state() -> GamingFlatpakState {
 
 pub fn save_gaming_flatpak_state(state: &GamingFlatpakState) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(state).map_err(std::io::Error::other)?;
-    std::fs::write(gaming_flatpak_state_path(), json)
+    crate::persist::write_json_atomic(&gaming_flatpak_state_path(), state)
 }
 
 fn sanitize(cfg: GamingConfig) -> GamingConfig {

@@ -80,13 +80,19 @@ pub fn default_local_dir() -> std::path::PathBuf {
 
 pub fn load_calendars_config() -> CalendarsConfig {
     let path = calendars_config_path();
-    if path.exists()
-        && let Ok(text) = std::fs::read_to_string(&path)
-    {
-        if let Ok(cfg) = serde_json::from_str::<CalendarsConfig>(&text) {
-            return cfg;
+    if path.exists() {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            match serde_json::from_str::<CalendarsConfig>(&text) {
+                Ok(cfg) => return cfg,
+                Err(err) => {
+                    // Match bar.json: never rewrite a corrupt file (watcher loops).
+                    tracing::warn!(%err, "calendars.json parse failed — using defaults (not rewriting disk)");
+                    return CalendarsConfig::default();
+                }
+            }
         }
-        tracing::warn!("calendars.json parse failed — using defaults");
+        tracing::warn!("calendars.json unreadable — using defaults (not rewriting disk)");
+        return CalendarsConfig::default();
     }
     let cfg = CalendarsConfig::default();
     let _ = save_calendars_config(&cfg);
@@ -95,6 +101,51 @@ pub fn load_calendars_config() -> CalendarsConfig {
 
 pub fn save_calendars_config(config: &CalendarsConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
-    std::fs::write(calendars_config_path(), json)
+    crate::persist::write_json_atomic(&calendars_config_path(), config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::Mutex;
+
+    // Serialise env mutations — other modules also touch XDG_CONFIG_HOME.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn parse_fail_does_not_rewrite_disk() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let dir = std::env::temp_dir().join(format!(
+            "metis-calendars-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
+
+        let path = calendars_config_path();
+        fs::create_dir_all(path.parent().expect("parent")).expect("metis dir");
+        let corrupt = "{not valid json";
+        fs::write(&path, corrupt).expect("write corrupt");
+        let before = fs::metadata(&path).expect("meta").modified().ok();
+
+        let cfg = load_calendars_config();
+        assert!(cfg.accounts.iter().any(|a| a.id == "local"));
+        let after_text = fs::read_to_string(&path).expect("read after");
+        assert_eq!(after_text, corrupt, "corrupt file must not be rewritten");
+        let after = fs::metadata(&path).expect("meta2").modified().ok();
+        assert_eq!(before, after);
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

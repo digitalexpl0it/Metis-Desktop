@@ -134,14 +134,15 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
 
 ### Code quality / maintainability
 
-- [ ] **Layer-shell popover invariant** — shared factory
-      (`autohide(false)` + register + idle popup); fix
-      `desktop_widgets/content/folders.rs` (four `autohide(true)`) and
-      clipboard settings popover; CI `rg` ban for `autohide(true)` /
-      tooltips / nested `Popover` under NC/calendar/toast.
-- [ ] **Config load/save helpers** — promote `bar.rs` migrate-converge +
-      atomic write to every watched `~/.config/metis/*.json` (many still
-      bare `fs::write`: clocks, calendars, keybinds, wallpaper, input, …).
+- [x] **Layer-shell popover invariant** (2026-10-07) — Folders desktop-widget
+      menus + clipboard settings nest use `autohide(false)` +
+      `register_bar_popover` + idle `popup`; CI
+      `scripts/check-layer-shell-popovers.sh` bans `autohide(true)` in
+      `metis-shell`. Residual: tooltips / nested `Popover` under NC/calendar/toast.
+- [x] **Config load/save helpers** (2026-10-07) — shared
+      `persist::write_json_atomic` / `write_bytes_atomic` for all
+      `~/.config/metis/*.json` saves; calendars/clocks no longer rewrite on
+      parse failure (seed only when missing). `bar` migrate once-guard unchanged.
 - [ ] **Split `state.rs`** (~9.8k) — desk/workspace, geometry, X11 lifecycle
       modules; continue when touching those areas.
 - [ ] **Split / share CSS** — `metis-config` `css.rs` (~4.6k) by surface;
@@ -301,6 +302,12 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
         clicking the search box first (`SearchEntry` key capture, no focus grab); and
         the scroll gutter/scrollbar stay flat in dark mode (GTK variant synced to the
         active theme)
+- [ ] **Drag-reorder edge-bar status icons** — let the user drag icons in the
+      right-side system cluster (network, bluetooth, volume, battery, tray, …)
+      to change order live (e.g. network to the right of bluetooth), persisting
+      to `bar.json` `widgets` (Settings → Edge bar order already exists; this is
+      on-bar drag). Respect migrate tray/updates clustering; don’t break click /
+      popover open (long-press or drag-threshold vs click).
 
 ---
 

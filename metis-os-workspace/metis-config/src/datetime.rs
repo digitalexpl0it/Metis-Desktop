@@ -79,6 +79,5 @@ pub fn load_datetime_config() -> DateTimeConfig {
 
 pub fn save_datetime_config(config: &DateTimeConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
-    std::fs::write(datetime_config_path(), json)
+    crate::persist::write_json_atomic(&datetime_config_path(), config)
 }

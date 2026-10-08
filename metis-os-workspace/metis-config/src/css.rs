@@ -616,20 +616,30 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
         min-width: 8px;
     }}
 
-    /* Window picker + context menu rows inside task popovers. */
+    /* Flat list rows (Folders-style). Must beat `.metis-bar-dropdown-panel >
+       button` chip chrome — task/volumes menus put rows as direct children. */
+    .metis-bar-dropdown-panel > button.metis-bar-task-menu-item,
+    .metis-bar-dropdown-panel > button.metis-bar-volumes-menu-item,
+    button.metis-bar-task-menu-item,
+    button.metis-bar-volumes-menu-item,
     .metis-bar-task-pick,
-    .metis-bar-task-menu-item,
     .metis-bar-tray-menu-item {{
+        background-image: none;
         background-color: transparent;
+        border: none;
+        box-shadow: none;
         border-radius: {rs}px;
         padding: 6px 10px;
         color: {text};
     }}
 
+    .metis-bar-dropdown-panel > button.metis-bar-task-menu-item:hover,
+    .metis-bar-dropdown-panel > button.metis-bar-volumes-menu-item:hover,
+    button.metis-bar-task-menu-item:hover,
+    button.metis-bar-volumes-menu-item:hover,
     .metis-bar-task-pick:hover,
-    .metis-bar-task-menu-item:hover,
     .metis-bar-tray-menu-item:hover {{
-        background-color: rgba({accent_rgb}, 0.18);
+        background-color: rgba({accent_rgb}, 0.14);
     }}
 
     .metis-bar-tray-pinned {{
@@ -690,13 +700,6 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
     }}
     .metis-bar-volumes-menu-title {{
         max-width: 220px;
-    }}
-    .metis-bar-volumes-menu-item {{
-        padding: 6px 10px;
-        border-radius: {rs}px;
-    }}
-    .metis-bar-volumes-menu-item:hover {{
-        background-color: rgba({text_rgb}, 0.08);
     }}
 
     /* Software Updates — opaque xdg_toplevel under Metis SSD. Solid rgb() so

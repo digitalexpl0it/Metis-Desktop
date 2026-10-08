@@ -77,6 +77,11 @@ jobs:
       - name: cargo deny
         run: cargo deny check
 
+      - name: Layer-shell popover invariant
+        run: |
+          apt-get install -y --no-install-recommends ripgrep
+          ./scripts/check-layer-shell-popovers.sh
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
 

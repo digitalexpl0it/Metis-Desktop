@@ -688,13 +688,8 @@ fn persist_migrated_bar(cfg: &mut BarConfig) {
         }
     }
     sanitize_bar_config(cfg);
-    if let Ok(json) = serde_json::to_string_pretty(&*cfg) {
-        let path = bar_config_path();
-        let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, &json).is_ok() {
-            let _ = std::fs::rename(tmp, path);
-            invalidate_bar_config_cache();
-        }
+    if crate::persist::write_json_atomic(&bar_config_path(), &*cfg).is_ok() {
+        invalidate_bar_config_cache();
     }
 }
 
@@ -972,9 +967,7 @@ pub fn save_default_bar_config() -> std::io::Result<()> {
     if path.exists() {
         return Ok(());
     }
-    let json =
-        serde_json::to_string_pretty(&BarConfig::default()).map_err(std::io::Error::other)?;
-    std::fs::write(path, json)
+    crate::persist::write_json_atomic(&path, &BarConfig::default())
 }
 
 /// Persist a full bar configuration (used by the settings app's Appearance page
@@ -983,11 +976,7 @@ pub fn save_bar_config(config: &BarConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
     let mut clean = config.clone();
     sanitize_bar_config(&mut clean);
-    let json = serde_json::to_string_pretty(&clean).map_err(std::io::Error::other)?;
-    let path = bar_config_path();
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(tmp, &path)?;
+    crate::persist::write_json_atomic(&bar_config_path(), &clean)?;
     invalidate_bar_config_cache();
     Ok(())
 }

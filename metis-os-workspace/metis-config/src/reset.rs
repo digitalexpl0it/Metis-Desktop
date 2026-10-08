@@ -85,14 +85,7 @@ fn write_onboarding_complete_at(dir: &Path) -> io::Result<()> {
         gaming_setup_complete: true,
         ..Default::default()
     };
-    let path = dir.join("config.json");
-    let json = serde_json::to_string_pretty(&cfg).map_err(io::Error::other)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, json)?;
-    fs::rename(&tmp, &path).inspect_err(|_| {
-        let _ = fs::remove_file(&tmp);
-    })?;
-    Ok(())
+    crate::persist::write_json_atomic(&dir.join("config.json"), &cfg)
 }
 
 fn backup_destination() -> io::Result<PathBuf> {

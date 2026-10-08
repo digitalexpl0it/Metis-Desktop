@@ -122,6 +122,5 @@ pub fn load_lock_config() -> LockConfig {
 
 pub fn save_lock_config(cfg: &LockConfig) -> std::io::Result<()> {
     ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(cfg).map_err(std::io::Error::other)?;
-    std::fs::write(lock_config_path(), json)
+    crate::persist::write_json_atomic(&lock_config_path(), cfg)
 }

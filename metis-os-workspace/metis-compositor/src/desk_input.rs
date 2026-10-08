@@ -479,6 +479,34 @@ impl MetisState {
         !self.metis_bar_ui_hit(pos)
     }
 
+    /// True when `pos` lands on the desktop-widgets layer (`metis-desktop-widgets`).
+    ///
+    /// That process dismisses its own popovers via GTK; compositor-broadcast
+    /// `close-popovers` must not race the same click that opens a widget menu.
+    pub(crate) fn metis_desktop_widgets_hit(&self, pos: Point<f64, Logical>) -> bool {
+        let Some(output) = self.space.outputs().find(|o| {
+            self.space
+                .output_geometry(o)
+                .is_some_and(|geo| geo.contains(pos.to_i32_round()))
+        }) else {
+            return false;
+        };
+        let Some(output_geo) = self.space.output_geometry(output) else {
+            return false;
+        };
+        let rel = pos - output_geo.loc.to_f64();
+        let layers = layer_map_for_output(output);
+        for layer in layers
+            .layers()
+            .filter(|layer| layer.namespace() == "metis-desktop-widgets")
+        {
+            if layer_accepts_pointer(layer, &layers, rel) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Bar chrome or an attached dropdown panel below the bar strip.
     pub(crate) fn metis_bar_ui_hit(&self, pos: Point<f64, Logical>) -> bool {
         let Some(output) = self.space.outputs().find(|o| {

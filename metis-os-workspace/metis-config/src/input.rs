@@ -229,6 +229,5 @@ pub fn load_input_config() -> InputConfig {
 
 pub fn save_input_config(config: &InputConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
-    std::fs::write(input_config_path(), json)
+    crate::persist::write_json_atomic(&input_config_path(), config)
 }

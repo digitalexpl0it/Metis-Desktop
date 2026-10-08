@@ -849,7 +849,9 @@ impl MetisState {
                         && !self.capture_overlay_active()
                         && (!on_bar_ui || self.notification_center_mapped())
                     {
-                        self.request_close_bar_popovers();
+                        // Pass location so a right-click on desktop widgets does
+                        // not race-close the menu that same press is opening.
+                        self.request_close_shell_popovers(Some(loc));
                     }
                     // Terminals (kitty, foot, …) use right/middle-click paste and
                     // context menus against the surface under the pointer — align

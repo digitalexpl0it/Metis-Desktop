@@ -649,8 +649,7 @@ pub fn load_keybinds_config() -> KeybindsConfig {
 pub fn save_keybinds_config(config: &KeybindsConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
     let sanitized = config.clone().sanitize();
-    let json = serde_json::to_string_pretty(&sanitized).map_err(std::io::Error::other)?;
-    std::fs::write(keybinds_config_path(), json)
+    crate::persist::write_json_atomic(&keybinds_config_path(), &sanitized)
 }
 
 pub fn save_default_keybinds_config() -> std::io::Result<()> {

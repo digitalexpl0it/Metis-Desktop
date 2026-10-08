@@ -401,8 +401,7 @@ pub fn load_menu_config() -> MenuConfig {
 
 pub fn save_menu_config(config: &MenuConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
-    let json = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
-    std::fs::write(menu_config_path(), json)
+    crate::persist::write_json_atomic(&menu_config_path(), config)
 }
 
 /// Pick the first usable executable from user choice → env var → known list.

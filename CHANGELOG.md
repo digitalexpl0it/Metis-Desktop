@@ -5,6 +5,29 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-07]
+
+### Changed
+
+- **Taskbar / volumes context menus** — menu rows use the same flat list style as
+  Folders (no bordered chips); hover tint matches desktop-widget menus.
+- **Atomic config saves** — all `metis-config` `save_*` paths use shared
+  tmp+rename helpers so live-reload watchers never see truncated JSON.
+
+### Fixed
+
+- **calendars.json / clock.json parse failure** — corrupt files no longer get
+  overwritten with defaults on load (avoids watcher rewrite loops).
+
+- **Layer-shell popover invariant** — Folders desktop-widget context menus /
+  rename/delete dialogs and the clipboard settings nest use `autohide(false)` +
+  bar popover registration + idle `popup` so they present under Metis (GTK
+  autohide grabs fail on layer-shell). Desktop-widget canvas click-dismiss +
+  compositor `close-popovers` to the widgets process so left-click outside closes
+  menus. Opening a Folders menu now closes any other registered popover first
+  (single-open; right-clicking another icon no longer stacks menus). CI
+  `scripts/check-layer-shell-popovers.sh` bans `autohide(true)` in `metis-shell`.
+
 ## [2026-10-03]
 
 ### Fixed
