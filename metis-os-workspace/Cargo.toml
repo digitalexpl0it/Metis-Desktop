@@ -6,6 +6,7 @@ members = [
     "metis-config",
     "metis-i18n",
     "metis-secrets",
+    "metis-secretsd",
     "metis-encode",
     "metis-decode",
     "metis-rudp-client",

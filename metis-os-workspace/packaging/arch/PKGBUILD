@@ -36,7 +36,8 @@ depends=(
   freerdp
 )
 optdepends=(
-  'gnome-keyring: Secret Service provider'
+  'gnome-keyring: alternate Secret Service provider (Metis ships metis-secretsd)'
+  'keepassxc: alternate Secret Service provider'
   'xdg-desktop-portal-gtk: portal FileChooser / notifications'
   'nftables: Remote access LAN firewall'
   'polkit: pkexec / PolicyKit (Metis ships metis-polkit-agent)'
@@ -88,7 +89,8 @@ build() {
     -p metis-viewer \
     -p metis-screenshot \
     -p metis-gaming \
-    -p metis-encode
+    -p metis-encode \
+    -p metis-secretsd
 }
 
 package() {

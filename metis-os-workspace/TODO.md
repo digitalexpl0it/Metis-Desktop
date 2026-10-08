@@ -106,10 +106,12 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
 - [x] **Portal / screensaver panic hygiene** (2026-10-03) — soft-fail poisoned
       screensaver owner locks + screencast pump thread spawn (no
       `unwrap`/`expect` panic path).
-- [ ] **Session Secret Service story** — keep Secret Service as the contract
-      (gnome-keyring / KWallet / KeePassXC all OK); prefer Metis owning the
-      *default session provider* (not a private Metis-only store). Update
-      `metis-portals.conf` `Secret=` accordingly when a default is chosen.
+- [x] **Session Secret Service story** (2026-10-07) — `metis-secretsd` owns
+      `org.freedesktop.secrets` when the bus is free (encrypted vault under
+      `$XDG_DATA_HOME/metis/secrets/`); leave third-party owners alone; portal
+      `Secret=` unpinned; gnome-keyring is Suggests/fallback only. Decision:
+      [`docs/decisions/secret-service-provider.md`](../docs/decisions/secret-service-provider.md).
+      Residuals: PAM unlock, portal Secret, SSH agent.
 
 ### Performance / resources
 

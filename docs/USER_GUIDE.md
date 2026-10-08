@@ -996,9 +996,9 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
 - **Calendars** — calendar accounts (local / CalDAV / Thunderbird / Microsoft
   365) used by the Notification Center calendar. **Add account** uses a
   top-slide sheet. Account metadata lives in `calendars.json`; **passwords and
-  M365 refresh tokens** are stored in the freedesktop Secret Service
-  (`metis-secrets` / oo7), not in the JSON file. Removing an account also
-  deletes its keyring entries.
+  M365 refresh tokens** are stored in the freedesktop Secret Service via
+  `metis-secrets` / oo7 (Metis’s `metis-secretsd` provider by default), not in
+  the JSON file. Removing an account also deletes its keyring entries.
 - **Input** — mouse, touchpad, and keyboard layout/repeat settings (`input.json`),
   plus **Keyboard → Shortcuts** to edit desktop keybinds (`keybinds.json`, live
   reload). **Shortcuts** (sidebar) is a searchable read-only chord guide with a

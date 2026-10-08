@@ -1,0 +1,29 @@
+[package]
+name = "metis-secretsd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Metis-owned freedesktop Secret Service provider (org.freedesktop.secrets)"
+
+[[bin]]
+name = "metis-secretsd"
+path = "src/main.rs"
+
+[dependencies]
+chacha20poly1305 = "0.10"
+directories = "6"
+rand = "0.8"
+serde = { workspace = true }
+serde_bytes = "0.11"
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "signal"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+metis-secrets = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

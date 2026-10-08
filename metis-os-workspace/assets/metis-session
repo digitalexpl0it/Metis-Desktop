@@ -87,20 +87,16 @@ export NO_AT_BRIDGE="${NO_AT_BRIDGE:-1}"
 export RUST_LOG="${RUST_LOG:-metis_shell=debug,metis_compositor=info,warn}"
 
 # --- secret service / keyring ----------------------------------------------
-# Metis is only a *client* of the freedesktop Secret Service (via oo7); a bare
-# session ships no provider, so keyring-backed apps (Cursor, GitHub Desktop,
-# browsers) fall back to plaintext ("encryption is low"). Everything here speaks
-# the standard `org.freedesktop.secrets` D-Bus API, so ANY provider works — we
-# just make sure one is running, preferring whatever is installed.
-#
-# Note: without PAM auto-unlock (pam_gnome_keyring) the login keyring starts
-# locked; the first secret access pops gcr's prompter once per session — install
-# `gcr4` so that dialog can appear under Metis.
+# Metis owns the default provider (`metis-secretsd` → org.freedesktop.secrets).
+# If another provider already owns the bus, leave it alone. Fallbacks are
+# DE-agnostic first; gnome-keyring is last resort only.
+# See docs/decisions/secret-service-provider.md
 ks_log() { echo "metis-session: keyring: $*" >&2; }
 
-# True if org.freedesktop.secrets is already owned on the bus or is D-Bus
-# activatable (provider auto-starts on first access — nothing to launch).
-metis_have_secret_service() {
+# True only when the name is already owned (do not treat activatable .service
+# files as "running" — that would skip starting metis-secretsd when a third-party
+# activatable unit is installed but idle).
+metis_secrets_bus_owned() {
     if command -v busctl >/dev/null 2>&1 \
         && busctl --user status org.freedesktop.secrets >/dev/null 2>&1; then
         return 0
@@ -112,39 +108,43 @@ metis_have_secret_service() {
             2>/dev/null | grep -q true; then
         return 0
     fi
-    local dir
-    local IFS=:
-    for dir in /usr/local/share /usr/share ${XDG_DATA_DIRS:-}; do
-        [ -e "$dir/dbus-1/services/org.freedesktop.secrets.service" ] && return 0
-    done
     return 1
 }
 
-# Start the best available Secret Service provider, in preference order.
 metis_start_secret_service() {
-    if metis_have_secret_service; then
-        ks_log "org.freedesktop.secrets already available"
+    if metis_secrets_bus_owned; then
+        ks_log "org.freedesktop.secrets already owned — leaving third-party provider"
         return 0
     fi
-    if command -v gnome-keyring-daemon >/dev/null 2>&1; then
-        eval "$(gnome-keyring-daemon --start --components=secrets,ssh 2>/dev/null)"
-        export SSH_AUTH_SOCK
-        ks_log "started gnome-keyring-daemon (secrets + ssh-agent)"
+    if command -v metis-secretsd >/dev/null 2>&1; then
+        metis-secretsd >/dev/null 2>&1 &
+        # Brief wait so the name is claimed before clients start.
+        sleep 0.15
+        if metis_secrets_bus_owned; then
+            ks_log "started metis-secretsd"
+            return 0
+        fi
+        ks_log "WARNING: metis-secretsd did not claim the bus — trying fallbacks"
+    fi
+    if command -v pass-secret-service >/dev/null 2>&1; then
+        pass-secret-service >/dev/null 2>&1 &
+        ks_log "started pass-secret-service"
+    elif command -v keepassxc >/dev/null 2>&1; then
+        keepassxc >/dev/null 2>&1 &
+        ks_log "started KeePassXC (enable Secret Service integration in its settings)"
     elif command -v kwalletd6 >/dev/null 2>&1; then
         kwalletd6 >/dev/null 2>&1 &
         ks_log "started kwalletd6 (KWallet Secret Service)"
     elif command -v kwalletd5 >/dev/null 2>&1; then
         kwalletd5 >/dev/null 2>&1 &
         ks_log "started kwalletd5 (KWallet Secret Service)"
-    elif command -v keepassxc >/dev/null 2>&1; then
-        keepassxc >/dev/null 2>&1 &
-        ks_log "started KeePassXC (enable Secret Service integration in its settings)"
-    elif command -v pass-secret-service >/dev/null 2>&1; then
-        pass-secret-service >/dev/null 2>&1 &
-        ks_log "started pass-secret-service"
+    elif command -v gnome-keyring-daemon >/dev/null 2>&1; then
+        eval "$(gnome-keyring-daemon --start --components=secrets,ssh 2>/dev/null)"
+        export SSH_AUTH_SOCK
+        ks_log "started gnome-keyring-daemon (fallback)"
     else
-        ks_log "WARNING: no Secret Service provider found — keyring-backed apps will"
-        ks_log "         fall back to plaintext. Install one (recommended: gnome-keyring)."
+        ks_log "WARNING: no Secret Service provider — apps may store credentials in plaintext"
+        ks_log "         Metis packages metis-secretsd; ensure it is on PATH"
     fi
 }
 metis_start_secret_service

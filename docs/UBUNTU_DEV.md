@@ -98,21 +98,23 @@ sudo apt install -y fprintd libpam-fprintd libpam-u2f pamu2fcfg
 # then uncomment the auth sufficient lines in /etc/pam.d/metis (see asset comments)
 ```
 
-### Keyring (Secret Service) — runtime dependency
+### Keyring (Secret Service)
 
-Metis is only a *client* of the freedesktop Secret Service (`org.freedesktop.secrets`, via `oo7`), and so are apps like Cursor, GitHub Desktop, and browsers. A Metis session must therefore have a **provider** running, or those apps fall back to plaintext credential storage ("encryption is low"). The session launcher (`metis-session` / `run-metis.sh --session --drm`) auto-detects and starts whichever of these is installed — install **one** (any desktop works; `gnome-keyring` is not GNOME-specific and is the lightest):
+Metis **owns the default session provider** (`metis-secretsd`) for
+`org.freedesktop.secrets`. Clients (`metis-secrets` / `oo7`, browsers, etc.) talk
+the standard D-Bus API — not a Metis-private store. Decision:
+[`docs/decisions/secret-service-provider.md`](decisions/secret-service-provider.md).
 
-```bash
-sudo apt install -y gnome-keyring   # recommended, desktop-independent
-# alternatives that also implement the Secret Service API:
-#   kwalletd6 / kwalletd5 (KWallet) · keepassxc · pass + pass-secret-service
-```
+`metis-session` / `run-metis.sh` start `metis-secretsd` when the bus name is free.
+If another provider already owns the bus (KeePassXC, KWallet, pass-secret-service,
+gnome-keyring, …), Metis leaves it alone.
 
-Without PAM auto-unlock (`pam_gnome_keyring`), the login keyring starts locked and the first secret access prompts once per session via gcr's prompter (pulled in by `gnome-keyring`).
+Vault files live under `~/.local/share/metis/secrets/` (mode `0600` master key;
+session-unlocked while the daemon runs). PAM unlock is a residual.
 
-**What Metis stores there:** CalDAV passwords and Microsoft 365 refresh tokens
-(`metis-secrets`). Account lists in `~/.config/metis/calendars.json` hold no
-secrets; removing an account deletes the matching keyring items.
+**What Metis stores there:** CalDAV passwords, Microsoft 365 refresh tokens, and
+Viewer host passwords (`metis-secrets`). Account lists in `calendars.json` /
+`viewer.json` hold no secrets.
 
 ### Phase 4 runtime tools (standalone session)
 

@@ -99,7 +99,8 @@ build_binaries() {
       -p metis-viewer \
       -p metis-screenshot \
       -p metis-gaming \
-      -p metis-encode
+      -p metis-encode \
+      -p metis-secretsd
   )
 }
 
@@ -114,8 +115,8 @@ write_control() {
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="gnome-keyring, xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables"
-      suggests="gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, bluez, bluetooth, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables"
+      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, bluez, bluetooth, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."
       else
@@ -127,8 +128,8 @@ write_control() {
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="gnome-keyring, xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables"
-      suggests="gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, bluez, bluetooth, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables"
+      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, bluez, bluetooth, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."
       else

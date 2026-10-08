@@ -1,5 +1,8 @@
-//! Credential storage via the freedesktop Secret Service (gnome-keyring, KWallet,
-//! KeePassXC, ...). DE-agnostic: this only speaks the standard D-Bus interface.
+//! Credential storage via the freedesktop Secret Service.
+//!
+//! DE-agnostic client (`oo7`): talks `org.freedesktop.secrets` on the session bus.
+//! Metis’s default provider is `metis-secretsd`; third-party providers work if they
+//! already own the bus.
 //!
 //! Shared by `metis-shell` (calendar sync) and `metis-settings` (account editing)
 //! so both read/write the same keyring items.

@@ -9,6 +9,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **Metis Secret Service (`metis-secretsd`)** — first-party `org.freedesktop.secrets`
+  provider is the session default (vault under `~/.local/share/metis/secrets/`);
+  third-party providers left alone if already on the bus; portal `Secret=` no
+  longer pins gnome-keyring; packaging treats gnome-keyring as optional Suggests.
+  See `docs/decisions/secret-service-provider.md`.
 - **Taskbar / volumes context menus** — menu rows use the same flat list style as
   Folders (no bordered chips); hover tint matches desktop-widget menus.
 - **Atomic config saves** — all `metis-config` `save_*` paths use shared

@@ -23,7 +23,7 @@ in
     environment.systemPackages = [
       cfg.package
       pkgs.kitty
-      pkgs.gnome-keyring
+      # Secret Service: Metis ships metis-secretsd; gnome-keyring is optional.
       pkgs.xdg-desktop-portal
       pkgs.xdg-desktop-portal-gtk
       pkgs.nftables

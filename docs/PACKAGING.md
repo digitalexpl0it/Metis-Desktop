@@ -67,7 +67,8 @@ Do **not** mix a `/usr` package install with `./install.sh` / `--install-session
 |-------|------|
 | **Depends** | Required to start a Metis session (GTK ≥ 4.18, `libgtk4-layer-shell0` ≥ 1.0, seat, DRM, PipeWire, kitty, …) |
 | **Bundled** | Nothing by default; `BUNDLE_GTK4_LAYER_SHELL=1` is a fallback for build images without `libgtk4-layer-shell-dev` |
-| **Recommends** | keyring, portals helpers, volumes, **nftables** (apt installs by default) |
+| **Recommends** | portals helpers, volumes, **nftables** (apt installs by default) |
+| **Suggests** | gnome-keyring (optional alternate Secret Service; Metis ships `metis-secretsd`) |
 | **Suggests** | GRD, FreeRDP, GameMode, Flatpak, BT, printers, biometrics |
 
 ## From source: `./install.sh`
@@ -185,8 +186,9 @@ Nix: [`.github/workflows/nix-flake.yml`](../.github/workflows/nix-flake.yml).
 
 | Path | Role |
 |------|------|
-| `/usr/bin/metis-{compositor,shell,settings,portal,remote,viewer,gamingd,polkit-agent}` | Binaries |
+| `/usr/bin/metis-{compositor,shell,settings,portal,remote,viewer,gamingd,polkit-agent,secretsd}` | Binaries |
 | `/usr/bin/metis-session` | Greeter session launcher |
+| `/usr/share/dbus-1/services/org.freedesktop.secrets.service` | Activates `metis-secretsd` |
 | `/usr/share/wayland-sessions/metis.desktop` | Session entry |
 | `/usr/share/xdg-desktop-portal/…` | Portal backend |
 | `/usr/share/applications/metis-*.desktop` + icons | Settings / Viewer |

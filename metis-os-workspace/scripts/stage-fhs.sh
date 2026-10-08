@@ -120,14 +120,17 @@ mkdir -p \
   "$STAGE/usr/share/metis/locale" \
   "$STAGE/usr/share/metis/widgets" \
   "$STAGE/usr/share/polkit-1/actions" \
+  "$STAGE/usr/share/dbus-1/services" \
   "$STAGE/etc/pam.d"
 
 rel="$CARGO_TARGET_DIR/release"
-for bin in metis-compositor metis-shell metis-settings metis-portal metis-remote metis-rdp-host metis-polkit-agent metis-viewer metis-gamingd metis-screenshot metis-encode-probe; do
+for bin in metis-compositor metis-shell metis-settings metis-portal metis-remote metis-rdp-host metis-polkit-agent metis-viewer metis-gamingd metis-screenshot metis-encode-probe metis-secretsd; do
   require_bin "$rel/$bin"
   install -Dm755 "$rel/$bin" "$STAGE/usr/bin/$bin"
 done
 install -Dm755 "$rel/metis-polkit-agent" "$STAGE/usr/libexec/metis-polkit-agent"
+install -Dm644 "$ASSETS_DIR/org.freedesktop.secrets.service" \
+  "$STAGE/usr/share/dbus-1/services/org.freedesktop.secrets.service"
 
 if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
   stage_gtk4_layer_shell

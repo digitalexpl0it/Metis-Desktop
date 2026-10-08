@@ -1377,10 +1377,12 @@ fn binary_on_path(name: &str) -> bool {
 }
 
 fn secret_service_available() -> bool {
-    binary_on_path("gnome-keyring-daemon")
+    binary_on_path("metis-secretsd")
+        || binary_on_path("pass-secret-service")
+        || binary_on_path("keepassxc")
         || binary_on_path("kwalletd6")
         || binary_on_path("kwalletd5")
-        || binary_on_path("keepassxc")
+        || binary_on_path("gnome-keyring-daemon")
         || Path::new("/usr/share/dbus-1/services/org.freedesktop.secrets.service").exists()
         || Path::new("/usr/local/share/dbus-1/services/org.freedesktop.secrets.service").exists()
 }
@@ -1426,12 +1428,12 @@ fn probe_optional_features() -> Vec<OptionalFeature> {
                 .is_ok(),
         },
     ];
-    // Only offer keyring when no Secret Service provider is present.
+    // Metis ships metis-secretsd; only nudge when no provider binary/service exists.
     if !secret_service_available() {
         features.push(OptionalFeature {
             id: "keyring",
             title: "Keyring",
-            subtitle: "Secure credentials for apps (recommended)",
+            subtitle: "Secret Service provider (Metis normally ships metis-secretsd)",
             packages: &["gnome-keyring"],
             installed: false,
         });

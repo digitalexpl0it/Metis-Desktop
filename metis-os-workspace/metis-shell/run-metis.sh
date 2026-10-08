@@ -319,7 +319,7 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
             BUILD_ARGS+=("$prof")
         fi
     fi
-    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode; then
+    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-secretsd; then
         echo "ERROR: release build failed." >&2
         exit 1
     fi
@@ -383,6 +383,18 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
     fi
     if [[ -x "$REL/metis-gamingd" ]]; then
         $SUDO install -Dm755 "$REL/metis-gamingd" "$BIN_DST/metis-gamingd"
+    fi
+    if [[ -x "$REL/metis-secretsd" ]]; then
+        $SUDO install -Dm755 "$REL/metis-secretsd" "$BIN_DST/metis-secretsd"
+        $SUDO install -Dm644 "$ASSETS_DIR/org.freedesktop.secrets.service" \
+            /usr/share/dbus-1/services/org.freedesktop.secrets.service
+        # Point D-Bus activation at the installed binary path.
+        if [[ "$BIN_DST" != /usr/bin ]]; then
+            $SUDO sed -i "s|^Exec=.*|Exec=$BIN_DST/metis-secretsd|" \
+                /usr/share/dbus-1/services/org.freedesktop.secrets.service
+        fi
+    else
+        echo "WARNING: metis-secretsd missing — rebuild the workspace to get Metis Secret Service." >&2
     fi
     $SUDO install -Dm755 "$ASSETS_DIR/metis-session" "$BIN_DST/metis-session"
     if [[ -x "$REL/metis-portal" ]]; then
@@ -489,23 +501,17 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
     echo "Installing PAM service to /etc/pam.d/metis …"
     $SUDO install -Dm644 "$ASSETS_DIR/pam-metis" /etc/pam.d/metis
 
-    # Runtime dependency: Metis is only a *client* of the Secret Service, so a
-    # provider must exist or keyring-backed apps (and Metis's own credential
-    # storage) degrade to plaintext. The session launcher auto-starts whichever
-    # provider is installed; warn here if none is present yet.
     echo
-    if command -v gnome-keyring-daemon >/dev/null 2>&1 \
+    if command -v metis-secretsd >/dev/null 2>&1 \
+        || command -v pass-secret-service >/dev/null 2>&1 \
+        || command -v keepassxc >/dev/null 2>&1 \
         || command -v kwalletd6 >/dev/null 2>&1 \
         || command -v kwalletd5 >/dev/null 2>&1 \
-        || command -v keepassxc >/dev/null 2>&1 \
-        || command -v pass-secret-service >/dev/null 2>&1 \
-        || ls /usr/share/dbus-1/services/org.freedesktop.secrets.service >/dev/null 2>&1; then
-        echo "Keyring: a Secret Service provider is installed — good."
+        || command -v gnome-keyring-daemon >/dev/null 2>&1; then
+        echo "Keyring: Secret Service provider binary present (Metis prefers metis-secretsd)."
     else
-        echo "WARNING: no keyring / Secret Service provider found."
-        echo "  Keyring-backed apps (Cursor, GitHub Desktop, browsers) and Metis's own"
-        echo "  credential storage will fall back to plaintext until one is installed."
-        echo "  Recommended (desktop-independent): sudo apt install -y gnome-keyring"
+        echo "WARNING: metis-secretsd not on PATH — session may lack a Secret Service provider."
+        echo "  Re-run install-session after building metis-secretsd."
     fi
 
     echo
@@ -699,9 +705,8 @@ check_build_deps() {
     return 0
 }
 
-# True if the freedesktop Secret Service is already owned on the user bus or is
-# D-Bus activatable (a provider auto-starts on first access — nothing to launch).
-metis_have_secret_service() {
+# True when org.freedesktop.secrets is already owned (not merely activatable).
+metis_secrets_bus_owned() {
     if command -v busctl >/dev/null 2>&1 \
         && busctl --user status org.freedesktop.secrets >/dev/null 2>&1; then
         return 0
@@ -713,41 +718,59 @@ metis_have_secret_service() {
             2>/dev/null | grep -q true; then
         return 0
     fi
-    local dir
-    local IFS=:
-    for dir in /usr/local/share /usr/share ${XDG_DATA_DIRS:-}; do
-        [ -e "$dir/dbus-1/services/org.freedesktop.secrets.service" ] && return 0
-    done
     return 1
 }
 
-# Start the best available Secret Service provider so keyring-backed apps (and
-# Metis's own oo7 client) don't fall back to plaintext. Preference order favors
-# whatever is installed; gnome-keyring is the recommended default.
+# Prefer Metis-owned metis-secretsd; leave third-party owners alone; DE-agnostic
+# fallbacks; gnome-keyring last. See docs/decisions/secret-service-provider.md
 metis_start_secret_service() {
-    if metis_have_secret_service; then
-        log "Keyring: org.freedesktop.secrets already available"
+    if metis_secrets_bus_owned; then
+        log "Keyring: org.freedesktop.secrets already owned — leaving third-party provider"
         return 0
     fi
-    if command -v gnome-keyring-daemon >/dev/null 2>&1; then
-        eval "$(gnome-keyring-daemon --start --components=secrets,ssh 2>/dev/null)"
-        export SSH_AUTH_SOCK
-        log "Keyring: started gnome-keyring-daemon (secrets + ssh-agent)"
+    local secretsd=""
+    if command -v metis-secretsd >/dev/null 2>&1; then
+        secretsd="$(command -v metis-secretsd)"
+    else
+        local cand
+        for cand in \
+            "${CARGO_TARGET_DIR:-$WORKSPACE/target}/release/metis-secretsd" \
+            "${CARGO_TARGET_DIR:-$WORKSPACE/target}/debug/metis-secretsd" \
+            "$WORKSPACE/target/release/metis-secretsd" \
+            "$WORKSPACE/target/debug/metis-secretsd"; do
+            if [[ -n "$cand" && -x "$cand" ]]; then
+                secretsd="$cand"
+                break
+            fi
+        done
+    fi
+    if [[ -n "$secretsd" ]]; then
+        "$secretsd" >/dev/null 2>&1 &
+        sleep 0.15
+        if metis_secrets_bus_owned; then
+            log "Keyring: started metis-secretsd ($secretsd)"
+            return 0
+        fi
+        log "Keyring: WARNING metis-secretsd did not claim the bus — trying fallbacks"
+    fi
+    if command -v pass-secret-service >/dev/null 2>&1; then
+        pass-secret-service >/dev/null 2>&1 &
+        log "Keyring: started pass-secret-service"
+    elif command -v keepassxc >/dev/null 2>&1; then
+        keepassxc >/dev/null 2>&1 &
+        log "Keyring: started KeePassXC (enable Secret Service integration in its settings)"
     elif command -v kwalletd6 >/dev/null 2>&1; then
         kwalletd6 >/dev/null 2>&1 &
         log "Keyring: started kwalletd6 (KWallet Secret Service)"
     elif command -v kwalletd5 >/dev/null 2>&1; then
         kwalletd5 >/dev/null 2>&1 &
         log "Keyring: started kwalletd5 (KWallet Secret Service)"
-    elif command -v keepassxc >/dev/null 2>&1; then
-        keepassxc >/dev/null 2>&1 &
-        log "Keyring: started KeePassXC (enable Secret Service integration in its settings)"
-    elif command -v pass-secret-service >/dev/null 2>&1; then
-        pass-secret-service >/dev/null 2>&1 &
-        log "Keyring: started pass-secret-service"
+    elif command -v gnome-keyring-daemon >/dev/null 2>&1; then
+        eval "$(gnome-keyring-daemon --start --components=secrets,ssh 2>/dev/null)"
+        export SSH_AUTH_SOCK
+        log "Keyring: started gnome-keyring-daemon (fallback)"
     else
-        log "Keyring: WARNING no Secret Service provider found — keyring-backed apps will"
-        log "         fall back to plaintext. Install one (recommended: sudo apt install gnome-keyring)."
+        log "Keyring: WARNING no Secret Service provider — build/install metis-secretsd"
     fi
 }
 
@@ -916,11 +939,11 @@ export RUST_LOG="${RUST_LOG:-metis_shell=info,metis_compositor=info,warn}"
                 BUILD_ARGS+=("$prof")
             fi
         fi
-        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode)
+        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-secretsd)
     else
         SHELL_BIN="$TARGET_DIR/debug/metis-shell"
         COMP_BIN="$TARGET_DIR/debug/metis-compositor"
-        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode)
+        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-secretsd)
     fi
 
     if [[ "$FORCE_BUILD" -eq 1 ]] || binary_needs_rebuild "$SHELL_BIN" || binary_needs_rebuild "$COMP_BIN"; then

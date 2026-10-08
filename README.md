@@ -80,7 +80,7 @@ before `xdg-desktop-portal`.
 | **Background** | `metis-portal` | Sandboxed apps that request background activity |
 | **PowerProfileMonitor** | `metis-portal` | Apps that follow power / performance profiles |
 | **FileChooser / Notification / …** | `xdg-desktop-portal-gtk` (preferred) | Open/save dialogs, notifications for Flatpaks |
-| **Secret** | gnome-keyring (preferred) | Credential store for sandboxed apps |
+| **Secret Service** | `metis-secretsd` (session default) | `org.freedesktop.secrets` for apps + Metis credentials |
 | **Idle inhibit** | compositor + ScreenSaver D-Bus | Games / video players that request “don’t sleep” |
 
 Flatpak apps launch like any other client (Wayland + portals); Metis adds Flatpak
@@ -129,7 +129,8 @@ and [Screenshots](docs/USER_GUIDE.md#screenshots) (portal capture via `metis-por
     ├── metis-rudp-client/       # Metis Remote Quinn client (TOFU, PAM auth, video)
     ├── metis-rudp-smoke/        # CLI smoke test for Metis Remote
     ├── metis-screenshot/        # Native screenshot / recording helpers
-    ├── metis-secrets/           # Freedesktop Secret Service (oo7) wrapper
+    ├── metis-secrets/           # Secret Service client (oo7) wrapper
+    ├── metis-secretsd/          # Metis-owned org.freedesktop.secrets provider
     ├── metis-settings/          # GTK4 settings app
     ├── metis-shell/             # GTK4 layer-shell bar, panels, Task View, widgets host
     └── metis-viewer/            # Remote viewer (Metis Remote + FreeRDP)

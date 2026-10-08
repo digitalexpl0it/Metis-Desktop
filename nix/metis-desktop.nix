@@ -99,6 +99,7 @@ rustPlatform.buildRustPackage rec {
     "-p" "metis-gaming"
     # metis-encode-probe: isolated encode worker, must sit next to metis-compositor.
     "-p" "metis-encode"
+    "-p" "metis-secretsd"
   ];
 
   doCheck = false;
@@ -116,9 +117,16 @@ rustPlatform.buildRustPackage rec {
       "$out/share/metis/wallpapers" \
       "$out/share/metis/locale" \
       "$out/share/polkit-1/actions" \
+      "$out/share/dbus-1/services" \
       "$out/etc/pam.d"
 
     install -Dm755 "$assets/metis-session" "$out/bin/metis-session"
+    if [[ -x "$out/bin/metis-secretsd" ]]; then
+      install -Dm644 "$assets/org.freedesktop.secrets.service" \
+        "$out/share/dbus-1/services/org.freedesktop.secrets.service"
+      substituteInPlace "$out/share/dbus-1/services/org.freedesktop.secrets.service" \
+        --replace-fail "Exec=/usr/bin/metis-secretsd" "Exec=$out/bin/metis-secretsd"
+    fi
     install -Dm644 "$assets/metis.desktop" "$out/share/wayland-sessions/metis.desktop"
     install -Dm644 "$assets/metis.portal" "$out/share/xdg-desktop-portal/portals/metis.portal"
     install -Dm644 "$assets/metis-portals.conf" "$out/share/xdg-desktop-portal/metis-portals.conf"
