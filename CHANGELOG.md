@@ -9,6 +9,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **Compositor `state.rs` split** — desk/scroll/workspaces → `desk.rs`, window
+  geometry → `window_geometry.rs`, X11 map lifecycle → `xwayland.rs` (mechanical;
+  no behaviour change). Residual: IPC / spawn / output reflow in `state.rs`.
+- **PERF_AUDIT refresh** — four-bin release footprint ~54 MiB (was ~40 MiB Jun);
+  DRM idle sample + portal capture-test latency documented; continuous
+  ScreenCast/`perf` still open on hybrid NVIDIA.
 - **Shell bar poll** — BlueZ/UPower D-Bus dirty wakes (alongside NetworkManager);
   peripheral batteries via zbus UPower; `bluetoothctl info` / `solaar` only when
   HID/UPower leave gaps; nmcli timed heartbeat stretches when the NM watcher is

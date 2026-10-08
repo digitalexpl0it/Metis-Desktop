@@ -1,7 +1,13 @@
 # Metis performance audit
 
-Audit date: **2026-08-02** (refresh of 2026-06-28 baseline). Scope: compositor
-hot path, shell/bar overhead, portal capture, binary footprint, and follow-ups.
+Audit date: **2026-10-07** (refresh of 2026-08-02 / 2026-06-28 baselines).
+Scope: compositor hot path, shell/bar overhead, portal capture, binary
+footprint, and follow-ups.
+
+**Host for this refresh:** x86_64, Ubuntu 26.04, hybrid Intel UHD + NVIDIA
+RTX 2070 Max-Q (`METIS_BACKEND=drm`, `/dev/dri/card1`+`card2`), rustc 1.98.1,
+12-thread i7-10750H. Session had Cursor IDE open (continuous client damage) —
+not an empty-desktop idle.
 
 ---
 
@@ -9,17 +15,19 @@ hot path, shell/bar overhead, portal capture, binary footprint, and follow-ups.
 
 | Area | Rating | Notes |
 |------|--------|-------|
-| Idle CPU (compositor) | **Good** | Damage-gated render; ~60 fps cap; near-zero work when idle |
-| Interactive latency | **Good–OK** | Pointer throttling, partial damage; `state.rs` still large (~9k lines) |
-| DRM session | **OK** | Vblank + damage-gated flips; hybrid PRIME validated |
-| Shell / edge bar | **OK** | Background poll + D-Bus where available; ~400 ms–6 s fallbacks |
-| Screen capture | **Good** | DRM: dmabuf → PipeWire; MemFd fallback; nested winit SHM-only |
+| Idle CPU (compositor) | **OK** | Damage-gated; ~6% of one core over 30 s with Cursor redrawing; NVIDIA util 0% |
+| Interactive latency | **Good–OK** | Pointer throttling, partial damage; `state.rs` still ~10.1k lines |
+| DRM session | **OK** | Vblank + damage-gated flips; hybrid MultiRenderer Wave A/B/C (2026-10-03) |
+| Shell / edge bar | **OK** | D-Bus dirty wakes (NM / BlueZ / UPower); ~200–800 ms adaptive; Pulse still `pactl` |
+| Screen capture | **Good** | DRM: dmabuf → PipeWire; MemFd fallback; one-shot portal capture ~0.13 s |
 | Gaming / Steam | **Improving** | Fullscreen fast path + scanout trace; `metis-gamingd`; PRIME smoke |
-| Install footprint | **Improved** | Release: LTO + strip + **`panic = "abort"`** + overflow-checks |
+| Install footprint | **Grew** | Four-bin `release` **~54 MiB** (was ~40 MiB Jun); still LTO + strip + `panic=abort` |
 
-Metis is **past prototype** on compositor fundamentals (no busy loops, deliberate
-throttles, async portal warm-up). ScreenCast dmabuf is landed; remaining gaps are
-hybrid NVIDIA MemFd fallbacks and shell poll wakeups.
+Metis remains **past prototype** on compositor fundamentals (no busy loops,
+deliberate throttles, async portal warm-up). ScreenCast dmabuf is landed;
+hybrid MultiRenderer presents on secondary CRTCs. Remaining gaps: continuous
+ScreenCast profiling under OBS/GRD on hybrid NVIDIA (MemFd fallbacks), and
+empty-desktop idle once Electron clients are closed.
 
 ---
 
@@ -77,10 +85,16 @@ The compositor renders ScreenCast frames into client GBM buffers (no
 `SPA_DATA_DmaBuf`, with MemFd BGRx fallback for peers that reject DmaBuf
 (e.g. some GRD paths). Nested winit remains SHM-only.
 
+**2026-10-07 sample (this host):** `org.gnome.Mutter.ScreenCast` owned by
+`metis-portal`; no OBS/GRD continuous stream active. One-shot
+`metis-portal --capture-test $XDG_RUNTIME_DIR/metis/….png` completed in
+**~0.13 s** (458 KiB PNG). `perf top`/`perf stat` blocked by
+`kernel.perf_event_paranoid=4` — raise to ≤2 for DRM hot-path samples.
+
 **Remaining gap:** multi-plane / non-linear modifiers may still take the MemFd
-fallback; profile on hybrid NVIDIA stacks. DmaBuf-success no longer `to_vec`s
-the mmap (2026-10-03). Full multi-GPU (`GpuManager`) is **validated 2026-07-26**
-on hybrid iGPU+dGPU; MultiRenderer Wave A/B/C landed 2026-10-03.
+fallback; profile on hybrid NVIDIA stacks with OBS or gnome-remote-desktop.
+DmaBuf-success no longer `to_vec`s the mmap (2026-10-03). Full multi-GPU
+(`GpuManager`) validated 2026-07-26; MultiRenderer Wave A/B/C landed 2026-10-03.
 
 **Recommendation:** validate OBS / gnome-remote-desktop under a live DRM
 session; watch portal logs for `dmabuf` vs MemFd negotiation.
@@ -104,11 +118,12 @@ advertises scanout-capable formats. Trace: `scanout_promoted=true`
 
 **Validation:** `metis-os-workspace/scripts/gaming-prime-smoke.sh` on hybrid hardware.
 
-### P2 — `state.rs` monolith (~9k lines)
+### P2 — `state.rs` monolith (~5.5k lines after 2026-10-07 split)
 
-Single `MetisState` holds windowing, workspaces, scroll layout, IPC, wallpaper,
-decorations, grabs, etc. Phase 16 extracted `ipc_dispatch.rs` for capability
-gating; continue incremental splits when touching areas.
+`MetisState` still owns IPC, spawn, and output reflow in `state.rs`. Desk/scroll/
+workspaces live in `desk.rs`, snap/FS/max/min geometry in `window_geometry.rs`,
+X11 map lifecycle in `xwayland.rs` (plus earlier `ipc_dispatch.rs`). Continue
+incremental splits when touching remaining areas.
 
 ### P3 — Shell bar polling
 
@@ -121,7 +136,8 @@ still use `pactl`. Occasional subprocess I/O remains for `nmcli`,
 `bluetoothctl` inventory (and `info` / `solaar` only when %/charging is still
 missing).
 
-**Impact:** Low average CPU; not on compositor thread.
+**Impact:** Low average CPU; not on compositor thread. **2026-10-07 DRM sample
+(30 s):** edge bar ~0.8% of one core, desktop-widgets ~1.1%, portal ~0.1%.
 
 ### P4 — Default Cairo shell renderer
 
@@ -159,15 +175,27 @@ at `opt-level = 3`.
 
 ## Binary footprint
 
-Measured on 2026-06-28 (x86_64, after profile + tokio trim):
+Measured **2026-10-07** (`cargo build --release` / `--profile release-small`,
+`-p metis-compositor -p metis-shell -p metis-portal -p metis-settings`, x86_64).
+Sizes are stripped on-disk (`stat` bytes → MiB = ÷1024²).
 
-| Binary | Stock release (before) | **`release`** (LTO + strip) | **`release-small`** |
-|--------|------------------------|----------------------------|---------------------|
-| metis-compositor | 16 MB | **11 MB** (−31%) | 9.2 MB |
-| metis-shell | 21 MB | **15 MB** (−29%) | **9.5 MB** (−55%) |
-| metis-portal | 9.7 MB | **5.7 MB** (−41%) | **3.2 MB** (−67%) |
-| metis-settings | 14 MB | **8.6 MB** (−39%) | **5.0 MB** (−64%) |
-| **Total** | **~61 MB** | **~40 MB** (−34%) | **~27 MB** (−56%) |
+| Binary | Jun 2026 `release` | **Oct 2026 `release`** | **Oct 2026 `release-small`** |
+|--------|--------------------|------------------------|------------------------------|
+| metis-compositor | 11 MiB | **17.3 MiB** | 17.7 MiB |
+| metis-shell | 15 MiB | **18.8 MiB** | **13.5 MiB** |
+| metis-portal | 5.7 MiB | **6.1 MiB** | **3.8 MiB** |
+| metis-settings | 8.6 MiB | **11.4 MiB** | **7.8 MiB** |
+| **Four-bin total** | **~40 MiB** | **~53.6 MiB** (+34%) | **~42.9 MiB** |
+
+Growth vs June is expected (RUDP/encode path in the compositor, MultiRenderer /
+HDR, secrets, richer shell). Compositor is slightly **larger** under
+`release-small` because that profile keeps `metis-compositor` at `opt-level=3`
+while using fat LTO — size wins land on shell/portal/settings.
+
+Optional session binaries (also `release`, not in the four-bin total):
+`metis-secretsd` 4.2, `metis-polkit-agent` 4.2, `metis-gamingd` 2.2,
+`metis-screenshot` 2.8, `metis-viewer` 7.9, `metis-rdp-host` 4.7,
+`metis-remote` 2.0 MiB.
 
 ### Build profiles (`metis-os-workspace/Cargo.toml`)
 
@@ -177,10 +205,11 @@ Measured on 2026-06-28 (x86_64, after profile + tokio trim):
 | **`release-small`** | `./run-metis.sh --release-small --install-session` | `opt-level=s`, `lto=fat`, strip; **compositor stays `opt-level=3`** |
 
 ```bash
-cd metis-os-workspace/metis-shell
-./run-metis.sh --build --release
-./run-metis.sh --build --release-small
-ls -lh ../target/release/metis-compositor ../target/release-small/metis-compositor
+cd metis-os-workspace
+cargo build --release -p metis-compositor -p metis-shell -p metis-portal -p metis-settings
+cargo build --profile release-small -p metis-compositor -p metis-shell -p metis-portal -p metis-settings
+ls -lh target/release/metis-{compositor,shell,portal,settings}
+ls -lh target/release-small/metis-{compositor,shell,portal,settings}
 ```
 
 Further size wins (optional):
@@ -190,15 +219,43 @@ Further size wins (optional):
 
 ---
 
+## DRM idle sample (2026-10-07)
+
+Live Metis DRM session (`METIS_BACKEND=drm`), hybrid Intel+NVIDIA, Cursor IDE
+open (client damage every frame from Electron).
+
+| Process | ~% of one core (30 s `/proc` utime+stime) | RSS |
+|---------|------------------------------------------|-----|
+| metis-compositor | **~6.1%** | ~180 MiB |
+| metis-shell (bar) | ~0.8% | ~222 MiB |
+| metis-shell --desktop-widgets | ~1.1% | ~80 MiB |
+| metis-portal | ~0.1% | — |
+| NVIDIA GPU util | **0%** | 7 MiB used |
+
+Empty-desktop / no-Electron idle was **not** re-measured this pass; expect
+lower compositor % when nothing damages. Continuous ScreenCast + `perf top`
+deferred until `perf_event_paranoid` allows and OBS/GRD is available.
+
+---
+
 ## Measurement checklist
 
 Run under a real Metis DRM session when validating changes:
 
 ```bash
-top -p $(pgrep metis-compositor)
-perf top -p $(pgrep metis-compositor)
-ls -lh metis-os-workspace/target/{release,release-small}/metis-*
-/usr/bin/time -f '%e sec' metis-portal --capture-test /tmp/t.png
+# Idle CPU (prefer empty desktop; avoid Electron if measuring "near zero")
+COMP=$(pgrep -f '/metis-compositor$' | head -1)
+# two snapshots of utime+stime over 30s → % of one core = Δjiffies / CLK_TCK / wall * 100
+top -p "$COMP"
+
+# Needs kernel.perf_event_paranoid ≤ 2 (often root/sysctl)
+perf top -p "$COMP"
+perf stat -p "$COMP" -- sleep 10
+
+ls -lh metis-os-workspace/target/{release,release-small}/metis-{compositor,shell,portal,settings}
+
+# One-shot capture path (not continuous ScreenCast)
+/usr/bin/time -f '%e sec' metis-portal --capture-test "$XDG_RUNTIME_DIR/metis/t.png"
 ```
 
 **Hybrid NVIDIA MemFd checklist:** confirm ScreenCast/OBS negotiation logs
@@ -209,11 +266,14 @@ match.
 
 ## Recommended roadmap (perf)
 
-1. **ScreenCast** dmabuf + PipeWire — landed; keep validating on DRM / hybrid.
-2. **Shell poll** — prefer D-Bus signals; keep slow fallback (Phase 16).
-3. **Split `state.rs`** when refactoring (maintainability).
+1. **ScreenCast** dmabuf + PipeWire — landed; keep validating on DRM / hybrid
+   (OBS/GRD continuous stream + `perf` when paranoid allows).
+2. **Shell poll** — D-Bus dirty wakes landed 2026-10-07; residual Pulse/`pactl`
+   and BlueZ inventory CLI.
+3. **Split `state.rs`** when refactoring (maintainability; ~10.1k lines).
 4. **Phase 5 colour** — default-on `wp_color_management_v1` blocked on upstream
    wayland-rs ObjectData UAF
    ([wayland-rs#949](https://github.com/Smithay/wayland-rs/issues/949)).
 
-See also [`TODO.md`](../metis-os-workspace/TODO.md) Phase 16.
+See also [`TODO.md`](../metis-os-workspace/TODO.md) Engineering review backlog /
+Phase 16.

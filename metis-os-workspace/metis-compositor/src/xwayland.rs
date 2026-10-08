@@ -2,15 +2,15 @@
 //! manager, and maps X11 toplevels/override-redirect surfaces into the same
 //! `Space<Window>` used for native Wayland clients.
 //!
-//! Scope note: X11 windows are treated as floating, centered surfaces. They are
-//! intentionally kept out of Metis's tiling grid and window registry (which are
-//! built around `xdg_toplevel`), so they are not snapped, decorated with Metis
-//! server-side titlebars, or tracked for IPC. This is enough to run X11-only and
-//! D-Bus-activated apps inside a nested session; richer integration can come
-//! later.
+//! Mapped X11 toplevels are registered in the shared window registry (floating,
+//! Metis SSD when decorated), announced over IPC for the dock, and placed with
+//! bar-aware geometry. They do **not** take tiling-grid tiles. Override-redirect
+//! surfaces (menus/tooltips) stay untracked. Heuristics for borderless /
+//! near-fullscreen games live in this module alongside map/unmap/destroy.
 
 use std::os::unix::io::OwnedFd;
 
+use metis_grid::PixelRect;
 use smithay::{
     desktop::Window,
     input::pointer::{Focus, GrabStartData as PointerGrabStartData},
@@ -39,6 +39,515 @@ use smithay::{
 use crate::clipboard::serve_compositor_selection;
 use crate::focus::KeyboardFocusTarget;
 use crate::state::MetisState;
+
+/// Near-monitor size that should become true fullscreen (flush to output origin).
+pub(crate) fn x11_borderless_fullscreen_intent(
+    output: Rectangle<i32, Logical>,
+    w: i32,
+    h: i32,
+    undecorated: bool,
+) -> bool {
+    if w <= 0 || h <= 0 || output.size.w <= 0 || output.size.h <= 0 {
+        return false;
+    }
+    if w >= output.size.w && h >= output.size.h {
+        return true;
+    }
+    let ow = output.size.w as f32;
+    let oh = output.size.h as f32;
+    let fw = w as f32 / ow;
+    let fh = h as f32 / oh;
+    if undecorated {
+        // Borderless games: ~85%+ of the panel, or one axis fills with the other
+        // still substantial (letterboxed / ultrawide).
+        (fw >= 0.85 && fh >= 0.85) || (fw >= 0.95 && fh >= 0.50) || (fh >= 0.95 && fw >= 0.50)
+    } else {
+        fw >= 0.97 && fh >= 0.97
+    }
+}
+
+/// Large enough undecorated surface that a stale top-left would clip off-screen
+/// when the client grows — re-center on the output (keep client size).
+pub(crate) fn x11_large_undecorated_float(output: Rectangle<i32, Logical>, w: i32, h: i32) -> bool {
+    if w <= 0 || h <= 0 || output.size.w <= 0 || output.size.h <= 0 {
+        return false;
+    }
+    let fw = w as f32 / output.size.w as f32;
+    let fh = h as f32 / output.size.h as f32;
+    fw >= 0.45 && fh >= 0.45
+}
+
+/// Steam / Lutris / Heroic splash & main windows — must NOT get game borderless
+/// auto-fullscreen or resize-loop re-centering (they animate size while loading).
+pub(crate) fn x11_is_game_launcher(app_id: Option<&str>) -> bool {
+    let Some(raw) = app_id.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let id = raw.to_ascii_lowercase();
+    // Actual games — never treat as the store/launcher.
+    if id.starts_with("steam_app_")
+        || id.contains(".exe")
+        || id.contains("proton")
+        || id == "hytaleclient"
+    {
+        return false;
+    }
+    id == "steam"
+        || id.starts_with("steam.")
+        || id.contains("steamwebhelper")
+        || id.contains("gamepadui")
+        || id.contains("lutris")
+        || id.contains("heroic")
+        || id.contains("bottles")
+        || id.contains("com.valvesoftware.steam")
+}
+
+impl MetisState {
+    /// Bring an XWayland toplevel under full Metis management: register it in the
+    /// shared window registry, give it a Metis server-side titlebar, place it as a
+    /// bar-aware floating window, and announce it to the shell (dock/IPC). X11
+    /// windows do not participate in the tiling grid — they are always floating.
+    pub(crate) fn map_x11_toplevel(&mut self, window: X11Surface) {
+        use metis_protocol::CompositorEvent;
+
+        let is_remap = self.windows.id_for_x11_window(window.window_id()).is_some();
+        tracing::info!(
+            x11_window = window.window_id(),
+            override_redirect = window.is_override_redirect(),
+            class = %window.class(),
+            title = %window.title(),
+            remap = is_remap,
+            "x11: map request"
+        );
+
+        if window.is_override_redirect() {
+            // Menus / tooltips / drag surfaces: map at their requested location and
+            // leave them undecorated and untracked. `geometry()`/`bbox()` are
+            // size-only for X11 (loc is always the origin), so use the configured
+            // rectangle's root-relative location instead.
+            let loc = window.last_configure().loc;
+            let elem = Window::new_x11_window(window);
+            self.space.map_element(elem, loc, true);
+            self.schedule_redraw();
+            return;
+        }
+
+        if let Err(err) = window.set_mapped(true) {
+            tracing::warn!(%err, "failed to map X11 window");
+            return;
+        }
+
+        // A remap of an already-tracked window (e.g. an Electron app restoring from
+        // its tray) re-applies geometry and re-announces to the shell — the withdraw
+        // in `unmap_x11_toplevel` dropped the dock entry, so we re-emit WindowOpened.
+        if let Some(existing) = self.windows.id_for_x11_window(window.window_id()) {
+            self.windows.set_minimized(existing, false);
+            // Cancel any pending withdraw: this remap proves the earlier unmap was
+            // transient (Electron churn / a tray restore), not a real close.
+            self.x11_pending_withdraw.remove(&existing);
+            let was_ready = self.windows.is_ready(existing);
+            self.windows.set_ready(existing, true);
+            // Restoring from the tray (a client-driven remap) must surface the
+            // window on the workspace the user is actually looking at. The dock
+            // path does this via `activate_window_by_id`; without it here,
+            // `apply_window_rect`'s visibility guard would unmap a window whose
+            // stale workspace no longer matches the active one — the window would
+            // flash open and immediately vanish ("opens then closes").
+            let key = self.desk_key_for_window(existing);
+            self.windows
+                .set_workspace(existing, self.active_workspace_for(&key));
+            self.apply_window_rect(existing);
+            if !was_ready && let Some(record) = self.windows.get(existing).cloned() {
+                let (title, app_id) = self.read_window_metadata(&record);
+                let suggested_rect = self.windows.target_rect(existing).unwrap_or(PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 800,
+                    height: 600,
+                });
+                self.event_bus.emit(&CompositorEvent::WindowOpened {
+                    id: existing,
+                    title,
+                    app_id,
+                    suggested_rect,
+                });
+            }
+            let _ = window.set_activated(true);
+            self.note_window_focus(existing);
+            self.focus_window_id(existing);
+            self.event_bus
+                .emit(&CompositorEvent::WindowFocused { id: existing });
+            self.schedule_redraw();
+            return;
+        }
+
+        let elem = Window::new_x11_window(window.clone());
+        // Map once so the space can resolve the element before we position it.
+        self.space.map_element(elem.clone(), (0, 0), false);
+
+        let title = {
+            let t = window.title();
+            if t.trim().is_empty() {
+                "Application".to_string()
+            } else {
+                t
+            }
+        };
+        let app_id = {
+            let class = window.class();
+            if class.trim().is_empty() {
+                None
+            } else {
+                Some(class)
+            }
+        };
+
+        let id = self
+            .windows
+            .register_x11(elem, window.clone(), title.clone(), app_id.clone());
+        if let Some(surface) = window.wl_surface() {
+            use smithay::reexports::wayland_server::Resource;
+            self.windows
+                .index_x11_surface(window.window_id(), surface.id());
+        }
+
+        let key = self
+            .output_under_pointer()
+            .map(|o| o.name())
+            .unwrap_or_else(|| self.primary_key());
+        self.windows.set_output(id, key.clone());
+        self.windows
+            .set_workspace(id, self.active_workspace_for(&key));
+        // X11 windows are floating; never reserve a grid tile for them.
+        self.floating.insert(id);
+        self.refresh_window_decoration_mode(id);
+        let is_splash = {
+            use smithay::xwayland::xwm::WmWindowType;
+            matches!(window.window_type(), Some(WmWindowType::Splash))
+                || crate::state::title_looks_like_splash(&title)
+        };
+        // Splash screens share the main app's WM_CLASS — force natural size so we
+        // don't stretch/tile a small bitmap into the saved main-window geometry.
+        if is_splash {
+            // Prefer no Metis chrome on boot splash; keep Motif/heuristic unless the
+            // user forced SSD (already applied above). Splash bitmaps often look wrong
+            // under a titlebar inset.
+            tracing::info!(id, %title, "x11: splash window — natural size placement");
+        }
+        // Match Wayland: game-rules can request true-fullscreen once mapped.
+        let rule = self
+            .game_rules
+            .evaluate(app_id.as_deref(), Some(title.as_str()));
+        if rule.fullscreen && !is_splash {
+            self.pending_game_fullscreen.insert(id);
+        }
+        self.place_x11_window(id, window.geometry().size, app_id.as_deref(), is_splash);
+        self.apply_window_rect(id);
+        self.windows.set_ready(id, true);
+        let _ = window.set_activated(true);
+
+        self.persist_layout();
+        self.emit_layout_changed();
+        let suggested_rect = self.windows.target_rect(id).unwrap_or(PixelRect {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+        });
+        self.event_bus.emit(&CompositorEvent::WindowOpened {
+            id,
+            title,
+            app_id,
+            suggested_rect,
+        });
+        self.maybe_place_remote_viewer_window(id);
+        self.note_window_focus(id);
+        self.focus_window_id(id);
+        self.event_bus.emit(&CompositorEvent::WindowFocused { id });
+        if self.pending_game_fullscreen.remove(&id) {
+            self.set_fullscreen(id, true, None);
+        }
+        self.schedule_redraw();
+    }
+
+    /// Floating placement for a freshly mapped X11 window: restore saved geometry
+    /// when the app has been seen before, otherwise center the client's natural
+    /// size under the bar. Splash windows always keep their natural size.
+    /// Near-fullscreen / borderless game sizes map flush to the output origin so
+    /// they are not inset under the edge bar and clipped.
+    fn place_x11_window(
+        &mut self,
+        id: u32,
+        natural: Size<i32, Logical>,
+        app_id: Option<&str>,
+        is_splash: bool,
+    ) {
+        if is_splash {
+            let w = if natural.w > 0 {
+                natural.w
+            } else {
+                crate::state::DEFAULT_FLOAT_W / 2
+            };
+            let h = if natural.h > 0 {
+                natural.h
+            } else {
+                crate::state::DEFAULT_FLOAT_H / 3
+            };
+            let rect = self.centered_body_for_window(id, w, h);
+            self.windows.set_target_rect(id, rect);
+            self.windows.set_placement_chosen(id, true);
+            return;
+        }
+        // Honor the client's requested size when available — enlarging a splash /
+        // dialog to DEFAULT_FLOAT makes toolbar bitmaps tile across a huge window.
+        let w = if natural.w > 0 {
+            natural.w
+        } else {
+            crate::state::DEFAULT_FLOAT_W
+        };
+        let h = if natural.h > 0 {
+            natural.h
+        } else {
+            crate::state::DEFAULT_FLOAT_H
+        };
+        let undecorated = self
+            .windows
+            .get(id)
+            .and_then(|r| r.x11())
+            .map(|x11| !x11.is_decorated())
+            .unwrap_or(false);
+        let is_launcher = x11_is_game_launcher(app_id);
+        // Launchers (Steam splash, etc.) animate size while loading — never force
+        // fullscreen or special output centering or they fight Metis in a loop.
+        if !is_launcher {
+            if let Some(rect) = self.borderless_output_rect_for(id, w, h, undecorated) {
+                tracing::info!(
+                    id,
+                    ?rect,
+                    undecorated,
+                    "x11: borderless/near-fullscreen placement at output origin"
+                );
+                self.windows.set_target_rect(id, rect);
+                self.windows.set_placement_chosen(id, true);
+                self.pending_game_fullscreen.insert(id);
+                return;
+            }
+            if undecorated
+                && let Some(rect) = self.centered_on_output_for(id, w, h).filter(|_| {
+                    self.launch_output_for(id)
+                        .and_then(|o| self.space.output_geometry(&o))
+                        .is_some_and(|g| x11_large_undecorated_float(g, w, h))
+                })
+            {
+                tracing::info!(id, ?rect, "x11: large undecorated float centered on output");
+                self.windows.set_target_rect(id, rect);
+                self.windows.set_placement_chosen(id, true);
+                return;
+            }
+        }
+        if let Some(app_id) = app_id
+            && let Some(saved) = self.window_state.get(app_id)
+        {
+            let saved_rect = saved.to_rect();
+            if crate::state::saved_size_is_usable(saved_rect.width, saved_rect.height) {
+                // Never restore a stale near-fullscreen save into the usable
+                // zone — that recreates the clipped borderless-window bug.
+                if let Some(rect) = self.borderless_output_rect_for(
+                    id,
+                    saved_rect.width,
+                    saved_rect.height,
+                    undecorated,
+                ) {
+                    self.windows.set_target_rect(id, rect);
+                    self.windows.set_placement_chosen(id, true);
+                    return;
+                }
+                let rect = self.restore_body_for_window(id, saved_rect);
+                self.windows.set_target_rect(id, rect);
+                self.windows.set_placement_chosen(id, true);
+                return;
+            }
+            self.window_state.remove(app_id);
+        }
+        let rect = self.centered_body_for_window(id, w, h);
+        self.windows.set_target_rect(id, rect);
+        self.windows.set_placement_chosen(id, true);
+    }
+
+    /// When `w`×`h` looks like borderless / fake-fullscreen for `id`'s output,
+    /// return that output's full geometry (flush origin). Otherwise `None`.
+    pub(crate) fn borderless_output_rect_for(
+        &self,
+        id: u32,
+        w: i32,
+        h: i32,
+        undecorated: bool,
+    ) -> Option<PixelRect> {
+        let output = self.launch_output_for(id)?;
+        let geo = self.space.output_geometry(&output)?;
+        if !x11_borderless_fullscreen_intent(geo, w, h, undecorated) {
+            return None;
+        }
+        Some(PixelRect {
+            x: geo.loc.x,
+            y: geo.loc.y,
+            width: geo.size.w,
+            height: geo.size.h,
+        })
+    }
+
+    /// Center `w`×`h` on the full output (not the bar usable zone). Used for
+    /// large undecorated game floats so they are not inset under the edge bar.
+    pub(crate) fn centered_on_output_for(&self, id: u32, w: i32, h: i32) -> Option<PixelRect> {
+        let output = self.launch_output_for(id)?;
+        let geo = self.space.output_geometry(&output)?;
+        let width = w.clamp(1, geo.size.w);
+        let height = h.clamp(1, geo.size.h);
+        Some(PixelRect {
+            x: geo.loc.x + (geo.size.w - width) / 2,
+            y: geo.loc.y + (geo.size.h - height) / 2,
+            width,
+            height,
+        })
+    }
+
+    /// Undecorated X11 float large enough that bar-inset clamping would recreate
+    /// the off-screen borderless-game bug.
+    pub(crate) fn x11_keep_on_full_output(&self, id: u32, rect: PixelRect) -> bool {
+        let Some(record) = self.windows.get(id) else {
+            return false;
+        };
+        let Some(x11) = record.x11() else {
+            return false;
+        };
+        if x11.is_decorated() {
+            return false;
+        }
+        let Some(output) = self.launch_output_for(id) else {
+            return false;
+        };
+        let Some(geo) = self.space.output_geometry(&output) else {
+            return false;
+        };
+        x11_large_undecorated_float(geo, rect.width, rect.height)
+    }
+
+    /// True when `rect` already covers (nearly) an entire output — skip bar inset.
+    pub(crate) fn rect_is_output_covering(&self, rect: PixelRect) -> bool {
+        for output in self.space.outputs() {
+            let Some(geo) = self.space.output_geometry(output) else {
+                continue;
+            };
+            if x11_borderless_fullscreen_intent(geo, rect.width, rect.height, true)
+                && (rect.x - geo.loc.x).abs() <= crate::state::WINDOW_GAP_PX * 2
+                && (rect.y - geo.loc.y).abs() <= crate::state::WINDOW_GAP_PX * 2
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Handle a client-initiated unmap of an X11 window. This is *deferred*: we hide
+    /// the (now bufferless) element immediately, but only arm a pending-withdraw
+    /// timer rather than tearing the window down. Electron apps (Claude Desktop)
+    /// unmap/remap their X11 window constantly during normal operation and, notably,
+    /// as part of restoring from the tray — reacting to each unmap would thrash the
+    /// dock and make the window flash open and vanish. `tick_x11_withdraws` promotes
+    /// a still-unmapped window to a real "close to tray" after a grace period;
+    /// `map_x11_toplevel` cancels the pending withdraw if the window comes back.
+    pub(crate) fn unmap_x11_toplevel(&mut self, window: &X11Surface) {
+        let Some(id) = self.windows.id_for_x11_window(window.window_id()) else {
+            return;
+        };
+        let Some(record) = self.windows.get(id).cloned() else {
+            return;
+        };
+        self.space.unmap_elem(&record.window);
+        self.x11_pending_withdraw
+            .entry(id)
+            .or_insert_with(std::time::Instant::now);
+        tracing::info!(
+            id,
+            x11_window = window.window_id(),
+            "x11: unmap (withdraw armed)"
+        );
+        self.schedule_redraw();
+    }
+
+    /// Grace period before a client-unmapped X11 window is treated as withdrawn to
+    /// the tray. Long enough to swallow Electron's transient unmap/remap churn, short
+    /// enough that a genuine close-to-tray drops from the dock promptly.
+    const X11_WITHDRAW_GRACE: std::time::Duration = std::time::Duration::from_millis(600);
+
+    /// Promote X11 windows that have stayed unmapped past the grace period to a real
+    /// withdraw: drop them from the dock/tasklist (like GNOME/KDE do for tray apps)
+    /// so a stale entry can't restore to an empty frame. The registry record is kept,
+    /// keyed by X11 window id, so a later remap re-announces and re-shows the window.
+    /// Returns true if anything changed (so the caller can flag damage).
+    pub(crate) fn tick_x11_withdraws(&mut self) -> bool {
+        if self.x11_pending_withdraw.is_empty() {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        let due: Vec<u32> = self
+            .x11_pending_withdraw
+            .iter()
+            .filter(|(_, t)| now.duration_since(**t) >= Self::X11_WITHDRAW_GRACE)
+            .map(|(id, _)| *id)
+            .collect();
+        if due.is_empty() {
+            return false;
+        }
+        for id in due {
+            self.x11_pending_withdraw.remove(&id);
+            // A window that no longer exists, or is already mapped again, needs no
+            // teardown (the remap path clears the pending entry, but guard anyway).
+            if self.windows.get(id).is_none() {
+                continue;
+            }
+            tracing::info!(id, "x11: withdraw confirmed — dropping dock entry");
+            self.drop_window_fullscreen(id);
+            self.windows.set_ready(id, false);
+            self.windows.set_fullscreen(id, false);
+            self.windows.set_maximized(id, false);
+            self.clear_auto_hide(id);
+            if self.last_focused_window == Some(id) {
+                self.last_focused_window = None;
+            }
+            if self.focused_window_id() == Some(id) {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                if let Some(kbd) = self.seat.get_keyboard() {
+                    kbd.set_focus(self, Option::<KeyboardFocusTarget>::None, serial);
+                }
+            }
+            self.event_bus
+                .emit(&metis_protocol::CompositorEvent::WindowClosed { id });
+            self.emit_layout_changed();
+        }
+        true
+    }
+
+    /// Tear down a destroyed X11 window: drop it from the registry, close out any
+    /// fullscreen bookkeeping, and notify the shell (dock/IPC) like a Wayland close.
+    pub(crate) fn destroy_x11_toplevel(&mut self, window: &X11Surface) {
+        let Some(id) = self.windows.id_for_x11_window(window.window_id()) else {
+            return;
+        };
+        tracing::info!(id, x11_window = window.window_id(), "x11: window destroyed");
+        self.x11_pending_withdraw.remove(&id);
+        let ready = self.windows.is_ready(id);
+        self.drop_window_fullscreen(id);
+        self.save_window_geometry(id);
+        if let Some(record) = self.windows.unregister(id) {
+            self.space.unmap_elem(&record.window);
+        }
+        if ready {
+            self.on_window_destroyed(id);
+        }
+        self.schedule_redraw();
+    }
+}
 
 impl MetisState {
     /// Spawn the XWayland server and, once it is ready, start the X11 window
@@ -280,7 +789,7 @@ impl MetisState {
         new_size: Size<i32, Logical>,
     ) {
         let app_id = self.windows.get(id).and_then(|r| r.app_id.clone());
-        if crate::state::x11_is_game_launcher(app_id.as_deref()) {
+        if x11_is_game_launcher(app_id.as_deref()) {
             self.apply_x11_launcher_configure(id, window, elem, new_size);
             return;
         }
@@ -325,9 +834,7 @@ impl MetisState {
             .launch_output_for(id)
             .and_then(|o| self.space.output_geometry(&o));
         let large_undeco = undecorated
-            && output_geo.is_some_and(|g| {
-                crate::state::x11_large_undecorated_float(g, new_size.w, new_size.h)
-            });
+            && output_geo.is_some_and(|g| x11_large_undecorated_float(g, new_size.w, new_size.h));
         let rect = if large_undeco {
             self.centered_on_output_for(id, new_size.w, new_size.h)
                 .unwrap_or_else(|| self.centered_body_for_window(id, new_size.w, new_size.h))
@@ -663,7 +1170,7 @@ impl XwmHandler for MetisState {
             }
             let app_id = self.windows.get(id).and_then(|r| r.app_id.clone());
             // Steam splash animates size — never re-place from ConfigureNotify.
-            if crate::state::x11_is_game_launcher(app_id.as_deref()) {
+            if x11_is_game_launcher(app_id.as_deref()) {
                 if let Some(t) = self.windows.target_rect(id) {
                     // Keep target size in sync so later grow detection is accurate.
                     self.windows.set_target_rect(
@@ -877,5 +1384,64 @@ impl XwmHandler for MetisState {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod borderless_intent_tests {
+    use super::*;
+
+    fn output(w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new(Point::from((0, 0)), Size::from((w, h)))
+    }
+
+    #[test]
+    fn exact_monitor_size_matches() {
+        assert!(x11_borderless_fullscreen_intent(
+            output(1920, 1080),
+            1920,
+            1080,
+            false
+        ));
+    }
+
+    #[test]
+    fn undecorated_near_full_matches() {
+        assert!(x11_borderless_fullscreen_intent(
+            output(1920, 1080),
+            1728,
+            972,
+            true
+        ));
+    }
+
+    #[test]
+    fn undecorated_half_is_large_float() {
+        assert!(!x11_borderless_fullscreen_intent(
+            output(1920, 1080),
+            1280,
+            720,
+            true
+        ));
+        assert!(x11_large_undecorated_float(output(1920, 1080), 1280, 720));
+    }
+
+    #[test]
+    fn small_dialog_does_not_match() {
+        assert!(!x11_borderless_fullscreen_intent(
+            output(1920, 1080),
+            640,
+            480,
+            true
+        ));
+        assert!(!x11_large_undecorated_float(output(1920, 1080), 640, 480));
+    }
+
+    #[test]
+    fn steam_is_launcher_but_steam_app_is_not() {
+        assert!(x11_is_game_launcher(Some("steam")));
+        assert!(x11_is_game_launcher(Some("Steam")));
+        assert!(!x11_is_game_launcher(Some("steam_app_12345")));
+        assert!(!x11_is_game_launcher(Some("hl2.exe")));
     }
 }

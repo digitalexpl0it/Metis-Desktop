@@ -129,8 +129,11 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       when D-Bus name claim is slow (`metis-compositor` `main.rs`).
 - [x] **Pause NC timers when closed** (2026-10-03) — 1 s date/world + 500 ms
       calendar `try_recv` armed only while the notification center is open.
-- [ ] **Refresh `PERF_AUDIT.md`** — re-measure release binary sizes (~52 MB
-      four-bin vs ~40 MB June audit) and DRM idle/`perf` under ScreenCast.
+- [x] **Refresh `PERF_AUDIT.md`** (2026-10-07) — four-bin `release` **~53.6 MiB**
+      (was ~40 MiB Jun); `release-small` ~42.9 MiB; DRM idle with Cursor ~6% one
+      core compositor / <1% shell; portal capture-test ~0.13 s. Residual:
+      continuous ScreenCast + `perf top` (needs OBS/GRD +
+      `perf_event_paranoid`≤2); empty-desktop idle.
 - [x] **Shell poll D-Bus dirty + fewer forks** (2026-10-07) — BlueZ/UPower
       dirty wakes; UPower via zbus; gate `bluetoothctl info` / `solaar`; stretch
       nmcli heartbeat when NM watcher is alive. Residual: Pulse still `pactl`;
@@ -147,8 +150,10 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       `persist::write_json_atomic` / `write_bytes_atomic` for all
       `~/.config/metis/*.json` saves; calendars/clocks no longer rewrite on
       parse failure (seed only when missing). `bar` migrate once-guard unchanged.
-- [ ] **Split `state.rs`** (~9.8k) — desk/workspace, geometry, X11 lifecycle
-      modules; continue when touching those areas.
+- [x] **Split `state.rs`** (2026-10-07) — X11 lifecycle → `xwayland.rs`; geometry →
+      `window_geometry.rs`; desk/scroll/workspaces → `desk.rs` (`OutputDesk`
+      re-exported from `state`). Residual: `handle_ipc` / spawn / output reflow
+      still in `state.rs` (~5.5k).
 - [ ] **Split / share CSS** — `metis-config` `css.rs` (~4.6k) by surface;
       stop duplicating megasheets in `metis-settings` `theme.rs`; shared
       GTK theme bootstrap helper across shell / settings / viewer /
@@ -1812,7 +1817,8 @@ big-bang `state.rs` rewrite; Sober/Flatpak app bugs unrelated to Metis portals.
 - [x] **Document same-UID trust model** — USER_GUIDE / UBUNTU_DEV (socket+token
       vs weaker command file)
 - [x] **`docs/PERF_AUDIT.md` refresh** — ScreenCast dmabuf, `panic = "abort"`,
-      shell poll / GSK (`METIS_SHELL_GSK_RENDERER`), hybrid NVIDIA MemFd checklist
+      shell poll / GSK (`METIS_SHELL_GSK_RENDERER`), hybrid NVIDIA MemFd checklist;
+      sizes/idle re-measured 2026-10-07 (~54 MiB four-bin release)
 
 ### F. Shell poll
 
