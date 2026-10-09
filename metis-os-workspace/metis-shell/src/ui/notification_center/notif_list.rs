@@ -24,16 +24,19 @@ pub struct NotificationsCard {
 
 impl NotificationsCard {
     pub fn new() -> Self {
+        // Transparent section over the panel glass; only the title row is solid.
         let card = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(8)
             .build();
-        card.add_css_class("metis-nc-card");
+        card.add_css_class("metis-nc-notif-section");
 
         let header = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
             .build();
+        header.add_css_class("metis-nc-card");
+        header.add_css_class("metis-nc-notif-header");
 
         let collapse_btn = gtk::ToggleButton::new();
         collapse_btn.set_icon_name("pan-down-symbolic");
@@ -236,12 +239,13 @@ fn build_notification_card(entry: &NotificationEntry) -> gtk::Box {
     let notif = &entry.notification;
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
+        .spacing(0)
         .hexpand(true)
         .build();
     card.add_css_class("metis-notif-card");
     card.add_css_class(&format!("metis-notif-card-{}", notif.kind.css_suffix()));
 
+    card.append(&crate::ui::bar::widgets::notif_kind_accent());
     card.append(&crate::ui::bar::widgets::notif_icon_badge(notif));
 
     let text = gtk::Box::builder()
@@ -249,36 +253,77 @@ fn build_notification_card(entry: &NotificationEntry) -> gtk::Box {
         .spacing(4)
         .hexpand(true)
         .build();
+    text.add_css_class("metis-notif-body");
+
+    let title_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .build();
 
     let title = gtk::Label::builder()
         .label(&notif.title)
         .halign(gtk::Align::Fill)
+        .hexpand(true)
         .xalign(0.0)
         .wrap(true)
         .wrap_mode(gtk::pango::WrapMode::WordChar)
         .max_width_chars(28)
         .build();
     title.add_css_class("metis-notif-title");
+    title_row.append(&title);
 
-    let message = gtk::Label::builder()
-        .label(&notif.message)
-        .halign(gtk::Align::Fill)
-        .xalign(0.0)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
-        .max_width_chars(28)
-        .build();
-    message.add_css_class("metis-notif-message");
-
-    text.append(&title);
-    text.append(&message);
-
-    let uid = entry.uid;
-    let dismiss = move || {
-        glib::idle_add_local_once(move || crate::services::dismiss_notification(uid));
+    let message = if notif.message.is_empty() {
+        None
+    } else {
+        let message = gtk::Label::builder()
+            .label(&notif.message)
+            .halign(gtk::Align::Fill)
+            .xalign(0.0)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .max_width_chars(28)
+            .build();
+        message.add_css_class("metis-notif-message");
+        Some(message)
     };
 
-    if let Some(row) = build_action_row(notif, dismiss) {
+    // Trailing controls: count → expand → dismiss.
+    if entry.count > 1 {
+        let count = gtk::Label::new(Some(&format!("{}", entry.count)));
+        count.add_css_class("metis-notif-count");
+        count.set_valign(gtk::Align::Start);
+        title_row.append(&count);
+    }
+
+    if let Some(expand) = crate::ui::bar::widgets::build_expand_toggle(&title, message.as_ref()) {
+        title_row.append(&expand);
+    }
+
+    let uid = entry.uid;
+    let dbus_id = notif.id;
+    let dismiss = Rc::new(move || {
+        glib::idle_add_local_once(move || {
+            if dbus_id != 0 {
+                crate::services::close_notification(dbus_id, 2);
+            }
+            crate::services::dismiss_notification(uid);
+        });
+    });
+
+    title_row.append(&crate::ui::bar::widgets::build_dismiss_button({
+        let dismiss = dismiss.clone();
+        move || dismiss()
+    }));
+
+    text.append(&title_row);
+    if let Some(message) = message {
+        text.append(&message);
+    }
+
+    if let Some(row) = build_action_row(notif, {
+        let dismiss = dismiss.clone();
+        move || dismiss()
+    }) {
         text.append(&row);
     }
 
@@ -288,20 +333,22 @@ fn build_notification_card(entry: &NotificationEntry) -> gtk::Box {
         card.add_css_class("metis-notif-card-clickable");
         let gesture = gtk::GestureClick::new();
         let id = notif.id;
-        gesture.connect_released(move |gesture, _, _, _| {
+        let dismiss = dismiss.clone();
+        gesture.connect_released(move |gesture, _, x, y| {
+            let Some(card_w) = gesture.widget() else {
+                return;
+            };
+            if let Some(picked) = card_w.pick(x, y, gtk::PickFlags::DEFAULT)
+                && crate::ui::bar::widgets::widget_is_buttonish(&picked)
+            {
+                return;
+            }
             gesture.set_state(gtk::EventSequenceState::Claimed);
             crate::services::invoke_action(id, "default");
             crate::services::close_notification(id, 2);
             dismiss();
         });
         card.add_controller(gesture);
-    }
-
-    if entry.count > 1 {
-        let count = gtk::Label::new(Some(&format!("{}", entry.count)));
-        count.add_css_class("metis-notif-count");
-        count.set_valign(gtk::Align::Start);
-        card.append(&count);
     }
 
     card

@@ -2,11 +2,12 @@
 //! Kept so existing `bar.json` entries with `notifications` still work; the
 //! default layout no longer includes this widget (badge lives on the clock).
 
+use std::rc::Rc;
+
 use gtk::prelude::*;
 
 use crate::services::{BarNotification, do_not_disturb, notification_count, register_refresh};
 use crate::ui::icons::{self, names};
-use std::rc::Rc;
 
 pub struct NotificationsWidget {
     root: gtk::Button,
@@ -178,9 +179,157 @@ pub(crate) fn open_desktop_entry(entry: &str) {
     tracing::warn!(desktop = %entry, "notify: no .desktop entry found to open");
 }
 
+/// Collapsed preview budgets (GTK `Label::lines` is unreliable for wrap+hexpand).
+const COLLAPSED_TITLE_CHARS: usize = 40;
+const COLLAPSED_BODY_CHARS: usize = 96;
+
+/// Whether title/body are long enough that a clamp + expand control helps.
+pub(crate) fn notification_needs_expand(title: &str, message: &str) -> bool {
+    title.chars().count() > COLLAPSED_TITLE_CHARS
+        || message.chars().count() > COLLAPSED_BODY_CHARS
+        || title.contains('\n')
+        || message.contains('\n')
+}
+
+fn ellipsize_chars(s: &str, max: usize) -> String {
+    let mut iter = s.chars();
+    let head: String = iter.by_ref().take(max).collect();
+    if iter.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+fn apply_expand_state(
+    title: &gtk::Label,
+    message: Option<&gtk::Label>,
+    full_title: &str,
+    full_message: &str,
+    expanded: bool,
+) {
+    if expanded {
+        title.set_label(full_title);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::None);
+        title.set_wrap(true);
+        title.set_lines(0);
+        if let Some(msg) = message {
+            msg.set_label(full_message);
+            msg.set_ellipsize(gtk::pango::EllipsizeMode::None);
+            msg.set_wrap(true);
+            msg.set_lines(0);
+            msg.queue_resize();
+        }
+    } else {
+        title.set_label(&ellipsize_chars(full_title, COLLAPSED_TITLE_CHARS));
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_wrap(false);
+        title.set_lines(1);
+        if let Some(msg) = message {
+            msg.set_label(&ellipsize_chars(full_message, COLLAPSED_BODY_CHARS));
+            msg.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            msg.set_wrap(true);
+            msg.set_lines(2);
+            msg.queue_resize();
+        }
+    }
+    title.queue_resize();
+}
+
+/// Three-dot control that swaps truncated ↔ full title/body. Returns `None` when
+/// the content is short enough to show in full.
+pub(crate) fn build_expand_toggle(
+    title: &gtk::Label,
+    message: Option<&gtk::Label>,
+) -> Option<gtk::Button> {
+    let full_title = title.label().to_string();
+    let full_message = message.map(|m| m.label().to_string()).unwrap_or_default();
+    if !notification_needs_expand(&full_title, &full_message) {
+        return None;
+    }
+
+    apply_expand_state(title, message, &full_title, &full_message, false);
+
+    let expand = gtk::Button::from_icon_name("view-more-horizontal-symbolic");
+    expand.add_css_class("flat");
+    expand.add_css_class("metis-notif-expand");
+    expand.set_tooltip_text(Some(&metis_i18n::tr("Expand")));
+    expand.set_valign(gtk::Align::Start);
+    expand.set_focus_on_click(false);
+
+    let expanded = Rc::new(std::cell::Cell::new(false));
+    {
+        let title = title.clone();
+        let message = message.cloned();
+        let expanded = expanded.clone();
+        let full_title = full_title.clone();
+        let full_message = full_message.clone();
+        expand.connect_clicked(move |btn| {
+            let next = !expanded.get();
+            expanded.set(next);
+            apply_expand_state(&title, message.as_ref(), &full_title, &full_message, next);
+            // Resize card / list row so the panel grows with the expanded body.
+            let mut walk = btn.parent();
+            while let Some(parent) = walk {
+                parent.queue_resize();
+                walk = parent.parent();
+            }
+            btn.set_tooltip_text(Some(&if next {
+                metis_i18n::tr("Collapse")
+            } else {
+                metis_i18n::tr("Expand")
+            }));
+        });
+    }
+
+    Some(expand)
+}
+
+/// Per-card dismiss (X) for Notification Center / toast title rows.
+pub(crate) fn build_dismiss_button<F>(on_dismiss: F) -> gtk::Button
+where
+    F: Fn() + 'static,
+{
+    let close = gtk::Button::from_icon_name("window-close-symbolic");
+    close.add_css_class("flat");
+    close.add_css_class("metis-notif-dismiss");
+    close.set_tooltip_text(Some(&metis_i18n::tr("Dismiss")));
+    close.set_valign(gtk::Align::Start);
+    close.set_focus_on_click(false);
+    close.connect_clicked(move |_| on_dismiss());
+    close
+}
+
+/// True when `widget` is (or is inside) a button — used to ignore card-level
+/// default-action clicks that land on expand / dismiss / Open controls.
+pub(crate) fn widget_is_buttonish(widget: &impl IsA<gtk::Widget>) -> bool {
+    let mut current = Some(widget.clone().upcast::<gtk::Widget>());
+    while let Some(node) = current {
+        if node.downcast_ref::<gtk::Button>().is_some()
+            || node.downcast_ref::<gtk::ToggleButton>().is_some()
+            || node.downcast_ref::<gtk::MenuButton>().is_some()
+        {
+            return true;
+        }
+        current = node.parent();
+    }
+    false
+}
+
+/// Left-edge kind strip (colour set by `.metis-notif-card-* .metis-notif-accent`).
+pub(crate) fn notif_kind_accent() -> gtk::Box {
+    let accent = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .hexpand(false)
+        .vexpand(true)
+        .build();
+    accent.add_css_class("metis-notif-accent");
+    accent
+}
+
 /// Icon for toast / notification-center cards: prefer the app's icon, then the
-/// freedesktop `app_icon`, then a kind glyph. No circular glow — kind tint is
-/// a soft gradient on the card background.
+/// freedesktop `app_icon`, then a kind glyph. Kind colour tints the glyph only;
+/// cards use a solid fill with border + shadow.
 pub(crate) fn notif_icon_badge(note: &BarNotification) -> gtk::Box {
     use crate::services::applications;
 

@@ -4,8 +4,8 @@ use gtk::{CssProvider, STYLE_PROVIDER_PRIORITY_APPLICATION, STYLE_PROVIDER_PRIOR
 
 use crate::config;
 use metis_config::{
-    BarBorder, BarFill, BarFillMode, BarGradientDirection, BarPosition, BorderMode, ThemeMode,
-    ThemeTokens, build_stylesheet, parse_hex_rgb,
+    BarBorder, BarFill, BarFillMode, BarGradientDirection, BarPosition, BorderMode, ThemeTokens,
+    build_stylesheet, parse_hex_rgb,
 };
 
 thread_local! {
@@ -40,22 +40,7 @@ pub fn active_tokens() -> ThemeTokens {
 }
 
 fn load_active_theme() -> ThemeTokens {
-    config::load_theme_tokens(effective_theme_name())
-}
-
-/// Resolve the on-disk theme token file name for the saved preference.
-fn effective_theme_name() -> &'static str {
-    match config::load_theme_preference().unwrap_or(ThemeMode::Dark) {
-        ThemeMode::Light => "light",
-        ThemeMode::Dark => "dark",
-        ThemeMode::System => {
-            if detect_system_prefers_dark() {
-                "dark"
-            } else {
-                "light"
-            }
-        }
-    }
+    metis_config::resolve_ui_theme(detect_system_prefers_dark()).tokens
 }
 
 fn detect_system_prefers_dark() -> bool {
@@ -69,15 +54,9 @@ fn detect_system_prefers_dark() -> bool {
 /// live `reload-theme` — mirrors `metis-settings::theme::reapply`.
 fn sync_gtk_theme_variant(_tokens: &ThemeTokens) {
     if let Some(settings) = gtk::Settings::default() {
-        settings.set_gtk_application_prefer_dark_theme(active_mode_is_dark());
-    }
-}
-
-fn active_mode_is_dark() -> bool {
-    match config::load_theme_preference().unwrap_or(ThemeMode::Dark) {
-        ThemeMode::Dark => true,
-        ThemeMode::Light => false,
-        ThemeMode::System => detect_system_prefers_dark(),
+        settings.set_gtk_application_prefer_dark_theme(
+            metis_config::resolve_ui_theme(detect_system_prefers_dark()).is_dark,
+        );
     }
 }
 

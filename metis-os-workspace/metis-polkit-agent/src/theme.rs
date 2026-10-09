@@ -13,13 +13,12 @@ pub fn install() {
         &provider,
         STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
-    let tokens = active_tokens();
-    let dark = active_mode_is_dark();
-    provider.load_from_string(&stylesheet(&tokens));
+    let resolved = resolve_active();
+    provider.load_from_string(&stylesheet(&resolved.tokens));
 
     if let Some(settings) = gtk::Settings::default() {
-        settings.set_gtk_application_prefer_dark_theme(dark);
-        if let Some(gtk_theme) = metis_config::appearance_gtk_theme_env(if dark {
+        settings.set_gtk_application_prefer_dark_theme(resolved.is_dark);
+        if let Some(gtk_theme) = metis_config::appearance_gtk_theme_env(if resolved.is_dark {
             ThemeMode::Dark
         } else {
             ThemeMode::Light
@@ -31,23 +30,15 @@ pub fn install() {
     }
 }
 
-fn active_mode_is_dark() -> bool {
-    match metis_config::load_theme_preference().unwrap_or(ThemeMode::Dark) {
-        ThemeMode::Dark => true,
-        ThemeMode::Light => false,
-        ThemeMode::System => gtk::Settings::default()
-            .map(|s| s.is_gtk_application_prefer_dark_theme())
-            .unwrap_or(true),
-    }
+fn prefers_dark() -> bool {
+    gtk::Settings::default()
+        .map(|s| s.is_gtk_application_prefer_dark_theme())
+        .unwrap_or(true)
 }
 
-fn active_tokens() -> ThemeTokens {
-    let name = if active_mode_is_dark() {
-        "dark"
-    } else {
-        "light"
-    };
-    metis_config::load_theme_tokens(name)
+fn resolve_active() -> metis_config::ResolvedUiTheme {
+    let mode = metis_config::load_theme_preference_for_ui();
+    metis_config::resolve_ui_theme_for_mode(mode, prefers_dark())
 }
 
 fn stylesheet(tokens: &ThemeTokens) -> String {

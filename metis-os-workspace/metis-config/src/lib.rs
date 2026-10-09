@@ -236,6 +236,39 @@ pub fn load_theme_preference_for_ui() -> ThemeMode {
         .unwrap_or(ThemeMode::Dark)
 }
 
+/// Resolved theme for GTK apps: preference mode, token file name, tokens, dark flag.
+///
+/// `system_prefers_dark` comes from the host (GTK `prefer-dark`, portal, etc.);
+/// this helper stays GTK-free.
+#[derive(Debug, Clone)]
+pub struct ResolvedUiTheme {
+    pub mode: ThemeMode,
+    pub name: &'static str,
+    pub tokens: ThemeTokens,
+    pub is_dark: bool,
+}
+
+/// Resolve the active UI theme from [`load_theme_preference_for_ui`].
+pub fn resolve_ui_theme(system_prefers_dark: bool) -> ResolvedUiTheme {
+    resolve_ui_theme_for_mode(load_theme_preference_for_ui(), system_prefers_dark)
+}
+
+/// Resolve tokens for an explicit [`ThemeMode`] (e.g. Settings live preview before save).
+pub fn resolve_ui_theme_for_mode(mode: ThemeMode, system_prefers_dark: bool) -> ResolvedUiTheme {
+    let is_dark = match mode {
+        ThemeMode::Dark => true,
+        ThemeMode::Light => false,
+        ThemeMode::System => system_prefers_dark,
+    };
+    let name = if is_dark { "dark" } else { "light" };
+    ResolvedUiTheme {
+        mode,
+        name,
+        tokens: load_theme_tokens(name),
+        is_dark,
+    }
+}
+
 pub fn load_graphics_profile() -> graphics::GraphicsProfile {
     load_app_config().graphics_profile
 }
@@ -398,7 +431,10 @@ pub use clocks::{
     ALARM_SOUNDS, Alarm, AlarmSound, ClocksConfig, alarm_sound_canberra_id, clocks_config_path,
     load_clocks_config, save_clocks_config,
 };
-pub use css::build_stylesheet;
+pub use css::{
+    build_appearance_preview_stylesheet, build_settings_app_stylesheet,
+    build_settings_chrome_stylesheet, build_settings_opaque_window, build_stylesheet,
+};
 pub use dashboard::{
     DashboardConfig, DashboardWidgetId, KNOWN_PROCESS_MONITORS, dashboard_config_path,
     load_dashboard_config, process_monitor_needs_terminal, save_dashboard_config,
@@ -529,3 +565,28 @@ pub use widget_ext::{
 pub use xwayland_policy::{
     DEFAULT_GAMING_XWAYLAND_PATTERNS, XwaylandPolicy, command_uses_gaming_xwayland,
 };
+
+#[cfg(test)]
+mod resolve_ui_theme_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_for_mode_light_and_dark() {
+        let light = resolve_ui_theme_for_mode(ThemeMode::Light, true);
+        assert_eq!(light.name, "light");
+        assert!(!light.is_dark);
+        let dark = resolve_ui_theme_for_mode(ThemeMode::Dark, false);
+        assert_eq!(dark.name, "dark");
+        assert!(dark.is_dark);
+    }
+
+    #[test]
+    fn resolve_system_follows_host_flag() {
+        let darkish = resolve_ui_theme_for_mode(ThemeMode::System, true);
+        assert_eq!(darkish.name, "dark");
+        assert!(darkish.is_dark);
+        let lightish = resolve_ui_theme_for_mode(ThemeMode::System, false);
+        assert_eq!(lightish.name, "light");
+        assert!(!lightish.is_dark);
+    }
+}

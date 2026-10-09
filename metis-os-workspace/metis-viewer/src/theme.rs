@@ -12,55 +12,34 @@ use std::time::Duration;
 use gio::prelude::*;
 use gtk::CssProvider;
 use gtk::STYLE_PROVIDER_PRIORITY_USER;
-use metis_config::{ThemeMode, ThemeTokens};
+use metis_config::ThemeTokens;
 
 thread_local! {
     static PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
     static MONITORS: RefCell<Vec<gio::FileMonitor>> = const { RefCell::new(Vec::new()) };
 }
 
-pub fn active_tokens() -> ThemeTokens {
-    let mode = metis_config::load_theme_preference_for_ui();
-    let name = match mode {
-        ThemeMode::Light => "light",
-        ThemeMode::Dark => "dark",
-        ThemeMode::System => {
-            if prefers_dark() {
-                "dark"
-            } else {
-                "light"
-            }
-        }
-    };
-    metis_config::load_theme_tokens(name)
-}
-
-pub fn effective_theme_name() -> String {
-    match metis_config::load_theme_preference_for_ui() {
-        ThemeMode::Light => "light".into(),
-        ThemeMode::Dark => "dark".into(),
-        ThemeMode::System => {
-            if prefers_dark() {
-                "dark".into()
-            } else {
-                "light".into()
-            }
-        }
-    }
-}
-
-pub fn active_mode_is_dark() -> bool {
-    match metis_config::load_theme_preference_for_ui() {
-        ThemeMode::Dark => true,
-        ThemeMode::Light => false,
-        ThemeMode::System => prefers_dark(),
-    }
-}
-
 fn prefers_dark() -> bool {
     gtk::Settings::default()
         .map(|s| s.is_gtk_application_prefer_dark_theme())
         .unwrap_or(true)
+}
+
+fn resolve_active() -> metis_config::ResolvedUiTheme {
+    let mode = metis_config::load_theme_preference_for_ui();
+    metis_config::resolve_ui_theme_for_mode(mode, prefers_dark())
+}
+
+pub fn active_tokens() -> ThemeTokens {
+    resolve_active().tokens
+}
+
+pub fn effective_theme_name() -> String {
+    resolve_active().name.into()
+}
+
+pub fn active_mode_is_dark() -> bool {
+    resolve_active().is_dark
 }
 
 pub fn sync_gtk_theme_env() {

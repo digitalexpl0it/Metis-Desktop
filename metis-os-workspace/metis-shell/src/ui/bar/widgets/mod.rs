@@ -27,7 +27,10 @@ use clipboard::ClipboardWidget;
 use clock::ClockWidget;
 use launcher::LauncherWidget;
 use notifications::NotificationsWidget;
-pub(crate) use notifications::{build_action_row, notif_icon_badge};
+pub(crate) use notifications::{
+    build_action_row, build_dismiss_button, build_expand_toggle, notif_icon_badge,
+    notif_kind_accent, widget_is_buttonish,
+};
 use sys::{BatteryWidget, BluetoothWidget, NetworkWidget, VolumeWidget, VpnWidget};
 use tasks::TasksWidget;
 use tray::TrayWidget;

@@ -16,12 +16,15 @@ pub fn sync_gtk_theme_env() {
     }
 }
 
+fn prefers_dark() -> bool {
+    gtk::Settings::default()
+        .map(|s| s.is_gtk_application_prefer_dark_theme())
+        .unwrap_or(true)
+}
+
 pub fn active_tokens() -> ThemeTokens {
-    metis_config::load_theme_tokens(match metis_config::load_theme_preference_for_ui() {
-        metis_config::ThemeMode::Light => "light",
-        metis_config::ThemeMode::Dark => "dark",
-        metis_config::ThemeMode::System => "dark",
-    })
+    let mode = metis_config::load_theme_preference_for_ui();
+    metis_config::resolve_ui_theme_for_mode(mode, prefers_dark()).tokens
 }
 
 pub fn install() {

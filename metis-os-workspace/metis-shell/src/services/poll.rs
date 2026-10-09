@@ -305,14 +305,14 @@ fn spawn_bluetooth_dbus_watcher() {
                         return;
                     }
                 };
-                let mut props = match MessageStream::for_match_rule(props_rule, &conn, Some(8)).await
-                {
-                    Ok(s) => s,
-                    Err(err) => {
-                        tracing::debug!(%err, "bt dbus watcher: props subscribe failed");
-                        return;
-                    }
-                };
+                let mut props =
+                    match MessageStream::for_match_rule(props_rule, &conn, Some(8)).await {
+                        Ok(s) => s,
+                        Err(err) => {
+                            tracing::debug!(%err, "bt dbus watcher: props subscribe failed");
+                            return;
+                        }
+                    };
 
                 let om = zbus::Proxy::new(
                     &conn,
@@ -416,14 +416,14 @@ fn spawn_upower_dbus_watcher() {
                         return;
                     }
                 };
-                let mut props = match MessageStream::for_match_rule(props_rule, &conn, Some(8)).await
-                {
-                    Ok(s) => s,
-                    Err(err) => {
-                        tracing::debug!(%err, "upower dbus watcher: props subscribe failed");
-                        return;
-                    }
-                };
+                let mut props =
+                    match MessageStream::for_match_rule(props_rule, &conn, Some(8)).await {
+                        Ok(s) => s,
+                        Err(err) => {
+                            tracing::debug!(%err, "upower dbus watcher: props subscribe failed");
+                            return;
+                        }
+                    };
 
                 tracing::debug!("upower dbus watcher: subscribed");
                 loop {
@@ -1656,10 +1656,7 @@ async fn read_upower_bt_batteries_async() -> HashMap<String, DeviceBattery> {
     map
 }
 
-async fn read_upower_device_dbus(
-    conn: &zbus::Connection,
-    path: &str,
-) -> Option<DeviceBattery> {
+async fn read_upower_device_dbus(conn: &zbus::Connection, path: &str) -> Option<DeviceBattery> {
     let proxy = zbus::Proxy::new(
         conn,
         "org.freedesktop.UPower",

@@ -5,6 +5,22 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-08]
+
+### Changed
+
+- **Notification cards** — solid fill (no kind gradient), light border + drop
+  shadow, left kind-colour edge strip; long title/body clamps with a **⋯**
+  expand control; per-card **✕** dismiss on Notification Center (and toasts).
+  List area is transparent over the panel glass; only the Notifications header
+  row stays solid.
+- **Onboarding module split** — wizard shell / steps / helpers / optional
+  packages moved under `metis-shell` `ui/onboarding/` (maintainability).
+- **Shared CSS / theme resolve** — shell stylesheet split into `metis-config`
+  `css/` modules; Settings loads a dedicated settings composer (not the full
+  shell sheet); GTK apps share GTK-free `resolve_ui_theme` helpers. Residual:
+  Viewer/Screenshot/Polkit opaque sheets remain app-local.
+
 ## [2026-10-07]
 
 ### Changed

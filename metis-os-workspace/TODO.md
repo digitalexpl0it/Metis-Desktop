@@ -154,11 +154,14 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       `window_geometry.rs`; desk/scroll/workspaces → `desk.rs` (`OutputDesk`
       re-exported from `state`). Residual: `handle_ipc` / spawn / output reflow
       still in `state.rs` (~5.5k).
-- [ ] **Split / share CSS** — `metis-config` `css.rs` (~4.6k) by surface;
-      stop duplicating megasheets in `metis-settings` `theme.rs`; shared
-      GTK theme bootstrap helper across shell / settings / viewer /
-      screenshot / polkit-agent.
-- [ ] **Break up large UI modules** as touched — onboarding, dashboard,
+- [x] **Split / share CSS** (2026-10-08) — `metis-config` `css/` modules;
+      Settings uses `build_settings_app_stylesheet` (opaque + appearance
+      preview + chrome) instead of the shell sheet; shared
+      `resolve_ui_theme` / `resolve_ui_theme_for_mode` across shell /
+      settings / viewer / screenshot / polkit-agent. Residual: controls
+      dedup into `controls.rs`; Viewer/Screenshot/Polkit sheets still local.
+- [ ] **Break up large UI modules** as touched — onboarding ✅ (2026-10-08:
+      `ui/onboarding/{mod,steps,helpers,optional}.rs`); still open: dashboard,
       bar, menu, settings network / desktop_widgets / gaming, screenshot
       editor.
 - [ ] **Test floor** — migrate idempotence for every watched config;

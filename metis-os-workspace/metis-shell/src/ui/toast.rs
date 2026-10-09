@@ -186,12 +186,13 @@ where
 {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
+        .spacing(0)
         .build();
     card.add_css_class("metis-toast-card");
     card.add_css_class(&format!("metis-notif-card-{}", note.kind.css_suffix()));
     card.set_width_request(360);
 
+    card.append(&crate::ui::bar::widgets::notif_kind_accent());
     card.append(&crate::ui::bar::widgets::notif_icon_badge(note));
 
     let text = gtk::Box::builder()
@@ -199,6 +200,7 @@ where
         .spacing(4)
         .hexpand(true)
         .build();
+    text.add_css_class("metis-notif-body");
 
     let title_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -217,18 +219,9 @@ where
     title.add_css_class("metis-notif-title");
     title_row.append(&title);
 
-    let close = gtk::Button::from_icon_name("window-close-symbolic");
-    close.add_css_class("metis-toast-close");
-    close.set_tooltip_text(Some(&metis_i18n::tr("Dismiss")));
-    close.set_valign(gtk::Align::Start);
-    {
-        let on_done = on_done.clone();
-        close.connect_clicked(move |_| on_done());
-    }
-    title_row.append(&close);
-    text.append(&title_row);
-
-    if !note.message.is_empty() {
+    let message = if note.message.is_empty() {
+        None
+    } else {
         let message = gtk::Label::builder()
             .label(&note.message)
             .halign(gtk::Align::Fill)
@@ -238,6 +231,20 @@ where
             .max_width_chars(34)
             .build();
         message.add_css_class("metis-notif-message");
+        Some(message)
+    };
+
+    if let Some(expand) = crate::ui::bar::widgets::build_expand_toggle(&title, message.as_ref()) {
+        title_row.append(&expand);
+    }
+
+    title_row.append(&crate::ui::bar::widgets::build_dismiss_button({
+        let on_done = on_done.clone();
+        move || on_done()
+    }));
+    text.append(&title_row);
+
+    if let Some(message) = message {
         text.append(&message);
     }
 
