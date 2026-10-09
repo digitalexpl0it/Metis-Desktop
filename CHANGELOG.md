@@ -14,8 +14,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   expand control; per-card **✕** dismiss on Notification Center (and toasts).
   List area is transparent over the panel glass; only the Notifications header
   row stays solid.
-- **Onboarding module split** — wizard shell / steps / helpers / optional
-  packages moved under `metis-shell` `ui/onboarding/` (maintainability).
+- **Large UI module splits** — onboarding; dashboard / bar / menu under
+  `metis-shell`; Settings network / desktop_widgets / gaming; screenshot
+  `editor/` (maintainability; public `build` / lifecycle APIs unchanged).
 - **Shared CSS / theme resolve** — shell stylesheet split into `metis-config`
   `css/` modules; Settings loads a dedicated settings composer (not the full
   shell sheet); GTK apps share GTK-free `resolve_ui_theme` helpers. Residual:

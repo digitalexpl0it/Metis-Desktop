@@ -160,10 +160,11 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       `resolve_ui_theme` / `resolve_ui_theme_for_mode` across shell /
       settings / viewer / screenshot / polkit-agent. Residual: controls
       dedup into `controls.rs`; Viewer/Screenshot/Polkit sheets still local.
-- [ ] **Break up large UI modules** as touched — onboarding ✅ (2026-10-08:
-      `ui/onboarding/{mod,steps,helpers,optional}.rs`); still open: dashboard,
-      bar, menu, settings network / desktop_widgets / gaming, screenshot
-      editor.
+- [x] **Break up large UI modules** (2026-10-08) — onboarding; dashboard
+      (`lifecycle`/`panel`/`processes`); bar (`geometry`/`autohide`/`lifecycle`);
+      menu → `widgets/menu/`; settings `network`/`desktop_widgets`/`gaming`
+      directories; screenshot `editor/`. Residual: secondary fat widgets
+      (`sys`/`tray`/`tasks`/clock calendar) not in this bullet.
 - [ ] **Test floor** — migrate idempotence for every watched config;
       tray/poll/net pure helpers; compositor grab policy around layer
       popups. Shell (~22 tests) and settings (~2) are thin vs LOC.
