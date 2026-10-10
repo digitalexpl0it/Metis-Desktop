@@ -138,3 +138,17 @@ fn host_port_row(label: &str, host: &str, port: u32) -> (gtk::Box, gtk::Entry, g
 fn parse_port(s: &str) -> u32 {
     s.trim().parse().unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_port_edge_cases() {
+        assert_eq!(parse_port("8080"), 8080);
+        assert_eq!(parse_port(" 443 "), 443);
+        assert_eq!(parse_port(""), 0);
+        assert_eq!(parse_port("abc"), 0);
+        assert_eq!(parse_port("-1"), 0);
+    }
+}

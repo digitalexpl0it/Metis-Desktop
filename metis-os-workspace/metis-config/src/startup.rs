@@ -327,6 +327,36 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_is_idempotent() {
+        let cfg = StartupConfig {
+            enabled: true,
+            entries: vec![
+                StartupEntry {
+                    id: "  org.mozilla.firefox  ".into(),
+                    enabled: true,
+                    delay_seconds: 999,
+                },
+                StartupEntry {
+                    id: "../evil".into(),
+                    enabled: true,
+                    delay_seconds: 0,
+                },
+                StartupEntry {
+                    id: "org.mozilla.firefox".into(),
+                    enabled: false,
+                    delay_seconds: 1,
+                },
+            ],
+        };
+        let once = sanitize_startup_config(cfg);
+        let twice = sanitize_startup_config(once.clone());
+        assert_eq!(once, twice);
+        assert_eq!(once.entries.len(), 1);
+        assert_eq!(once.entries[0].id, "org.mozilla.firefox");
+        assert_eq!(once.entries[0].delay_seconds, MAX_DELAY_SECS);
+    }
+
+    #[test]
     fn split_exec_strips_field_codes() {
         let argv = clean_exec_argv("firefox %u --new-window");
         assert_eq!(argv, vec!["firefox", "--new-window"]);

@@ -174,6 +174,14 @@ fn norm_key(app_id: &str) -> String {
     app_id.trim().to_ascii_lowercase()
 }
 
+/// Lowercase override keys so hand-edited mixed-case files still match.
+fn normalize_overrides(cfg: &mut DecorationsConfig) {
+    let raw = std::mem::take(&mut cfg.overrides);
+    for (k, v) in raw {
+        cfg.overrides.insert(norm_key(&k), v);
+    }
+}
+
 pub fn decorations_config_path() -> PathBuf {
     config_dir().join("decorations.json")
 }
@@ -183,11 +191,7 @@ pub fn load_decorations_config() -> DecorationsConfig {
     if let Ok(text) = std::fs::read_to_string(&path)
         && let Ok(mut cfg) = serde_json::from_str::<DecorationsConfig>(&text)
     {
-        // Normalize keys so hand-edited mixed-case files still match.
-        let raw = std::mem::take(&mut cfg.overrides);
-        for (k, v) in raw {
-            cfg.overrides.insert(norm_key(&k), v);
-        }
+        normalize_overrides(&mut cfg);
         return cfg;
     }
     DecorationsConfig::default()
@@ -303,5 +307,28 @@ mod tests {
         );
         // Unrelated .exe must not collide.
         assert!(cfg.lookup("notepad.exe").is_none());
+    }
+
+    #[test]
+    fn normalize_overrides_is_idempotent() {
+        let mut cfg = empty_cfg();
+        cfg.overrides
+            .insert("  MousePad  ".into(), DecorationsOverride::Client);
+        cfg.overrides
+            .insert("KITTY".into(), DecorationsOverride::Server);
+        normalize_overrides(&mut cfg);
+        let once = cfg.clone();
+        normalize_overrides(&mut cfg);
+        assert_eq!(cfg, once);
+        assert_eq!(
+            cfg.overrides.get("mousepad"),
+            Some(&DecorationsOverride::Client)
+        );
+        assert_eq!(
+            cfg.overrides.get("kitty"),
+            Some(&DecorationsOverride::Server)
+        );
+        assert!(!cfg.overrides.contains_key("  MousePad  "));
+        assert!(!cfg.overrides.contains_key("KITTY"));
     }
 }

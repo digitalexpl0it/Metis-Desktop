@@ -777,6 +777,32 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_is_idempotent_after_legacy_opacity_migrate() {
+        let mut inst = DesktopWidgetInstance::new(DesktopWidgetKind::Placeholder);
+        inst.id = "a".into();
+        inst.w = 9999;
+        inst.h = 10;
+        inst.bar_count = 8;
+        inst.solid_color = "red".into();
+        let cfg = DesktopWidgetsConfig {
+            enabled: true,
+            edit_mode: false,
+            chrome: DesktopWidgetChrome::default(),
+            background_opacity: Some(0.1),
+            instances: vec![inst],
+        };
+        let once = sanitize(cfg);
+        let twice = sanitize(once.clone());
+        assert_eq!(once, twice);
+        assert!(once.background_opacity.is_none());
+        assert!((once.chrome.background_opacity - 0.1).abs() < f32::EPSILON);
+        assert_eq!(once.instances.len(), 1);
+        assert_eq!(once.instances[0].w, 2400);
+        assert_eq!(once.instances[0].h, 120);
+        assert_eq!(once.instances[0].bar_count, 16);
+    }
+
+    #[test]
     fn resolve_override() {
         let global = DesktopWidgetChrome {
             background_opacity: 0.4,

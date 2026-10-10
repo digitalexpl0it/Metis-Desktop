@@ -1038,4 +1038,133 @@ mod tests {
             assert_eq!(upd.map(|u| u + 1), weather);
         }
     }
+
+    #[test]
+    fn migrate_inserts_missing_widgets_and_converges() {
+        use BarWidgetId::*;
+        // Pre-Weather/Tasks/Vpn/Clipboard/Tray layout (system strip only).
+        let input = vec![
+            Workspaces,
+            Spacer,
+            Battery,
+            Network,
+            Bluetooth,
+            Volume,
+            Notifications,
+            Clock,
+        ];
+        let once = migrated(input);
+        assert_eq!(migrated(once.clone()), once, "migrate must be idempotent");
+        assert!(once.contains(&Weather));
+        assert!(once.contains(&Tasks));
+        assert!(once.contains(&Vpn));
+        assert!(once.contains(&Clipboard));
+        assert!(once.contains(&Tray));
+        assert!(once.contains(&RemovableVolumes));
+        assert!(once.contains(&Updates));
+        // Notifications merge into the clock affordance when both are present.
+        assert!(!once.contains(&Notifications));
+        assert!(once.contains(&Clock));
+        let net = once.iter().position(|w| *w == Network).unwrap();
+        let vpn = once.iter().position(|w| *w == Vpn).unwrap();
+        assert_eq!(vpn, net + 1);
+    }
+
+    #[test]
+    fn migrate_strips_notifications_when_clock_present() {
+        use BarWidgetId::*;
+        let input = vec![
+            Workspaces,
+            Tasks,
+            Spacer,
+            RemovableVolumes,
+            Tray,
+            Updates,
+            Weather,
+            Notifications,
+            Clock,
+        ];
+        let once = migrated(input);
+        assert_eq!(migrated(once.clone()), once);
+        assert!(!once.contains(&Notifications));
+        assert!(once.contains(&Clock));
+    }
+
+    #[test]
+    fn migrate_legacy_layout_wipes_to_defaults_and_converges() {
+        use BarWidgetId::*;
+        let legacy = vec![
+            Workspaces,
+            Spacer,
+            Clock,
+            Spacer,
+            Battery,
+            Network,
+            Bluetooth,
+            Volume,
+            Notifications,
+        ];
+        let once = migrated(legacy);
+        assert_eq!(once, default_widgets());
+        assert_eq!(migrated(once.clone()), once);
+    }
+
+    #[test]
+    fn migrate_rewrites_legacy_clock_format() {
+        let mut cfg = BarConfig {
+            clock: ClockConfig {
+                time_format: "%H:%M".into(),
+                ..ClockConfig::default()
+            },
+            ..BarConfig::default()
+        };
+        migrate_bar_config(&mut cfg, false);
+        assert_ne!(cfg.clock.time_format, "%H:%M");
+        assert_eq!(cfg.clock.time_format, default_time_format());
+        let format_after = cfg.clock.time_format.clone();
+        migrate_bar_config(&mut cfg, false);
+        assert_eq!(cfg.clock.time_format, format_after);
+    }
+
+    #[test]
+    fn migrate_reorders_removable_volumes_left_of_tray() {
+        use BarWidgetId::*;
+        let input = vec![
+            Workspaces,
+            Tasks,
+            Spacer,
+            Tray,
+            Updates,
+            Weather,
+            RemovableVolumes,
+            Clock,
+        ];
+        let once = migrated(input);
+        assert_eq!(migrated(once.clone()), once);
+        let vol = once.iter().position(|w| *w == RemovableVolumes).unwrap();
+        let tray = once.iter().position(|w| *w == Tray).unwrap();
+        assert_eq!(vol + 1, tray);
+    }
+
+    #[test]
+    fn sanitize_bar_config_is_idempotent() {
+        let mut cfg = BarConfig {
+            length_percent: 200,
+            auto_hide_delay_ms: 9_999,
+            auto_hide_peek_px: 1,
+            bar_fill: BarFill {
+                color: "not-a-color".into(),
+                gradient: vec!["#ff".into()],
+                ..BarFill::default()
+            },
+            ..BarConfig::default()
+        };
+        sanitize_bar_config(&mut cfg);
+        let once = cfg.clone();
+        sanitize_bar_config(&mut cfg);
+        assert_eq!(cfg, once);
+        assert_eq!(cfg.length_percent, 100);
+        assert_eq!(cfg.auto_hide_delay_ms, 5000);
+        assert_eq!(cfg.auto_hide_peek_px, 2);
+    }
 }

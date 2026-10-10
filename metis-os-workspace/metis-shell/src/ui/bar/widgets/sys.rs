@@ -633,9 +633,11 @@ impl NetworkWidget {
             } else {
                 let streak = self.wifi_off_streak.get().saturating_add(1);
                 self.wifi_off_streak.set(streak);
-                // Ignore transient "off" during/after HDMI modeset. Need a long
-                // consistent streak before the switch is allowed to show off.
-                if hotplug || streak < 6 {
+                // Ignore transient "off" during/after HDMI modeset — but if the
+                // user already flipped the switch off, trust the poller off
+                // immediately so we do not bounce the toggle back ON.
+                let user_off = !self.wifi_switch.is_active();
+                if !user_off && (hotplug || streak < 6) {
                     wifi_enabled = true;
                 }
             }
@@ -678,9 +680,12 @@ impl NetworkWidget {
             let suppressed = Instant::now() < self.suppress_until.get() || hotplug;
             if !suppressed {
                 self.updating_switch.set(true);
-                // Poll may turn the switch ON to match NM — never OFF (only the user can).
-                if wifi_enabled && !self.wifi_switch.is_active() {
-                    self.wifi_switch.set_active(true);
+                // Sync both ways from the filtered radio state. Streak/hotplug
+                // above already refuse transient offs; one-way ON-only left the
+                // switch stuck after a real user radio-off (list said off,
+                // toggle still on).
+                if self.wifi_switch.is_active() != wifi_enabled {
+                    self.wifi_switch.set_active(wifi_enabled);
                 }
                 let updating = self.updating_switch.clone();
                 glib::timeout_add_local_once(Duration::from_millis(400), move || {

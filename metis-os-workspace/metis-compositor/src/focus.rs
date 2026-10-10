@@ -147,3 +147,47 @@ impl From<KeyboardFocusTarget> for WlSurface {
         }
     }
 }
+
+/// Kind of surface that owns an xdg_popup grab root (without needing a live
+/// Wayland object). Layer-shell roots must not take popup grabs — GTK nested
+/// popovers deadlock when the layer uses `KeyboardMode::None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PopupGrabRootKind {
+    Window,
+    LayerSurface,
+    Popup,
+    LockSurface,
+}
+
+impl From<&KeyboardFocusTarget> for PopupGrabRootKind {
+    fn from(root: &KeyboardFocusTarget) -> Self {
+        match root {
+            KeyboardFocusTarget::Window(_) => Self::Window,
+            KeyboardFocusTarget::LayerSurface(_) => Self::LayerSurface,
+            KeyboardFocusTarget::Popup(_) => Self::Popup,
+            KeyboardFocusTarget::LockSurface(_) => Self::LockSurface,
+        }
+    }
+}
+
+/// Whether `xdg_popup` keyboard/pointer grabs are allowed for this root kind.
+pub(crate) fn popup_grab_allowed_for_root_kind(kind: PopupGrabRootKind) -> bool {
+    !matches!(kind, PopupGrabRootKind::LayerSurface)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layer_surface_roots_skip_popup_grab() {
+        assert!(!popup_grab_allowed_for_root_kind(
+            PopupGrabRootKind::LayerSurface
+        ));
+        assert!(popup_grab_allowed_for_root_kind(PopupGrabRootKind::Window));
+        assert!(popup_grab_allowed_for_root_kind(PopupGrabRootKind::Popup));
+        assert!(popup_grab_allowed_for_root_kind(
+            PopupGrabRootKind::LockSurface
+        ));
+    }
+}

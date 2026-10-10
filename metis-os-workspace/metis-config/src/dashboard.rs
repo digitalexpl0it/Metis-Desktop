@@ -157,3 +157,37 @@ fn sanitize(mut cfg: DashboardConfig) -> DashboardConfig {
     }
     cfg
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_is_idempotent() {
+        let cfg = DashboardConfig {
+            max_height_percent: 5,
+            refresh_interval_ms: 10,
+            widgets: vec![],
+            process_monitor: Some("  btop  ".into()),
+            ..DashboardConfig::default()
+        };
+        let once = sanitize(cfg);
+        let twice = sanitize(once.clone());
+        assert_eq!(once, twice);
+        assert_eq!(once.max_height_percent, 20);
+        assert_eq!(once.refresh_interval_ms, 500);
+        assert_eq!(once.widgets, default_widgets());
+        assert_eq!(once.process_monitor.as_deref(), Some("btop"));
+    }
+
+    #[test]
+    fn sanitize_clears_blank_process_monitor() {
+        let cfg = DashboardConfig {
+            process_monitor: Some("   ".into()),
+            ..DashboardConfig::default()
+        };
+        let once = sanitize(cfg);
+        assert_eq!(sanitize(once.clone()), once);
+        assert!(once.process_monitor.is_none());
+    }
+}

@@ -165,12 +165,18 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       menu → `widgets/menu/`; settings `network`/`desktop_widgets`/`gaming`
       directories; screenshot `editor/`. Residual: secondary fat widgets
       (`sys`/`tray`/`tasks`/clock calendar) not in this bullet.
-- [ ] **Test floor** — migrate idempotence for every watched config;
-      tray/poll/net pure helpers; compositor grab policy around layer
-      popups. Shell (~22 tests) and settings (~2) are thin vs LOC.
-- [ ] **`cargo deny` tighten** — track `multiple-versions` allowlist; schedule
-      `unmaintained` / `unsound` from `none` → `warn` → `deny` as the
-      Smithay tree allows (`deny.toml`).
+- [x] **Test floor** (2026-10-10) — watched-config migrate/sanitize fixed-points
+      (`bar`, desktop widgets, dashboard, startup, screenshot, keybinds,
+      updates, decorations); shell poll/tray_menu/tray geometry helpers;
+      settings net/bluetooth/proxy parsers; compositor layer-popup grab skip
+      + outside-press dismiss matrix (`popup_grab_allowed_for_root_kind`,
+      `should_close_shell_popovers_on_press`).
+- [x] **`cargo deny` tighten** (2026-10-10) — `multiple-versions = "deny"` with
+      `[bans.skip]` snapshot of current lockfile duplicates; `unmaintained` /
+      `unsound` scope `all` with documented `[advisories.ignore]` for
+      Smithay/`paste`, fontdue/rustybuzz, opus/`audiopus_sys`, and
+      reed-solomon (`instant`/`lru`). Residual: shrink skips/ignores when those
+      trees upgrade (cargo-deny 0.20 uses scopes, not warn/deny lints).
 
 ---
 

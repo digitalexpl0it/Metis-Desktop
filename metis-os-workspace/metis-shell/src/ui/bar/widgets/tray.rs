@@ -802,3 +802,42 @@ fn wire_tray_toggle(
         glib::idle_add_local_once(move || popover.popup());
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_panel_content_size_geometry() {
+        assert_eq!(tray_panel_content_size(0), (TRAY_EMPTY_WIDTH, TRAY_CELL));
+        assert_eq!(tray_panel_content_size(1), (TRAY_CELL, TRAY_CELL));
+        // Five icons: one full row.
+        let (w5, h5) = tray_panel_content_size(5);
+        assert_eq!(w5, 5 * TRAY_CELL + 4 * TRAY_GAP);
+        assert_eq!(h5, TRAY_CELL);
+        // Six icons: wraps to two rows, still five columns wide.
+        let (w6, h6) = tray_panel_content_size(6);
+        assert_eq!(w6, 5 * TRAY_CELL + 4 * TRAY_GAP);
+        assert_eq!(h6, 2 * TRAY_CELL + TRAY_GAP);
+        // Cap rows at TRAY_PANEL_ROWS_MAX.
+        let (_, h_max) = tray_panel_content_size(100);
+        assert_eq!(
+            h_max,
+            (TRAY_PANEL_ROWS_MAX as i32) * TRAY_CELL + (TRAY_PANEL_ROWS_MAX as i32 - 1) * TRAY_GAP
+        );
+    }
+
+    #[test]
+    fn pixmap_lightness_and_invert() {
+        // Transparent pixels ignored.
+        let clear = [0u8, 0, 0, 0, 255, 255, 255, 255];
+        assert!(pixmap_is_mostly_light(&clear));
+        let dark = [10u8, 10, 10, 255, 20, 20, 20, 255];
+        assert!(!pixmap_is_mostly_light(&dark));
+
+        let mut rgba = [10u8, 20, 30, 255, 0, 0, 0, 0];
+        invert_opaque_rgba(&mut rgba);
+        assert_eq!(&rgba[..4], &[245, 235, 225, 255]);
+        assert_eq!(&rgba[4..], &[0, 0, 0, 0]);
+    }
+}

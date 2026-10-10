@@ -1791,3 +1791,42 @@ fn split(line: &str) -> Vec<String> {
     fields.push(cur);
     fields
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wifi_ethernet_and_vpn_type_helpers() {
+        assert!(is_wifi_connection_type("802-11-wireless"));
+        assert!(is_wifi_connection_type("wifi"));
+        assert!(!is_wifi_connection_type("ethernet"));
+        assert!(is_ethernet_device_type("ethernet"));
+        assert!(is_ethernet_device_type("802-3-ethernet"));
+        assert!(!is_ethernet_device_type("wifi"));
+        assert_eq!(vpn_kind_from_type("wireguard"), Some(VpnKind::WireGuard));
+        assert_eq!(vpn_kind_from_type("vpn-openvpn"), Some(VpnKind::OpenVpn));
+        assert_eq!(vpn_kind_from_type("vpn"), Some(VpnKind::Other));
+        assert_eq!(vpn_kind_from_type("ethernet"), None);
+    }
+
+    #[test]
+    fn vpn_error_classifiers() {
+        assert!(vpn_already_inactive("Error: not an active connection."));
+        assert!(vpn_already_inactive("no active connection with that name"));
+        assert!(!vpn_already_inactive("secrets were required"));
+        assert!(vpn_secret_required("Error: secrets were required."));
+        assert!(vpn_secret_required("password is required"));
+        assert!(vpn_secret_required("Please provide the password"));
+        assert!(!vpn_secret_required("device busy"));
+    }
+
+    #[test]
+    fn parse_str_array_round_trips_gsettings_shape() {
+        assert_eq!(parse_str_array("['a', 'b']"), "a, b");
+        assert_eq!(parse_str_array("[]"), "");
+        assert_eq!(parse_str_array("['only']"), "only");
+        assert_eq!(to_str_array("a, b"), "['a', 'b']");
+        assert_eq!(to_str_array("  "), "[]");
+    }
+}

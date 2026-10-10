@@ -211,7 +211,7 @@ impl XdgShellHandler for MetisState {
         // "close-popovers" signal. `xdg_popup` grabs rooted on a layer-shell
         // surface (KeyboardMode::None) deadlock GTK in a nested session — the menu
         // would freeze the whole Metis session while trying to establish the grab.
-        if matches!(root, KeyboardFocusTarget::LayerSurface(_)) {
+        if !crate::focus::popup_grab_allowed_for_root_kind((&root).into()) {
             return;
         }
 

@@ -166,3 +166,28 @@ pub fn expand_save_dir(path: &str) -> std::path::PathBuf {
     }
     std::path::PathBuf::from(trimmed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_is_idempotent() {
+        let cfg = ScreenshotConfig {
+            delay_seconds: 99,
+            save_dir: "   ".into(),
+            after_capture: AfterCaptureAction::Copy,
+            interactive_after_capture: Some(AfterCaptureAction::Edit),
+            instant_after_capture: AfterCaptureAction::Edit,
+            ..ScreenshotConfig::default()
+        };
+        let once = sanitize_screenshot_config(cfg);
+        let twice = sanitize_screenshot_config(once.clone());
+        assert_eq!(once, twice);
+        assert_eq!(once.delay_seconds, 30);
+        assert_eq!(once.save_dir, default_save_dir());
+        assert_eq!(once.after_capture, AfterCaptureAction::Edit);
+        assert!(once.interactive_after_capture.is_none());
+        assert_eq!(once.instant_after_capture, AfterCaptureAction::Copy);
+    }
+}

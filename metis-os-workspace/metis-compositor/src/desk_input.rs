@@ -118,6 +118,29 @@ pub fn point_in_rect(x: i32, y: i32, rect: PixelRect) -> bool {
     x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
 }
 
+/// Pure predicate for the outside-press → `close-popovers` matrix in `input.rs`.
+///
+/// Skips dismiss when a pointer grab owns the seat, when the press is on the
+/// Notification Center itself, or when a sticky overlay (screenshot / Task View /
+/// capture) is active. Presses on the edge bar dismiss only while NC is mapped
+/// (so a bar click can close NC without dismissing every other popover always).
+pub(crate) fn should_close_shell_popovers_on_press(
+    pointer_grabbed: bool,
+    on_notification_center: bool,
+    screenshot_overlay: bool,
+    task_view_overlay: bool,
+    capture_overlay: bool,
+    on_bar_ui: bool,
+    notification_center_mapped: bool,
+) -> bool {
+    !pointer_grabbed
+        && !on_notification_center
+        && !screenshot_overlay
+        && !task_view_overlay
+        && !capture_overlay
+        && (!on_bar_ui || notification_center_mapped)
+}
+
 impl MetisState {
     pub fn classify_hit(&self, x: i32, y: i32) -> DeskHit {
         let (metrics, key) = match self.output_at(Point::from((x, y))) {
@@ -1075,4 +1098,56 @@ fn metis_bar_layer_surface_at(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_in_rect_inclusive_min_exclusive_max() {
+        let rect = PixelRect {
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 50,
+        };
+        assert!(point_in_rect(10, 20, rect));
+        assert!(point_in_rect(109, 69, rect));
+        assert!(!point_in_rect(9, 20, rect));
+        assert!(!point_in_rect(10, 19, rect));
+        assert!(!point_in_rect(110, 20, rect));
+        assert!(!point_in_rect(10, 70, rect));
+    }
+
+    #[test]
+    fn close_popovers_press_matrix() {
+        // Baseline: outside press closes.
+        assert!(should_close_shell_popovers_on_press(
+            false, false, false, false, false, false, false
+        ));
+        // Pointer grab / NC hit / sticky overlays skip.
+        assert!(!should_close_shell_popovers_on_press(
+            true, false, false, false, false, false, false
+        ));
+        assert!(!should_close_shell_popovers_on_press(
+            false, true, false, false, false, false, false
+        ));
+        assert!(!should_close_shell_popovers_on_press(
+            false, false, true, false, false, false, false
+        ));
+        assert!(!should_close_shell_popovers_on_press(
+            false, false, false, true, false, false, false
+        ));
+        assert!(!should_close_shell_popovers_on_press(
+            false, false, false, false, true, false, false
+        ));
+        // Bar UI alone does not dismiss; bar + mapped NC does.
+        assert!(!should_close_shell_popovers_on_press(
+            false, false, false, false, false, true, false
+        ));
+        assert!(should_close_shell_popovers_on_press(
+            false, false, false, false, false, true, true
+        ));
+    }
 }

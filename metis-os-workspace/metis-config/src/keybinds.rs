@@ -695,4 +695,30 @@ mod tests {
         let overview = default_chord(KeybindAction::WorkspaceOverview, ModKey::Super);
         assert_eq!(overview.display(), "Super+Tab");
     }
+
+    #[test]
+    fn sanitize_is_idempotent() {
+        let mut cfg = KeybindsConfig::default();
+        // Default Super+L is stored then dropped as redundant.
+        cfg.bindings.insert(
+            KeybindAction::Lock,
+            Chord::new(true, false, false, false, "L"),
+        );
+        // Reserved Ctrl+Alt+F2 must be dropped.
+        cfg.bindings.insert(
+            KeybindAction::OpenTerminal,
+            Chord::new(false, true, true, false, "F2"),
+        );
+        // Empty key must be dropped.
+        cfg.bindings.insert(
+            KeybindAction::CloseWindow,
+            Chord::new(false, false, false, false, ""),
+        );
+        let once = cfg.sanitize();
+        let twice = once.clone().sanitize();
+        assert_eq!(once, twice);
+        assert!(!once.bindings.contains_key(&KeybindAction::Lock));
+        assert!(!once.bindings.contains_key(&KeybindAction::OpenTerminal));
+        assert!(!once.bindings.contains_key(&KeybindAction::CloseWindow));
+    }
 }

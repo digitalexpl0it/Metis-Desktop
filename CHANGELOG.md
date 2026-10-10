@@ -5,6 +5,24 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-10]
+
+### Fixed
+
+- **Edge-bar Wi-Fi toggle stuck ON** — after turning Wi-Fi off, reopening the
+  network popover could show “Wi-Fi is off” while the switch stayed on. Poll
+  sync is bidirectional (filtered for HDMI/modeset streaks) so a stable radio
+  off updates the toggle.
+
+### Changed
+
+- **Engineering: test floor + cargo-deny** — unit tests for watched-config
+  migrate/sanitize idempotence, shell poll/tray helpers, Settings
+  net/bluetooth/proxy parsers, and compositor layer-popup grab / outside-press
+  dismiss policy. `deny.toml` now denies duplicate crate versions (skip
+  allowlist of current lockfile extras) and enables `unmaintained`/`unsound`
+  with documented ignores for Smithay / fontdue / opus / reed-solomon trees.
+
 ## [2026-10-08]
 
 ### Changed

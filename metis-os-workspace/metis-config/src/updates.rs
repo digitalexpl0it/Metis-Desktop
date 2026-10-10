@@ -165,6 +165,23 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_is_idempotent() {
+        let mut cfg = UpdatesConfig {
+            check_interval_hours: 0,
+            last_error: Some("x".repeat(600)),
+            snooze_until: Some(Local::now() - chrono::Duration::hours(1)),
+            ..Default::default()
+        };
+        sanitize_updates_config(&mut cfg);
+        let once = cfg.clone();
+        sanitize_updates_config(&mut cfg);
+        assert_eq!(cfg, once);
+        assert_eq!(cfg.check_interval_hours, 1);
+        assert_eq!(cfg.last_error.as_ref().map(|s| s.len()), Some(512));
+        assert!(cfg.snooze_until.is_none());
+    }
+
+    #[test]
     fn snooze_hours_is_future() {
         let mut cfg = UpdatesConfig::default();
         cfg.snooze_hours(2);

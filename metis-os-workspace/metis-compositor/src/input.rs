@@ -842,13 +842,15 @@ impl MetisState {
                     // Task View is sticky (Win11-style): pointer presses must not
                     // broadcast close-popovers, or the shell tears the overlay down
                     // on button-down before click/drag can complete.
-                    if !pointer.is_grabbed()
-                        && !on_nc
-                        && !self.screenshot_overlay_active()
-                        && !self.task_view_overlay_active()
-                        && !self.capture_overlay_active()
-                        && (!on_bar_ui || self.notification_center_mapped())
-                    {
+                    if crate::desk_input::should_close_shell_popovers_on_press(
+                        pointer.is_grabbed(),
+                        on_nc,
+                        self.screenshot_overlay_active(),
+                        self.task_view_overlay_active(),
+                        self.capture_overlay_active(),
+                        on_bar_ui,
+                        self.notification_center_mapped(),
+                    ) {
                         // Pass location so a right-click on desktop widgets does
                         // not race-close the menu that same press is opening.
                         self.request_close_shell_popovers(Some(loc));

@@ -116,3 +116,74 @@ fn dict_str(dict: &Dict<'_, '_>, key: &str) -> Option<String> {
 fn dict_bool(dict: &Dict<'_, '_>, key: &str) -> Option<bool> {
     dict.get::<&str, bool>(&key).ok().flatten()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use zbus::zvariant::{OwnedValue, Value};
+
+    use crate::services::tray_dbus_types::SubMenuLayout;
+
+    fn item_owned(
+        id: i32,
+        props: HashMap<&'static str, Value<'static>>,
+        children: Vec<Value<'static>>,
+    ) -> OwnedValue {
+        OwnedValue::try_from(Value::new((id, props, children))).expect("menu item value")
+    }
+
+    #[test]
+    fn parse_menu_layout_strips_mnemonics_and_nested_items() {
+        let mut quit_props = HashMap::new();
+        quit_props.insert("label", Value::from("_Quit"));
+        quit_props.insert("enabled", Value::from(true));
+        quit_props.insert("type", Value::from("standard"));
+
+        let mut sep_props = HashMap::new();
+        sep_props.insert("type", Value::from("separator"));
+
+        let mut parent_props = HashMap::new();
+        parent_props.insert("label", Value::from("_File"));
+        parent_props.insert("children-display", Value::from("submenu"));
+
+        let quit_child = Value::new((2i32, quit_props, Vec::<Value<'static>>::new()));
+        let sep_child = Value::new((3i32, sep_props, Vec::<Value<'static>>::new()));
+        let parent = item_owned(1, parent_props, vec![quit_child, sep_child]);
+
+        let layout = MenuLayout {
+            id: 0,
+            fields: SubMenuLayout {
+                id: 0,
+                fields: HashMap::new(),
+                submenus: vec![parent],
+            },
+        };
+        let menu = parse_menu_layout(layout);
+        assert_eq!(menu.id, 0);
+        assert_eq!(menu.submenus.len(), 1);
+        let file = &menu.submenus[0];
+        assert_eq!(file.id, 1);
+        assert_eq!(file.label, "File");
+        assert_eq!(file.children_display.as_deref(), Some("submenu"));
+        assert_eq!(file.submenu.len(), 2);
+        assert_eq!(file.submenu[0].label, "Quit");
+        assert_eq!(file.submenu[1].menu_type, MenuType::Separator);
+    }
+
+    #[test]
+    fn parse_menu_layout_skips_non_structures() {
+        let junk = OwnedValue::try_from(Value::new("not-a-menu-item")).expect("string value");
+        let layout = MenuLayout {
+            id: 7,
+            fields: SubMenuLayout {
+                id: 0,
+                fields: HashMap::new(),
+                submenus: vec![junk],
+            },
+        };
+        let menu = parse_menu_layout(layout);
+        assert_eq!(menu.id, 7);
+        assert!(menu.submenus.is_empty());
+    }
+}

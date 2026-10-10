@@ -2045,3 +2045,109 @@ fn run_set_mic_mute(muted: bool) {
     cmd.args(["set-source-mute", "@DEFAULT_SOURCE@", flag]);
     let _ = run_command(&mut cmd);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nmcli_split_honors_escapes() {
+        assert_eq!(
+            nmcli_split(r"My\:SSID:70:yes:yes"),
+            vec!["My:SSID", "70", "yes", "yes"]
+        );
+        assert_eq!(nmcli_split(r"a\\b:c"), vec![r"a\b", "c"]);
+        assert_eq!(nmcli_split("solo"), vec!["solo"]);
+        assert_eq!(nmcli_split(""), vec![""]);
+    }
+
+    #[test]
+    fn device_and_vpn_type_matchers() {
+        assert!(is_wifi_device_type("wifi"));
+        assert!(is_wifi_device_type("802-11-wireless"));
+        assert!(!is_wifi_device_type("ethernet"));
+        assert!(is_ethernet_device_type("ethernet"));
+        assert!(is_ethernet_device_type("802-3-ethernet"));
+        assert!(!is_ethernet_device_type("wifi"));
+        assert!(is_vpn_connection_type("wireguard"));
+        assert!(is_vpn_connection_type("vpn"));
+        assert!(is_vpn_connection_type("vpn-openvpn"));
+        assert!(!is_vpn_connection_type("802-11-wireless"));
+        assert_eq!(vpn_kind_label("wireguard"), "WireGuard");
+        assert_eq!(vpn_kind_label("vpn-openvpn"), "OpenVPN");
+        assert_eq!(vpn_kind_label("vpn"), "VPN");
+    }
+
+    #[test]
+    fn vpn_error_classifiers() {
+        assert!(vpn_already_inactive("Error: not an active connection."));
+        assert!(vpn_already_inactive("Connection is not active"));
+        assert!(!vpn_already_inactive("secrets were required"));
+        assert!(vpn_secret_required("Error: secrets were required."));
+        assert!(vpn_secret_required("password is required for this VPN"));
+        assert!(vpn_secret_required("Please provide the password"));
+        assert!(!vpn_secret_required("device busy"));
+    }
+
+    #[test]
+    fn stabilize_wifi_list_holds_active_during_scan_grace() {
+        let previous = vec![WifiNetwork {
+            ssid: "Home".into(),
+            signal: 80,
+            secured: true,
+            active: true,
+        }];
+        // Empty scan during grace → keep previous.
+        let held = stabilize_wifi_list(&previous, vec![], true);
+        assert_eq!(held, previous);
+
+        // Active SSID present but inactive + zero signal → restore.
+        let scanned = vec![
+            WifiNetwork {
+                ssid: "Other".into(),
+                signal: 40,
+                secured: false,
+                active: false,
+            },
+            WifiNetwork {
+                ssid: "Home".into(),
+                signal: 0,
+                secured: true,
+                active: false,
+            },
+        ];
+        let fixed = stabilize_wifi_list(&previous, scanned, true);
+        let home = fixed.iter().find(|n| n.ssid == "Home").unwrap();
+        assert!(home.active);
+        assert_eq!(home.signal, 80);
+        assert!(fixed[0].active, "active network sorts first");
+
+        // Outside grace, do not rewrite.
+        let raw = vec![WifiNetwork {
+            ssid: "Home".into(),
+            signal: 10,
+            secured: true,
+            active: false,
+        }];
+        assert_eq!(stabilize_wifi_list(&previous, raw.clone(), false), raw);
+    }
+
+    #[test]
+    fn parse_mute_and_battery_helpers() {
+        assert_eq!(parse_mute("Mute: yes"), Some(true));
+        assert_eq!(parse_mute("Mute: no"), Some(false));
+        // Substring match: any non-yes/no text with neither token → None.
+        assert_eq!(parse_mute("Mute: maybe"), None);
+
+        let full = parse_solaar_battery(" N/A, full, next level 0%.");
+        assert_eq!(full.percent, None);
+        assert_eq!(full.charging, Some(true));
+        let discharging = parse_solaar_battery(" 90%, discharging, next level 50%.");
+        assert_eq!(discharging.percent, Some(90));
+        assert_eq!(discharging.charging, Some(false));
+
+        assert_eq!(parse_battery_percentage("0x40 (64)"), Some(64));
+        assert_eq!(parse_battery_percentage("0x40"), Some(64));
+        assert_eq!(parse_battery_percentage("bogus"), None);
+    }
+}

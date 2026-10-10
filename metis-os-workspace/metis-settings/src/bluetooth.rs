@@ -387,3 +387,34 @@ fn btctl(args: &[&str]) -> String {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_solaar_and_bluez_battery() {
+        let full = parse_solaar_battery(" N/A, full, next level 0%.");
+        assert_eq!(full.percent, None);
+        assert_eq!(full.charging, Some(true));
+        let discharging = parse_solaar_battery(" 90%, discharging, next level 50%.");
+        assert_eq!(discharging.percent, Some(90));
+        assert_eq!(discharging.charging, Some(false));
+
+        assert_eq!(parse_battery_percentage("0x40 (64)"), Some(64));
+        assert_eq!(parse_battery_percentage("0x40"), Some(64));
+        assert_eq!(parse_battery_percentage("85%"), Some(85));
+        assert_eq!(parse_battery_percentage("bogus"), None);
+    }
+
+    #[test]
+    fn parse_field_extracts_keyed_lines() {
+        let text = "Name: Foo\n  Battery Percentage: 0x40 (64)\nAlias: Bar\n";
+        assert_eq!(
+            parse_field(text, "Battery Percentage:").as_deref(),
+            Some("0x40 (64)")
+        );
+        assert_eq!(parse_field(text, "Name:").as_deref(), Some("Foo"));
+        assert!(parse_field(text, "Missing:").is_none());
+    }
+}
