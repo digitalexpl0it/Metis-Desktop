@@ -7,13 +7,26 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         r#"
     /* Menu chrome lives on `.metis-menu-panel` (not popover `contents`) so
        `apply_menu_opacity` can set a translucent rgba fill without a solid
-       parent card covering it. Margin gives the soft shadow room to paint —
-       GTK clips box-shadow to the popup surface, and we cannot pad the
-       `popover` node (that shifts placement off the launcher). */
-    popover.metis-menu-popover contents {{
+       parent card covering it — must win in light and dark (Adwaita paints
+       opaque `.background` / `contents` especially in light). Margin gives
+       the soft shadow room; drop margin on the arrow side so the caret stays
+       flush (see `metis-popover-*` from dropdown::apply_side_class). */
+    popover.metis-menu-popover,
+    popover.metis-menu-popover.background {{
         background-color: transparent;
+        background-image: none;
         border: none;
         box-shadow: none;
+    }}
+    popover.metis-menu-popover contents {{
+        background-color: transparent;
+        background-image: none;
+        border: none;
+        box-shadow: none;
+    }}
+    popover.metis-menu-popover > arrow {{
+        background-color: {raised};
+        border: 1px solid {border};
     }}
 
     .metis-menu-panel {{
@@ -24,6 +37,18 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         border-radius: {rl}px;
         box-shadow: {popover_shadow};
         color: {text};
+    }}
+    popover.metis-popover-below .metis-menu-panel {{
+        margin-top: 0;
+    }}
+    popover.metis-popover-above .metis-menu-panel {{
+        margin-bottom: 0;
+    }}
+    popover.metis-popover-aside-right .metis-menu-panel {{
+        margin-left: 0;
+    }}
+    popover.metis-popover-aside-left .metis-menu-panel {{
+        margin-right: 0;
     }}
 
     /* Tooltip for the icon-only rail: a label inside the menu's GtkOverlay (drawn

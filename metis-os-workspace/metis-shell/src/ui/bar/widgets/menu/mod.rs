@@ -25,6 +25,7 @@ thread_local! {
 }
 
 pub(crate) fn register_menu_popover(popover: &gtk::Popover) {
+    crate::ui::bar::dropdown::apply_side_class(popover);
     MENU_POPOVERS.with(|menus| menus.borrow_mut().push(popover.downgrade()));
 }
 

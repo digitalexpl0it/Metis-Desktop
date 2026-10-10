@@ -287,11 +287,29 @@ fn bar_border_stops(border: &BarBorder) -> String {
 /// background alpha via a dedicated, higher-priority provider — never
 /// `popover.set_opacity()` — so the menu's text, icons, and tiles stay fully
 /// opaque while only the panel surface dims.
+///
+/// Also forces the GtkPopover chrome transparent (light Adwaita otherwise
+/// paints an opaque `popover.background` / `contents` under the panel).
 pub fn apply_menu_opacity(opacity: f32) {
     let alpha = opacity.clamp(0.0, 1.0);
     MENU_OPACITY.with(|o| o.set(alpha));
     let raised_rgb = active_tokens().surface_raised_rgb();
-    let css = format!(".metis-menu-panel {{ background-color: rgba({raised_rgb}, {alpha:.3}); }}");
+    let css = format!(
+        "popover.metis-menu-popover,\
+         popover.metis-menu-popover.background,\
+         popover.metis-menu-popover contents {{\
+            background-color: transparent;\
+            background-image: none;\
+            border: none;\
+            box-shadow: none;\
+         }}\
+         .metis-menu-panel {{\
+            background-color: rgba({raised_rgb}, {alpha:.3});\
+         }}\
+         popover.metis-menu-popover > arrow {{\
+            background-color: rgba({raised_rgb}, {alpha:.3});\
+         }}"
+    );
     MENU_BG_PROVIDER.with(|provider| {
         provider.load_from_string(&css);
         if let Some(display) = gtk::gdk::Display::default() {

@@ -62,7 +62,9 @@ impl CssVars {
         let surface_solid = theme.surface.clone();
         let surface = theme.surface_rgba();
         let raised = theme.surface_raised.clone();
-        let shadow = theme.shadow_ambient.clone();
+        // Themes store a full `0 8px 24px rgba(...)` ambient — extract the color
+        // so composed shadows (`0 Npx Mpx {shadow}`) stay valid CSS.
+        let shadow = shadow_color_from_ambient(&theme.shadow_ambient);
         let launcher_icon_shadow = if theme.mode.eq_ignore_ascii_case("light") {
             "-gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);".to_string()
         } else {
@@ -119,13 +121,13 @@ impl CssVars {
         } else {
             "0 -12px 32px rgba(0, 0, 0, 0.42)".to_string()
         };
-        // Full `box-shadow` value — never use bare `{shadow}` (color-only).
-        // Keep blur modest: we cannot pad the `popover` node (that shifts
-        // placement off the anchor), so outer fringe may clip slightly.
+        // Match the edge-bar pill dual-layer alphas (see bar.rs), not the heavier
+        // ambient token — popovers were reading too dark. Modest blur; no
+        // popover-node padding (that shifts placement off the anchor).
         let popover_shadow = if is_light {
-            format!("0 1px 3px {shadow}, 0 4px 12px {shadow}")
+            "0 1px 3px rgba(0, 0, 0, 0.16), 0 3px 10px rgba(0, 0, 0, 0.22)".to_string()
         } else {
-            "0 1px 3px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.55)".to_string()
+            "0 1px 3px rgba(0, 0, 0, 0.28), 0 3px 10px rgba(0, 0, 0, 0.36)".to_string()
         };
         let screenshot_toolbar_bg = dash_panel_bg.clone();
         let nc_panel_bg = dash_panel_bg.clone();
@@ -234,5 +236,43 @@ impl CssVars {
         out = out.replace("{toast_card_bg}", &self.toast_card_bg);
         out = out.replace("{tray_pixmap_filter}", &self.tray_pixmap_filter);
         out.replace("", "{").replace("", "}")
+    }
+}
+
+/// Theme `shadow_ambient` is often a full `0 8px 24px rgba(...)` declaration
+/// (light.json / dark.json). Extract the trailing color so callers can compose
+/// `0 Npx Mpx {color}` without nesting invalid box-shadow syntax (which silently
+/// drops the shadow — especially visible in light mode).
+fn shadow_color_from_ambient(ambient: &str) -> String {
+    let t = ambient.trim();
+    for needle in ["rgba(", "rgb(", "hsla(", "hsl("] {
+        if let Some(i) = t.rfind(needle) {
+            return t[i..].trim().to_string();
+        }
+    }
+    if let Some(i) = t.rfind('#') {
+        return t[i..].trim().to_string();
+    }
+    t.to_string()
+}
+
+#[cfg(test)]
+mod shadow_color_tests {
+    use super::shadow_color_from_ambient;
+
+    #[test]
+    fn extracts_rgba_from_full_ambient() {
+        assert_eq!(
+            shadow_color_from_ambient("0 8px 24px rgba(0, 0, 0, 0.10)"),
+            "rgba(0, 0, 0, 0.10)"
+        );
+    }
+
+    #[test]
+    fn passes_through_bare_color() {
+        assert_eq!(
+            shadow_color_from_ambient("rgba(0, 0, 0, 0.45)"),
+            "rgba(0, 0, 0, 0.45)"
+        );
     }
 }

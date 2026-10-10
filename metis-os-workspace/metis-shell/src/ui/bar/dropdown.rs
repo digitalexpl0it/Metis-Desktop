@@ -40,6 +40,7 @@ pub fn wire_toggle_prepare(
         .child(panel)
         .build();
     popover.add_css_class("metis-bar-popover");
+    apply_side_class(&popover);
     popover.set_parent(button);
 
     // Highlight the triggering icon only while its popover is open; clear it the
@@ -83,8 +84,29 @@ pub fn wire_toggle_prepare(
 /// Register an externally-managed popover (e.g. Metis Menu) so the compositor
 /// "close-popovers" signal and single-open logic can still pop it down.
 pub fn register(popover: &gtk::Popover) {
+    apply_side_class(popover);
     wire_clear_on_dismiss(popover);
     POPOVERS.with(|list| list.borrow_mut().push(popover.clone()));
+}
+
+/// CSS side class matching [`super::popover_position`] so menus can drop margin
+/// on the arrow edge (keeps the caret flush while leaving room for shadows).
+pub fn apply_side_class(popover: &gtk::Popover) {
+    for class in [
+        "metis-popover-below",
+        "metis-popover-above",
+        "metis-popover-aside-right",
+        "metis-popover-aside-left",
+    ] {
+        popover.remove_css_class(class);
+    }
+    let class = match super::popover_position() {
+        gtk::PositionType::Top => "metis-popover-above",
+        gtk::PositionType::Left => "metis-popover-aside-left",
+        gtk::PositionType::Right => "metis-popover-aside-right",
+        _ => "metis-popover-below",
+    };
+    popover.add_css_class(class);
 }
 
 pub fn close_all() {

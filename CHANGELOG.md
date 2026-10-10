@@ -16,9 +16,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **Edge-bar / overlay popover shadows** — soft `{popover_shadow}` on
   `popover.metis-bar-popover contents` (GTK’s documented node); panel fill moves
   off the inner box onto `contents`. Do not pad the `popover` node — that
-  shifts menus off the anchor (taskbar right-click). Metis Menu keeps fill +
-  shadow on `.metis-menu-panel` (transparent `contents`) so Panel opacity still
-  works; pin/unpin overlay sheet keeps its own fill + shadow.
+  shifts menus off the anchor (taskbar right-click). Light mode extracts the
+  color from theme `shadow_ambient` (a full shadow string) so composed shadows
+  are valid CSS. Metis Menu keeps fill + shadow on `.metis-menu-panel` with
+  transparent popover chrome (light + dark) so Panel opacity works; arrow-side
+  margin is cleared via `metis-popover-*` so the caret stays flush.
 - **Notification cards** — solid fill (no kind gradient), light border + drop
   shadow, left kind-colour edge strip; long title/body clamps with a **⋯**
   expand control; per-card **✕** dismiss on Notification Center (and toasts).

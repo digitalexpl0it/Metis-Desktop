@@ -827,6 +827,7 @@ fn transient_popover(parent: &impl IsA<gtk::Widget>, panel: &gtk::Box) -> gtk::P
         .build();
     popover.add_css_class("metis-bar-popover");
     popover.set_parent(parent);
+    // register() also applies metis-popover-* side class for CSS margins.
     super::super::dropdown::register(&popover);
     TASK_POPOVER.with(|cell| *cell.borrow_mut() = Some(popover.clone()));
 
