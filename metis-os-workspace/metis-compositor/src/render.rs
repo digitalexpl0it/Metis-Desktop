@@ -186,7 +186,10 @@ impl MetisState {
                     self.snap_overlay_id.clone(),
                     geo,
                     self.snap_overlay_commit,
-                    Color32F::from(SNAP_OVERLAY_COLOR),
+                    Color32F::from(crate::decoration::overlay_rgba_for_scene(
+                        SNAP_OVERLAY_COLOR,
+                        scene_linear,
+                    )),
                     Kind::Unspecified,
                 ))
             }
@@ -206,9 +209,17 @@ impl MetisState {
         // Layer-shell surfaces from every output's layer map: background/bottom
         // render beneath windows, top/overlay above them (the Metis bar is Top).
         // Offset by output origin (to global) then by -render_origin (to local).
+        // Collect first so the layer-map borrow does not overlap `hdr_encode` lift.
         let mut upper_layer_elems: Vec<OutputStack> = Vec::new();
         let mut lower_layer_elems: Vec<OutputStack> = Vec::new();
         let layer_outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        type LayerJob = (
+            smithay::desktop::LayerSurface,
+            Size<i32, Logical>,
+            Point<i32, Physical>,
+            bool,
+        );
+        let mut layer_jobs: Vec<LayerJob> = Vec::new();
         for out in &layer_outputs {
             let out_origin = self
                 .space
@@ -228,14 +239,33 @@ impl MetisState {
                 };
                 let loc =
                     (geo.loc + out_origin).to_physical_precise_round(output_scale) - render_origin;
+                let lower = matches!(surface.layer(), Layer::Background | Layer::Bottom);
+                layer_jobs.push((surface.clone(), geo.size, loc, lower));
+            }
+        }
+        for (surface, logical_size, loc, lower) in layer_jobs {
+            let target = if lower {
+                &mut lower_layer_elems
+            } else {
+                &mut upper_layer_elems
+            };
+            if scene_linear
+                && let Some(lifted) = self.hdr_encode.try_lift_layer_element(
+                    renderer,
+                    &surface,
+                    crate::hdr_encode::HdrLayerLiftOpts {
+                        place_at: loc,
+                        logical_size,
+                        scale: output_scale,
+                        alpha: 1.0,
+                    },
+                )
+            {
+                target.push(OutputStack::HdrEncode(lifted));
+            } else {
                 let elems = AsRenderElements::<GlesRenderer>::render_elements::<
                     WaylandSurfaceRenderElement<GlesRenderer>,
-                >(surface, renderer, loc, output_scale, 1.0);
-                let target = if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
-                    &mut lower_layer_elems
-                } else {
-                    &mut upper_layer_elems
-                };
+                >(&surface, renderer, loc, output_scale, 1.0);
                 target.extend(elems.into_iter().map(OutputStack::Surface));
             }
         }
@@ -455,19 +485,20 @@ impl MetisState {
                 self.desktop_underlay_id.clone(),
                 Rectangle::from_size(size),
                 self.desktop_underlay_commit,
-                Color32F::from([0.04, 0.05, 0.07, 1.0]),
+                Color32F::from(crate::decoration::overlay_rgba_for_scene(
+                    [0.04, 0.05, 0.07, 1.0],
+                    scene_linear,
+                )),
                 Kind::Unspecified,
             )));
         }
 
         // Night light / battery dim sit above the scene (cursor is drawn after).
         // Dim is inserted first so night-light warmth (if any) stacks above it.
-        if let Some(dim) = crate::battery_dim::battery_dim_element(self, &target) {
+        if let Some(dim) = crate::battery_dim::battery_dim_element(self, &target, scene_linear) {
             render_elements.insert(0, OutputStack::Overlay(dim));
         }
-        if crate::night_light::should_render_night_light(self, &target)
-            && let Some(tint) = night_light_element(self, &target)
-        {
+        if let Some(tint) = night_light_element(self, &target, scene_linear) {
             render_elements.insert(0, OutputStack::Overlay(tint));
         }
 

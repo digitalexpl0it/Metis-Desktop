@@ -13,6 +13,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   network popover could show “Wi-Fi is off” while the switch stayed on. Poll
   sync is bidirectional (filtered for HDMI/modeset streaks) so a stable radio
   off updates the toggle.
+- **HDR Mixed path colour** — layer-shell (edge bar / overlays), snap/underlay
+  solids, and night-light / battery-dim overlays are linearized with lifted SDR
+  windows on the float scene-linear path so they no longer look too dark/raw
+  next to titlebars. Night light and battery dim run on HDR encode again
+  (still skipped for HDR-only / fullscreen pass-through).
 
 ### Changed
 
@@ -22,6 +27,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   dismiss policy. `deny.toml` now denies duplicate crate versions (skip
   allowlist of current lockfile extras) and enables `unmaintained`/`unsound`
   with documented ignores for Smithay / fontdue / opus / reed-solomon trees.
+- **Stage-2 ICC on Mixed HDR** — bake a Rec.709-linear→display (γ=1) LUT atlas
+  beside the sRGB atlas so `outputs.json` ICC profiles apply again on the float
+  scene-linear path without double-TRC before BT.2390/PQ encode.
+  `wp_color_management_v1` remains opt-in (`METIS_COLOR_MGMT=1`).
 
 ## [2026-10-08]
 

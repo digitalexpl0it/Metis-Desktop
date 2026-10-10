@@ -3,6 +3,10 @@
 //! Settings toggles `night_light_enabled` and `night_light_temperature` (kelvin).
 //! When active, a fullscreen warm-tinted layer is drawn above the desktop but
 //! below the pointer (cursor is composited after the scene in the DRM path).
+//!
+//! HDR: allowed on display-referred encode and float scene-linear Mixed paths.
+//! Skipped for HDR-only pass-through (fullscreen HDR client) so PQ/HLG is not
+//! washed; capture / fullscreen carve-outs unchanged.
 
 use metis_config::OutputsConfig;
 use smithay::backend::renderer::Color32F;
@@ -10,6 +14,7 @@ use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::utils::{Physical, Rectangle, Size};
 
+use crate::hdr_surface::HdrContentMode;
 use crate::state::MetisState;
 
 /// Physical size of the framebuffer currently being rendered to.
@@ -32,19 +37,9 @@ impl RenderTargetInfo<'_> {
     }
 }
 
-/// Whether night light should tint the current render target.
-pub fn night_light_active(cfg: &OutputsConfig, output_name: Option<&str>) -> bool {
-    if !metis_config::night_light_effective(cfg) {
-        return false;
-    }
-    // HDR signaling fights the warm SDR overlay — skip on HDR-active outputs.
-    if let Some(name) = output_name {
-        let prefs = metis_config::output_prefs(cfg, name);
-        if prefs.hdr_enabled {
-            return false;
-        }
-    }
-    true
+/// Whether night light should tint the current render target (config only).
+pub fn night_light_active(cfg: &OutputsConfig, _output_name: Option<&str>) -> bool {
+    metis_config::night_light_effective(cfg)
 }
 
 /// True when the warm overlay should be composited for `target`.
@@ -56,9 +51,11 @@ pub fn should_render_night_light(state: &MetisState, target: &RenderTargetInfo<'
     if state.image_capture.screencast_active() || state.image_capture.has_pending() {
         return false;
     }
-    if let Some(name) = target.output_name
-        && crate::output_hdr::hdr_active_for_output(state, name)
-    {
+    // HDR-only pass-through: do not wash the client's PQ/HLG framebuffer.
+    if matches!(
+        state.hdr_content_mode_for_output(target.output_name),
+        HdrContentMode::HdrOnly
+    ) {
         return false;
     }
     let cfg = state.output_runtime.cached();
@@ -89,9 +86,9 @@ pub fn premultiply(color: Color32F) -> Color32F {
 pub fn night_light_element(
     state: &MetisState,
     target: &RenderTargetInfo<'_>,
+    scene_linear: bool,
 ) -> Option<SolidColorRenderElement> {
-    let cfg = state.output_runtime.cached();
-    if !night_light_active(cfg, target.output_name) {
+    if !should_render_night_light(state, target) {
         return None;
     }
     // A fullscreen overlay tints the whole framebuffer and prevents direct scanout.
@@ -101,7 +98,13 @@ pub fn night_light_element(
     if target.size.w <= 0 || target.size.h <= 0 {
         return None;
     }
-    let color = premultiply(overlay_color_for_temperature(cfg.night_light_temperature));
+    let cfg = state.output_runtime.cached();
+    let raw = overlay_color_for_temperature(cfg.night_light_temperature);
+    let rgba = crate::decoration::overlay_rgba_for_scene(
+        [raw.r(), raw.g(), raw.b(), raw.a()],
+        scene_linear,
+    );
+    let color = premultiply(Color32F::from(rgba));
     Some(SolidColorRenderElement::new(
         state.night_light_id.clone(),
         Rectangle::from_size(target.size),

@@ -1,5 +1,10 @@
-//! Stage 2 colour — bake sRGB→display 3D LUTs from ICC profiles (lcms2) and
-//! apply them as a GLES post-pass at scanout.
+//! Stage 2 colour — bake display 3D LUTs from ICC profiles (lcms2) and apply
+//! them as a GLES post-pass at scanout.
+//!
+//! Two atlases are cached per profile:
+//! - **sRGB** — classic sRGB→display (display-referred SDR / HDR encode path)
+//! - **linear** — Rec.709 linear→display primaries/white with γ=1 TRC so the
+//!   Mixed float path stays scene-linear for BT.2390/PQ encode (no double-TRC)
 //!
 //! Smithay's custom texture shaders only expose one sampler (`tex`), so the LUT
 //! is applied with a small dual-sampler blit via [`GlesRenderer::with_context`]
@@ -12,7 +17,10 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use bytemuck::{Pod, Zeroable};
-use lcms2::{Intent, PixelFormat, Profile, Transform};
+use lcms2::{
+    CIExyY, CIExyYTRIPLE, Intent, PixelFormat, Profile, Tag, TagSignature, ToneCurve, Transform,
+    XYZ2xyY,
+};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture, ffi};
 use smithay::backend::renderer::{Bind, ImportMem, Offscreen};
@@ -20,6 +28,30 @@ use smithay::utils::{Buffer, Size};
 
 /// Grid resolution per axis (33³ is the common desktop CMS trade-off).
 pub const LUT_SIZE: usize = 33;
+
+/// Rec.709 / sRGB primaries (CIE xy) and D65 white.
+const D65: CIExyY = CIExyY {
+    x: 0.3127,
+    y: 0.3290,
+    Y: 1.0,
+};
+const REC709_PRIMARIES: CIExyYTRIPLE = CIExyYTRIPLE {
+    Red: CIExyY {
+        x: 0.64,
+        y: 0.33,
+        Y: 1.0,
+    },
+    Green: CIExyY {
+        x: 0.30,
+        y: 0.60,
+        Y: 1.0,
+    },
+    Blue: CIExyY {
+        x: 0.15,
+        y: 0.06,
+        Y: 1.0,
+    },
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -33,15 +65,18 @@ struct Rgb8 {
 #[derive(Default)]
 pub struct ColorLutRuntime {
     blit: Option<LutBlitProgram>,
-    /// Output name → uploaded atlas (invalidated when ICC bytes change).
+    /// Output name → uploaded atlases (invalidated when ICC bytes change).
     entries: HashMap<String, LutEntry>,
     /// Outputs for which a LUT bake succeeded this session (skip CRTC vcgt).
     lut_active: HashMap<String, bool>,
+    /// Cached probe: float / 10-bit offscreen available (scene-linear dest).
+    scene_linear_formats: Option<bool>,
 }
 
 struct LutEntry {
     icc_hash: u64,
-    atlas: GlesTexture,
+    atlas_srgb: GlesTexture,
+    atlas_linear: GlesTexture,
 }
 
 struct LutBlitProgram {
@@ -59,6 +94,7 @@ impl ColorLutRuntime {
         self.entries.clear();
         self.lut_active.clear();
         self.blit = None;
+        self.scene_linear_formats = None;
     }
 
     /// True when a GLES LUT is ready for `output_name` (vcgt should stay identity).
@@ -85,14 +121,18 @@ impl ColorLutRuntime {
                 self.lut_active.insert(name.clone(), true);
                 continue;
             }
-            match bake_and_upload(renderer, icc) {
-                Ok(atlas) => {
-                    tracing::info!(output = %name, "colour: baked sRGB→display 3D LUT");
+            match bake_and_upload_pair(renderer, icc) {
+                Ok((atlas_srgb, atlas_linear)) => {
+                    tracing::info!(
+                        output = %name,
+                        "colour: baked sRGB + linear Rec.709→display 3D LUTs"
+                    );
                     self.entries.insert(
                         name.clone(),
                         LutEntry {
                             icc_hash: hash,
-                            atlas,
+                            atlas_srgb,
+                            atlas_linear,
                         },
                     );
                     self.lut_active.insert(name.clone(), true);
@@ -108,16 +148,45 @@ impl ColorLutRuntime {
 
     /// Apply the output's LUT to `scene` (offscreen). Returns a new texture or
     /// `None` when no LUT / GL blit fails (caller keeps `scene`).
+    ///
+    /// When `scene_linear` is true, uses the Rec.709-linear→display (γ=1) atlas
+    /// and prefers a float/10-bit dest so highlights survive for HDR encode.
     pub fn apply(
         &mut self,
         renderer: &mut GlesRenderer,
         output_name: &str,
         scene: GlesTexture,
         size: Size<i32, Buffer>,
+        scene_linear: bool,
     ) -> Option<GlesTexture> {
-        let atlas = self.entries.get(output_name)?.atlas.clone();
+        let entry = self.entries.get(output_name)?;
+        let atlas = if scene_linear {
+            entry.atlas_linear.clone()
+        } else {
+            entry.atlas_srgb.clone()
+        };
         self.ensure_blit(renderer)?;
-        blit_with_lut(renderer, self.blit.as_ref()?, &scene, &atlas, size)
+        let prefer_wide = scene_linear && self.scene_linear_formats_ok(renderer);
+        blit_with_lut(
+            renderer,
+            self.blit.as_ref()?,
+            &scene,
+            &atlas,
+            size,
+            prefer_wide,
+        )
+    }
+
+    fn scene_linear_formats_ok(&mut self, renderer: &mut GlesRenderer) -> bool {
+        if let Some(ok) = self.scene_linear_formats {
+            return ok;
+        }
+        let size = Size::<i32, Buffer>::from((1, 1));
+        let ok = [Fourcc::Abgr16161616f, Fourcc::Abgr2101010]
+            .into_iter()
+            .any(|format| Offscreen::<GlesTexture>::create_buffer(renderer, format, size).is_ok());
+        self.scene_linear_formats = Some(ok);
+        ok
     }
 }
 
@@ -140,6 +209,72 @@ pub fn bake_lut_atlas(icc: &[u8]) -> Result<Vec<u8>, String> {
     )
     .map_err(|e| format!("transform: {e}"))?;
 
+    fill_atlas_from_transform(&transform)
+}
+
+/// Bake a 33³ Abgr8888 atlas: Rec.709 **linear** grid → display gamut/white
+/// with γ=1 TRC (matrix/primaries only). Post-LUT samples stay scene-linear.
+///
+/// Prefer rewriting the display profile's R/G/B TRC tags to identity so lcms
+/// keeps the profile's chromatic adaptation (MediaWhitePoint is often D50 PCS).
+/// Fall back to a synthetic γ=1 RGB profile from ChromaticityTag + D65 when
+/// TRC rewrite is unavailable (unusual LUT-based display ICCs).
+pub fn bake_lut_atlas_linear(icc: &[u8]) -> Result<Vec<u8>, String> {
+    let linear = ToneCurve::new(1.0);
+    let curves = [&linear, &linear, &linear];
+    let src = Profile::new_rgb(&D65, &REC709_PRIMARIES, &curves)
+        .map_err(|e| format!("src linear Rec.709: {e}"))?;
+
+    let mut display = Profile::new_icc(icc).map_err(|e| format!("icc: {e}"))?;
+    let dest = if linearize_display_trcs(&mut display, &linear) {
+        display
+    } else {
+        let primaries = display_primaries_xyy(&display)?;
+        Profile::new_rgb(&D65, &primaries, &curves)
+            .map_err(|e| format!("dest linear display: {e}"))?
+    };
+
+    let transform = Transform::<Rgb8, Rgb8>::new(
+        &src,
+        PixelFormat::RGB_8,
+        &dest,
+        PixelFormat::RGB_8,
+        Intent::RelativeColorimetric,
+    )
+    .map_err(|e| format!("linear transform: {e}"))?;
+
+    fill_atlas_from_transform(&transform)
+}
+
+fn linearize_display_trcs(display: &mut Profile, linear: &ToneCurve) -> bool {
+    display.write_tag(TagSignature::RedTRCTag, Tag::ToneCurve(linear))
+        && display.write_tag(TagSignature::GreenTRCTag, Tag::ToneCurve(linear))
+        && display.write_tag(TagSignature::BlueTRCTag, Tag::ToneCurve(linear))
+}
+
+fn display_primaries_xyy(display: &Profile) -> Result<CIExyYTRIPLE, String> {
+    if let Tag::CIExyYTRIPLE(prim) = display.read_tag(TagSignature::ChromaticityTag) {
+        return Ok(*prim);
+    }
+
+    let red = colorant_xyy(display, TagSignature::RedColorantTag)?;
+    let green = colorant_xyy(display, TagSignature::GreenColorantTag)?;
+    let blue = colorant_xyy(display, TagSignature::BlueColorantTag)?;
+    Ok(CIExyYTRIPLE {
+        Red: red,
+        Green: green,
+        Blue: blue,
+    })
+}
+
+fn colorant_xyy(display: &Profile, tag: TagSignature) -> Result<CIExyY, String> {
+    match display.read_tag(tag) {
+        Tag::CIEXYZ(xyz) => Ok(XYZ2xyY(xyz)),
+        _ => Err(format!("missing colorant tag {tag:?}")),
+    }
+}
+
+fn fill_atlas_from_transform(transform: &Transform<Rgb8, Rgb8>) -> Result<Vec<u8>, String> {
     let n = LUT_SIZE;
     let w = n * n;
     let h = n;
@@ -171,13 +306,21 @@ pub fn bake_lut_atlas(icc: &[u8]) -> Result<Vec<u8>, String> {
     Ok(atlas)
 }
 
-fn bake_and_upload(renderer: &mut GlesRenderer, icc: &[u8]) -> Result<GlesTexture, String> {
-    let atlas = bake_lut_atlas(icc)?;
+fn bake_and_upload_pair(
+    renderer: &mut GlesRenderer,
+    icc: &[u8],
+) -> Result<(GlesTexture, GlesTexture), String> {
+    let atlas_srgb = bake_lut_atlas(icc)?;
+    let atlas_linear = bake_lut_atlas_linear(icc)?;
     let n = LUT_SIZE as i32;
     let size = Size::from((n * n, n));
-    renderer
-        .import_memory(&atlas, Fourcc::Abgr8888, size, false)
-        .map_err(|e| format!("import LUT atlas: {e:?}"))
+    let tex_srgb = renderer
+        .import_memory(&atlas_srgb, Fourcc::Abgr8888, size, false)
+        .map_err(|e| format!("import sRGB LUT atlas: {e:?}"))?;
+    let tex_linear = renderer
+        .import_memory(&atlas_linear, Fourcc::Abgr8888, size, false)
+        .map_err(|e| format!("import linear LUT atlas: {e:?}"))?;
+    Ok((tex_srgb, tex_linear))
 }
 
 impl ColorLutRuntime {
@@ -339,17 +482,32 @@ fn blit_with_lut(
     scene: &GlesTexture,
     atlas: &GlesTexture,
     size: Size<i32, Buffer>,
+    prefer_wide: bool,
 ) -> Option<GlesTexture> {
     if size.w <= 0 || size.h <= 0 {
         return None;
     }
-    let mut dest = match Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, size) {
-        Ok(t) => t,
-        Err(err) => {
-            tracing::warn!(?err, "colour: LUT dest offscreen failed");
-            return None;
-        }
+    let formats: &[Fourcc] = if prefer_wide {
+        &[Fourcc::Abgr16161616f, Fourcc::Abgr2101010, Fourcc::Abgr8888]
+    } else {
+        &[Fourcc::Abgr8888]
     };
+    let mut dest = None;
+    for &format in formats {
+        match Offscreen::<GlesTexture>::create_buffer(renderer, format, size) {
+            Ok(t) => {
+                dest = Some(t);
+                break;
+            }
+            Err(err) => {
+                if format == Fourcc::Abgr8888 {
+                    tracing::warn!(?err, "colour: LUT dest offscreen failed");
+                    return None;
+                }
+            }
+        }
+    }
+    let mut dest = dest?;
 
     {
         let mut fb = match renderer.bind(&mut dest) {
@@ -434,5 +592,62 @@ mod tests {
     fn identity_srgb_lut_is_near_diagonal() {
         // Empty / invalid ICC should error.
         assert!(bake_lut_atlas(&[]).is_err());
+        assert!(bake_lut_atlas_linear(&[]).is_err());
+    }
+
+    #[test]
+    fn linear_bake_on_srgb_icc_is_near_identity() {
+        let icc = Profile::new_srgb()
+            .icc()
+            .expect("sRGB profile should serialize");
+        let atlas = bake_lut_atlas_linear(&icc).expect("linear bake");
+        let n = LUT_SIZE;
+        let w = n * n;
+        let max = (n - 1) as f32;
+        // Sample a few diagonal + mid points; Rec.709 linear → sRGB linearized
+        // (same primaries/white) is the identity matrix.
+        for &(ri, gi, bi) in &[
+            (0, 0, 0),
+            (n - 1, n - 1, n - 1),
+            (n / 2, n / 2, n / 2),
+            (8, 16, 24),
+        ] {
+            let x = ri + gi * n;
+            let y = bi;
+            let i = (y * w + x) * 4;
+            let expect_r = ((ri as f32 / max) * 255.0).round() as i32;
+            let expect_g = ((gi as f32 / max) * 255.0).round() as i32;
+            let expect_b = ((bi as f32 / max) * 255.0).round() as i32;
+            let dr = (atlas[i] as i32 - expect_r).abs();
+            let dg = (atlas[i + 1] as i32 - expect_g).abs();
+            let db = (atlas[i + 2] as i32 - expect_b).abs();
+            assert!(
+                dr <= 2 && dg <= 2 && db <= 2,
+                "linear identity drift at ({ri},{gi},{bi}): got {} {} {}, expect ~{expect_r} {expect_g} {expect_b}",
+                atlas[i],
+                atlas[i + 1],
+                atlas[i + 2]
+            );
+        }
+    }
+
+    #[test]
+    fn srgb_bake_unchanged_shape() {
+        let icc = Profile::new_srgb()
+            .icc()
+            .expect("sRGB profile should serialize");
+        let atlas = bake_lut_atlas(&icc).expect("sRGB bake");
+        assert_eq!(atlas.len(), LUT_SIZE * LUT_SIZE * LUT_SIZE * 4);
+        // Black stays black; white stays white on sRGB→sRGB.
+        assert_eq!(&atlas[0..4], &[0, 0, 0, 255]);
+        let n = LUT_SIZE;
+        let w = n * n;
+        let white_i = ((n - 1) * w + (n - 1) + (n - 1) * n) * 4;
+        // Last blue slice, last r+g cell.
+        let x = (n - 1) + (n - 1) * n;
+        let y = n - 1;
+        let i = (y * w + x) * 4;
+        assert_eq!(i, white_i);
+        assert!(atlas[i] >= 250 && atlas[i + 1] >= 250 && atlas[i + 2] >= 250);
     }
 }

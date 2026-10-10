@@ -881,13 +881,15 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   sync** (VRR), and **HDR** (when the monitor EDID advertises HDR10 / ST.2084
   or HLG — many laptop panels do not) apply live;
   duplicate mode, arrangement, and resolution changes are batched behind save.
-  Night-light preferences apply live in the compositor (warm overlay; skipped
-  while HDR is active on that output). With **HDR** on, the compositor
-  tone-maps the desktop through Rec.709→BT.2020 then **PQ** (preferred when
-  EDID has ST.2084) or **HLG** (HLG-only panels); reference white ≈ 203 nits.
-  Per-output **ICC colour profiles** apply a GLES 3D LUT when possible
-  (otherwise the profile `vcgt` drives CRTC gamma). The Wayland
-  `wp_color_management_v1` protocol is
+  Night-light preferences apply live in the compositor (warm overlay; also
+  available on HDR encode and Mixed scene-linear desktops — skipped only for
+  HDR-only / fullscreen pass-through, exclusive fullscreen games, and capture
+  carve-outs). With **HDR** on, the compositor tone-maps the desktop through
+  Rec.709→BT.2020 then **PQ** (preferred when EDID has ST.2084) or **HLG**
+  (HLG-only panels); reference white ≈ 203 nits. Per-output **ICC colour
+  profiles** apply a GLES 3D LUT when possible (otherwise the profile `vcgt`
+  drives CRTC gamma), including on the Mixed float path via a linear
+  Rec.709→display atlas. The Wayland `wp_color_management_v1` protocol is
   **experimental and off by default** — set `METIS_COLOR_MGMT=1` only for
   testing; advertising it to Chromium/Ozone can crash the session (upstream
   wayland-rs server ObjectData bug). Hardware ICC / LUT / HDR do **not** need
@@ -895,13 +897,12 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   protocol), the compositor **pass-through** skips SDR→HDR re-encode for
   HDR-only / fullscreen outputs so that content is not double-transformed.
   Mixed SDR+HDR on an HDR panel composites in scene-linear light (HDR windows,
-  lifted SDR clients, wallpaper, titlebar chrome, and bar blur) when the GPU
-  supports float/10-bit intermediates, then applies a BT.2390-style highlight
-  shoulder at encode. Per-output ICC Stage-2 LUTs are skipped on that path
-  (they assume sRGB) until a linear-aware bake lands; Stage-1 CRTC gamma is
-  already skipped while HDR is active. Without float/10-bit, Metis falls back
-  to sRGB decode with a soft roll-off. HDR on an SDR panel always decodes to
-  sRGB. Scroll-column and minimize clips still apply.
+  lifted SDR clients, wallpaper, titlebar chrome, layer-shell, and bar blur)
+  when the GPU supports float/10-bit intermediates, then applies a BT.2390-style
+  highlight shoulder at encode. Stage-1 CRTC gamma is already skipped while HDR
+  is active. Without float/10-bit, Metis falls back to sRGB decode with a soft
+  roll-off. HDR on an SDR panel always decodes to sRGB. Scroll-column and
+  minimize clips still apply.
   Rotation is still upcoming.
 - **Appearance** — Light/Dark style; accent, secondary, and semantic status
   colors; font. Edits write `themes/dark.json` / `themes/light.json` and survive
@@ -1072,7 +1073,7 @@ full effect under a real (DRM) session.
 | **Blank screen after** | Metis compositor (DPMS) | Live-reloaded via `ReloadPower` IPC; independent of logind. |
 | **Suspend after idle** | systemd-logind (`busctl`) | Best-effort; needs logind and appropriate permissions. |
 | **When lid is closed** | systemd-logind | Laptop only; suspend / ignore / hibernate / power off. |
-| **Dim on battery** | Compositor overlay | When on battery and enabled in `power.json`, applies a light full-output dim (skipped on HDR-active outputs). Live-reloads with Power settings. |
+| **Dim on battery** | Compositor overlay | When on battery and enabled in `power.json`, applies a light full-output dim (same carve-outs as night light: skipped on HDR-only pass-through / exclusive fullscreen / capture). Live-reloads with Power settings. |
 
 While gaming, **Settings → Gaming → Auto performance profile** (via `metis-gamingd`)
 can temporarily switch to **Performance** and restore your previous profile when the

@@ -56,16 +56,17 @@ Security items from the **2026-09-27 code review** sit above product stretch.
       → Wave 3a, Phase 3 multi-GPU notes, Phase 18 §E.
       *(dmabuf transfer 2026-09-27; MultiRenderer Wave A/B/C 2026-10-03)*
 - [ ] **2. True per-surface HDR decode** — mixed SDR+HDR on HDR outputs uses a
-      Rec.709 **scene-linear** composite (HDR decode + SDR client/wallpaper lift,
-      linear SSD + blur taps; prefer float/10-bit FBO) with BT.2390-style EETF
-      at encode; Stage-2 sRGB ICC skipped while scene-linear; scroll/genie crop
-      on GLES and hybrid Multi. Falls back to display-referred sRGB decode when
-      float/10-bit is unavailable or the panel is SDR. HDR-only / fullscreen
-      still pass-through.
-      **Residual:** linear-aware ICC bake, default-on `wp_color_management_v1`,
-      layer-shell/night-light linearization.
+      Rec.709 **scene-linear** composite (HDR decode + SDR client/wallpaper/
+      layer-shell lift, linear SSD + blur + night-light/battery-dim taps; prefer
+      float/10-bit FBO) with BT.2390-style EETF at encode; Stage-2 ICC uses a
+      linear Rec.709→display atlas on the float path (sRGB atlas elsewhere);
+      scroll/genie crop on GLES and hybrid Multi. Falls back to display-referred
+      sRGB decode when float/10-bit is unavailable or the panel is SDR. HDR-only
+      / fullscreen still pass-through (night light skipped only on that path).
+      **Residual:** default-on `wp_color_management_v1` (blocked on wayland-rs#949;
+      keep `METIS_COLOR_MGMT=1` opt-in) — see Wave **3b**.
       → Phase 5 §B residual. *(decode 2026-09-27; crop+decode + tone-map + float
-      scene-linear + BT.2390/chrome 2026-10-03)*
+      scene-linear + BT.2390/chrome 2026-10-03; ICC + layer/night-light 2026-10-10)*
 - [x] **3. Metis-native remote host** — **Partial→landed core (2026-10-03):**
       **RUDP** Phases 1–8 + clipboard/audio/HW decode/AV1/packet queue;
       **Metis native RDP** via `metis-rdp-host` (portal ScreenCast + FreeRDP;
@@ -201,11 +202,12 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       wayland-rs server/sys ObjectData UAF; keep `METIS_COLOR_MGMT=1` opt-in
       ([docs/upstream/](../docs/upstream/README.md))
 - [x] **3c** Per-surface HDR **pass-through** into encode path (PQ/HLG hints;
-      mixed SDR+HDR approximate). **Partial (2026-09-27 / 2026-10-03):**
-      per-window PQ/HLG decode (scroll/genie crop) + float scene-linear on HDR
-      outputs (windows/wallpaper/SSD/blur) + BT.2390-style encode + HDR-only
-      pass-through; Stage-2 ICC skipped while scene-linear. **Residual:**
-      linear-aware ICC + colour protocol — see **Urgent priorities**.
+      mixed SDR+HDR approximate). **Partial (2026-09-27 / 2026-10-03 /
+      2026-10-10):** per-window PQ/HLG decode (scroll/genie crop) + float
+      scene-linear on HDR outputs (windows/wallpaper/SSD/blur/layer-shell) +
+      BT.2390-style encode + HDR-only pass-through; linear-aware Stage-2 ICC +
+      night-light/battery-dim on encode (not HdrOnly). **Residual:** default-on
+      colour protocol — Wave **3b** / **Urgent #2**.
 
 ### Wave 4 — Remote
 - [x] **4a** `metis-remote rustdesk status|enable|disable` + firewall/Polkit +
@@ -727,7 +729,8 @@ Phase 3) — none of these are possible under the nested winit dev session.
       (`HDR_OUTPUT_METADATA` **and** EDID ST.2084/HDR10); per-output `hdr_enabled` in
       `outputs.json` + Settings → Display toggle; apply/clear Colorspace +
       HDR10 static metadata blob + `max_bpc=10`; log negotiated 10-bit vs 8-bit
-      primary-plane scanout format; skip night-light overlay while HDR is active.
+      primary-plane scanout format; skip night-light on HDR-only pass-through
+      (warm overlay allowed on display-referred encode + Mixed scene-linear).
       Nested winit / SDR eDP (DRM prop without EDID HDR) report `hdr_available=false`.
 - [x] **HDR encode (H2, 2026-07-24)** — when `hdr_active`, DRM path composites
       SDR offscreen then blits through an sRGB→linear→ST.2084 PQ texture shader
@@ -748,10 +751,8 @@ Phase 3) — none of these are possible under the nested winit dev session.
       (hardware QA still welcome). **Still deferred (upstream):** default-on
       colour protocol
       ([wayland-rs#949](https://github.com/Smithay/wayland-rs/issues/949)).
-      **Urgent residual:** linear-aware ICC + default-on colour protocol
-      (BT.2390 encode + linear chrome + float scene-linear + crop+decode
-      landed 2026-10-03; per-window decode + pass-through landed 2026-09-27;
-      see **Urgent priorities**).
+      **2026-10-10:** linear-aware Stage-2 ICC + layer-shell/night-light on
+      Mixed float path landed; Urgent #2 residual is protocol-only (Wave **3b**).
 ---
 
 ## Phase 6 — Flatpak, Steam & gaming

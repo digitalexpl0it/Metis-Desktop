@@ -135,11 +135,26 @@ fn hex_rgb(hex: &str) -> [f32; 3] {
     [parse(0), parse(2), parse(4)]
 }
 
-fn srgb_channel_to_linear(c: f32) -> f32 {
+/// sRGB OETF inverse for one channel (shared by SSD chrome, snap overlays, night light).
+pub(crate) fn srgb_channel_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
         c / 12.92
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Straight RGBA for solid overlays: keep alpha; lift RGB when scene-linear.
+pub(crate) fn overlay_rgba_for_scene(rgba: [f32; 4], scene_linear: bool) -> [f32; 4] {
+    if scene_linear {
+        [
+            srgb_channel_to_linear(rgba[0]),
+            srgb_channel_to_linear(rgba[1]),
+            srgb_channel_to_linear(rgba[2]),
+            rgba[3],
+        ]
+    } else {
+        rgba
     }
 }
 

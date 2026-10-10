@@ -113,11 +113,6 @@ pub fn query_hdr_active(state: &MetisState, name: &str) -> bool {
         .is_some_and(|s| s.hdr_active)
 }
 
-/// True when HDR signaling is applied on this output (prefs + last successful apply).
-pub fn hdr_active_for_output(state: &MetisState, name: &str) -> bool {
-    query_hdr_active(state, name)
-}
-
 pub fn apply_output_hdrs(state: &mut MetisState, cfg: &OutputsConfig) -> bool {
     apply_output_hdrs_inner(state, cfg, false)
 }

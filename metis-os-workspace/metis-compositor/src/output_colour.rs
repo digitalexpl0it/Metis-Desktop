@@ -47,8 +47,9 @@ pub fn apply_colour_post_pass(
     scene_linear: bool,
     content_max_nits: f32,
 ) -> Option<ColourPassResult> {
-    // Stage-2 LUT bakes sRGB→display; skip it while the scene is Rec.709 linear.
-    let wants_lut = !scene_linear && lut_runtime.lut_owns_output(output_name);
+    // Stage-2 LUT: sRGB atlas on display-referred paths; linear Rec.709→display
+    // (γ=1) atlas when the Mixed float scene is already scene-linear.
+    let wants_lut = lut_runtime.lut_owns_output(output_name);
     let wants_hdr_encode = hdr_active && !hdr_passthrough;
     if !wants_lut && !wants_hdr_encode {
         // HDR output with pass-through: still need a single fullscreen element if
@@ -94,7 +95,7 @@ pub fn apply_colour_post_pass_scene(
     scene_linear: bool,
     content_max_nits: f32,
 ) -> Option<ColourPassResult> {
-    let wants_lut = !scene_linear && lut_runtime.lut_owns_output(output_name);
+    let wants_lut = lut_runtime.lut_owns_output(output_name);
     let wants_hdr_encode = hdr_active && !hdr_passthrough;
     if !wants_lut && !wants_hdr_encode {
         return None;
@@ -105,7 +106,8 @@ pub fn apply_colour_post_pass_scene(
     let size_buf: Size<i32, Buffer> = Size::from((size.w, size.h));
 
     if wants_lut
-        && let Some(mapped) = lut_runtime.apply(renderer, output_name, scene.clone(), size_buf)
+        && let Some(mapped) =
+            lut_runtime.apply(renderer, output_name, scene.clone(), size_buf, scene_linear)
     {
         scene = mapped;
     }
@@ -168,7 +170,7 @@ pub fn apply_hybrid_colour_post_pass(
     scene_linear: bool,
     content_max_nits: f32,
 ) -> Option<(HybridColourPass, [f32; 4])> {
-    let wants_lut = !scene_linear && lut_runtime.lut_owns_output(output_name);
+    let wants_lut = lut_runtime.lut_owns_output(output_name);
     let wants_hdr_encode = hdr_active && !hdr_passthrough;
     if !wants_lut && !wants_hdr_encode {
         return None;
@@ -180,7 +182,8 @@ pub fn apply_hybrid_colour_post_pass(
     let mut scene = scene;
 
     if wants_lut
-        && let Some(mapped) = lut_runtime.apply(renderer, output_name, scene.clone(), size_buf)
+        && let Some(mapped) =
+            lut_runtime.apply(renderer, output_name, scene.clone(), size_buf, scene_linear)
     {
         scene = mapped;
     }

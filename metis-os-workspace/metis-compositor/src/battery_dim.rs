@@ -1,8 +1,8 @@
 //! Dim-on-battery overlay driven by `power.json` → `dim_on_battery`.
 //!
 //! When the laptop is on battery and the preference is enabled, a light black
-//! wash sits above the desktop (same stacking slot as night light). HDR-active
-//! outputs skip the overlay so PQ/HLG metadata is not washed out.
+//! wash sits above the desktop (same stacking slot as night light). HDR-only
+//! pass-through skips the overlay; Mixed / display-referred HDR encode allow it.
 
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,7 @@ use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::{Id, Kind};
 use smithay::utils::Rectangle;
 
+use crate::hdr_surface::HdrContentMode;
 use crate::night_light::{RenderTargetInfo, premultiply};
 use crate::state::MetisState;
 
@@ -94,9 +95,10 @@ pub fn should_render_battery_dim(state: &MetisState, target: &RenderTargetInfo<'
     if state.image_capture.screencast_active() || state.image_capture.has_pending() {
         return false;
     }
-    if let Some(name) = target.output_name
-        && crate::output_hdr::hdr_active_for_output(state, name)
-    {
+    if matches!(
+        state.hdr_content_mode_for_output(target.output_name),
+        HdrContentMode::HdrOnly
+    ) {
         return false;
     }
     if state.output_has_fullscreen(target.output_name) {
@@ -108,11 +110,13 @@ pub fn should_render_battery_dim(state: &MetisState, target: &RenderTargetInfo<'
 pub fn battery_dim_element(
     state: &MetisState,
     target: &RenderTargetInfo<'_>,
+    scene_linear: bool,
 ) -> Option<SolidColorRenderElement> {
     if !should_render_battery_dim(state, target) {
         return None;
     }
-    let color = premultiply(Color32F::from([0.0, 0.0, 0.0, DIM_ALPHA]));
+    let rgba = crate::decoration::overlay_rgba_for_scene([0.0, 0.0, 0.0, DIM_ALPHA], scene_linear);
+    let color = premultiply(Color32F::from(rgba));
     Some(SolidColorRenderElement::new(
         state.battery_dim.id.clone(),
         Rectangle::from_size(target.size),

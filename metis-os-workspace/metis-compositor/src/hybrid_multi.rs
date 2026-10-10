@@ -413,15 +413,24 @@ fn build_hybrid_elements<'a>(
             state.snap_overlay_id.clone(),
             geo,
             state.snap_overlay_commit,
-            Color32F::from(SNAP_OVERLAY_COLOR),
+            Color32F::from(crate::decoration::overlay_rgba_for_scene(
+                SNAP_OVERLAY_COLOR,
+                scene_linear,
+            )),
             Kind::Unspecified,
         )));
     }
 
-    // Layer-shell (bar, etc.)
+    // Layer-shell (bar, etc.) — collect first so the layer-map borrow does not
+    // overlap `state.hdr_encode` when lifting for scene-linear.
     let layer_outputs: Vec<Output> = state.space.outputs().cloned().collect();
-    let mut upper_layers = Vec::new();
-    let mut lower_layers = Vec::new();
+    type LayerJob = (
+        smithay::desktop::LayerSurface,
+        Size<i32, Logical>,
+        Point<i32, Physical>,
+        bool,
+    );
+    let mut layer_jobs: Vec<LayerJob> = Vec::new();
     for out in &layer_outputs {
         let out_origin = state
             .space
@@ -435,16 +444,38 @@ fn build_hybrid_elements<'a>(
             };
             let loc =
                 (geo.loc + out_origin).to_physical_precise_round(output_scale) - render_origin;
-            let elems = AsRenderElements::<UdevMultiRenderer<'a>>::render_elements::<
-                WaylandSurfaceRenderElement<UdevMultiRenderer<'a>>,
-            >(surface, renderer, loc, output_scale, 1.0);
-            let target_vec = if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
-                &mut lower_layers
-            } else {
-                &mut upper_layers
-            };
-            target_vec.extend(elems.into_iter().map(HybridOutputStack::Surface));
+            let lower = matches!(surface.layer(), Layer::Background | Layer::Bottom);
+            layer_jobs.push((surface.clone(), geo.size, loc, lower));
         }
+    }
+    let mut upper_layers = Vec::new();
+    let mut lower_layers = Vec::new();
+    for (surface, logical_size, loc, lower) in layer_jobs {
+        let target_vec = if lower {
+            &mut lower_layers
+        } else {
+            &mut upper_layers
+        };
+        if scene_linear {
+            let gles: &mut GlesRenderer = renderer.as_mut();
+            if let Some(lifted) = state.hdr_encode.try_lift_layer_hybrid(
+                gles,
+                &surface,
+                crate::hdr_encode::HdrLayerLiftOpts {
+                    place_at: loc,
+                    logical_size,
+                    scale: output_scale,
+                    alpha: 1.0,
+                },
+            ) {
+                target_vec.push(HybridOutputStack::Shader(lifted));
+                continue;
+            }
+        }
+        let elems = AsRenderElements::<UdevMultiRenderer<'a>>::render_elements::<
+            WaylandSurfaceRenderElement<UdevMultiRenderer<'a>>,
+        >(&surface, renderer, loc, output_scale, 1.0);
+        target_vec.extend(elems.into_iter().map(HybridOutputStack::Surface));
     }
     render_elements.extend(upper_layers);
 
@@ -685,10 +716,10 @@ fn build_hybrid_elements<'a>(
     );
 
     // Night light / battery dim
-    if let Some(elem) = crate::night_light::night_light_element(state, &target) {
+    if let Some(elem) = crate::night_light::night_light_element(state, &target, scene_linear) {
         render_elements.insert(0, HybridOutputStack::Overlay(elem));
     }
-    if let Some(elem) = crate::battery_dim::battery_dim_element(state, &target) {
+    if let Some(elem) = crate::battery_dim::battery_dim_element(state, &target, scene_linear) {
         render_elements.insert(0, HybridOutputStack::Overlay(elem));
     }
 

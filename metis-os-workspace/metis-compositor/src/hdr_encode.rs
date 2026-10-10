@@ -34,7 +34,7 @@ use smithay::backend::renderer::gles::{
 };
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::{Bind, Offscreen};
-use smithay::desktop::Window;
+use smithay::desktop::{LayerSurface, Window};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 /// BT.2408 reference white for mapping SDR peak to HDR (nits).
@@ -72,6 +72,16 @@ pub struct HdrWindowDecodeOpts {
 #[derive(Debug, Clone, Copy)]
 pub struct HdrWindowLiftOpts {
     pub place_at: Point<i32, Physical>,
+    pub scale: Scale<f64>,
+    pub alpha: f32,
+}
+
+/// Placement for layer-shell sRGB→linear lift (float scene path).
+#[derive(Debug, Clone, Copy)]
+pub struct HdrLayerLiftOpts {
+    pub place_at: Point<i32, Physical>,
+    /// Layer geometry size in logical pixels (from `layer_map_for_output`).
+    pub logical_size: Size<i32, Logical>,
     pub scale: Scale<f64>,
     pub alpha: f32,
 }
@@ -1343,6 +1353,129 @@ impl HdrEncodeRuntime {
         let (scene, size_phys) = Self::render_window_offscreen(
             renderer,
             window,
+            opts.scale,
+            opts.alpha,
+            Self::window_offscreen_formats(true),
+        )?;
+        let geometry = Rectangle::new(opts.place_at, size_phys);
+        let src = Rectangle::<f64, Buffer>::new(
+            Point::from((0.0, 0.0)),
+            Size::from((size_phys.w as f64, size_phys.h as f64)),
+        );
+        crate::hybrid_shader::HybridTexShaderElement::from_gles_texture(
+            renderer,
+            Id::new(),
+            CommitCounter::default(),
+            geometry,
+            src,
+            scene,
+            program,
+            vec![],
+            opts.alpha,
+            Kind::Unspecified,
+        )
+    }
+
+    fn render_layer_offscreen(
+        renderer: &mut GlesRenderer,
+        surface: &LayerSurface,
+        logical_size: Size<i32, Logical>,
+        scale: Scale<f64>,
+        alpha: f32,
+        formats: &[Fourcc],
+    ) -> Option<(GlesTexture, Size<i32, Physical>)> {
+        let size_phys: Size<i32, Physical> = logical_size.to_physical_precise_round(scale);
+        if size_phys.w <= 0 || size_phys.h <= 0 {
+            return None;
+        }
+        if size_phys.w > 7680 || size_phys.h > 4320 {
+            tracing::warn!(
+                w = size_phys.w,
+                h = size_phys.h,
+                "hdr: refusing layer offscreen larger than 8K"
+            );
+            return None;
+        }
+
+        let size_buf: Size<i32, Buffer> = Size::from((size_phys.w, size_phys.h));
+        let loc = Point::<i32, Physical>::from((0, 0));
+        let elems = AsRenderElements::<GlesRenderer>::render_elements::<
+            WaylandSurfaceRenderElement<GlesRenderer>,
+        >(surface, renderer, loc, scale, alpha);
+        if elems.is_empty() {
+            return None;
+        }
+
+        for format in formats {
+            let mut offscreen =
+                match Offscreen::<GlesTexture>::create_buffer(renderer, *format, size_buf) {
+                    Ok(buf) => buf,
+                    Err(_) => continue,
+                };
+            let ok = {
+                let mut framebuffer = match renderer.bind(&mut offscreen) {
+                    Ok(fb) => fb,
+                    Err(_) => continue,
+                };
+                let mut damage_tracker =
+                    OutputDamageTracker::new(size_phys, scale, Transform::Normal);
+                damage_tracker
+                    .render_output(renderer, &mut framebuffer, 0, &elems, DECODE_CLEAR)
+                    .is_ok()
+            };
+            if ok {
+                return Some((offscreen, size_phys));
+            }
+        }
+        None
+    }
+
+    /// Lift a layer-shell surface (bar, overlays) to Rec.709 linear.
+    pub fn try_lift_layer_element(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        surface: &LayerSurface,
+        opts: HdrLayerLiftOpts,
+    ) -> Option<TextureShaderElement> {
+        self.ensure_lift_program(renderer);
+        let program = self.sdr_lift_program.clone()?;
+        let (scene, size_phys) = Self::render_layer_offscreen(
+            renderer,
+            surface,
+            opts.logical_size,
+            opts.scale,
+            opts.alpha,
+            Self::window_offscreen_formats(true),
+        )?;
+        let buffer = TextureBuffer::from_texture(renderer, scene, 1, Transform::Normal, None);
+        let src_rect = Rectangle::<f64, Logical>::new(
+            Point::from((0.0, 0.0)),
+            Size::from((size_phys.w as f64, size_phys.h as f64)),
+        );
+        let inner = TextureRenderElement::from_texture_buffer(
+            Point::<f64, Physical>::from((opts.place_at.x as f64, opts.place_at.y as f64)),
+            &buffer,
+            None,
+            Some(src_rect),
+            Some(Size::from((size_phys.w, size_phys.h))),
+            Kind::Unspecified,
+        );
+        Some(TextureShaderElement::new(inner, program, vec![]))
+    }
+
+    /// Hybrid MultiRenderer variant of [`Self::try_lift_layer_element`].
+    pub fn try_lift_layer_hybrid(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        surface: &LayerSurface,
+        opts: HdrLayerLiftOpts,
+    ) -> Option<crate::hybrid_shader::HybridTexShaderElement> {
+        self.ensure_lift_program(renderer);
+        let program = self.sdr_lift_program.clone()?;
+        let (scene, size_phys) = Self::render_layer_offscreen(
+            renderer,
+            surface,
+            opts.logical_size,
             opts.scale,
             opts.alpha,
             Self::window_offscreen_formats(true),
