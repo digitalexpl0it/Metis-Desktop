@@ -27,8 +27,11 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         background-image: none;
         border-radius: 16px;
         border: 1px solid {border};
+        border-left: 4px solid {accent};
         padding: 0;
-        box-shadow: 0 8px 24px {shadow};
+        /* Margin = shadow bleed room on the transparent toast layer surface. */
+        margin: 4px 10px 12px 10px;
+        box-shadow: {popover_shadow};
         color: {text};
         overflow: hidden;
     }}

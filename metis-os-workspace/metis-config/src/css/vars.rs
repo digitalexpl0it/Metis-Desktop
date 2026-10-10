@@ -132,12 +132,11 @@ impl CssVars {
         let screenshot_toolbar_bg = dash_panel_bg.clone();
         let nc_panel_bg = dash_panel_bg.clone();
         let nc_card_bg = dash_card_bg.clone();
-        let toast_card_bg = if is_light {
-            format!("rgba({raised_rgb}, 0.96)")
-        } else {
-            format!("rgba({raised_rgb}, 0.94)")
-        };
-        let notif_card_bg = toast_card_bg.clone();
+        // Solid fill on layer-shell toast/NC cards — translucent rgba + 
+        // border-radius lets wallpaper bleed through the corners (especially
+        // light mode) and fights soft box-shadow.
+        let toast_card_bg = raised.clone();
+        let notif_card_bg = raised.clone();
         let text_on_accent = theme.text_on_accent.clone();
         let font_decls = theme.font_declarations();
 

@@ -60,9 +60,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     .metis-toast-card.metis-notif-card-error {{
         background-color: {toast_card_bg};
         background-image: none;
-    }}
-    .metis-notif-card-error .metis-notif-accent {{
-        background-color: {c_error};
+        border-left-color: {c_error};
     }}
     .metis-notif-card-error .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_error};
@@ -72,9 +70,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     .metis-toast-card.metis-notif-card-notify {{
         background-color: {toast_card_bg};
         background-image: none;
-    }}
-    .metis-notif-card-notify .metis-notif-accent {{
-        background-color: {c_warning};
+        border-left-color: {c_warning};
     }}
     .metis-notif-card-notify .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_warning};
@@ -84,9 +80,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     .metis-toast-card.metis-notif-card-success {{
         background-color: {toast_card_bg};
         background-image: none;
-    }}
-    .metis-notif-card-success .metis-notif-accent {{
-        background-color: {c_success};
+        border-left-color: {c_success};
     }}
     .metis-notif-card-success .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_success};
@@ -96,9 +90,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     .metis-toast-card.metis-notif-card-info {{
         background-color: {toast_card_bg};
         background-image: none;
-    }}
-    .metis-notif-card-info .metis-notif-accent {{
-        background-color: {c_info};
+        border-left-color: {c_info};
     }}
     .metis-notif-card-info .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_info};
@@ -108,9 +100,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     .metis-toast-card.metis-notif-card-payment {{
         background-color: {toast_card_bg};
         background-image: none;
-    }}
-    .metis-notif-card-payment .metis-notif-accent {{
-        background-color: {c_payment};
+        border-left-color: {c_payment};
     }}
     .metis-notif-card-payment .metis-notif-icon:not(.metis-notif-icon-app) {{
         color: {c_payment};

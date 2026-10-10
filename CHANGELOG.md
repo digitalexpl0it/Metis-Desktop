@@ -25,7 +25,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   shadow, left kind-colour edge strip; long title/body clamps with a **⋯**
   expand control; per-card **✕** dismiss on Notification Center (and toasts).
   List area is transparent over the panel glass; only the Notifications header
-  row stays solid.
+  row stays solid. Toast/NC cards use opaque `{raised}` + `{popover_shadow}`
+  (light-mode translucent fill was bleeding through rounded corners).
 - **Large UI module splits** — onboarding; dashboard / bar / menu under
   `metis-shell`; Settings network / desktop_widgets / gaming; screenshot
   `editor/` (maintainability; public `build` / lifecycle APIs unchanged).

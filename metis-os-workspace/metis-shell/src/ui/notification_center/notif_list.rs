@@ -245,7 +245,7 @@ fn build_notification_card(entry: &NotificationEntry) -> gtk::Box {
     card.add_css_class("metis-notif-card");
     card.add_css_class(&format!("metis-notif-card-{}", notif.kind.css_suffix()));
 
-    card.append(&crate::ui::bar::widgets::notif_kind_accent());
+    // Kind colour is CSS `border-left` on the card (follows rounded corners).
     card.append(&crate::ui::bar::widgets::notif_icon_badge(notif));
 
     let text = gtk::Box::builder()

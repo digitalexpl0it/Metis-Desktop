@@ -84,10 +84,13 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         background-color: {notif_card_bg};
         background-image: none;
         border-radius: 16px;
+        /* Kind colour is border-left (not a child strip) so it follows the
+           rounded corners — GTK does not clip Box backgrounds to radius. */
         border: 1px solid {border};
+        border-left: 4px solid {accent};
         padding: 0;
         color: {text};
-        box-shadow: 0 8px 24px {shadow};
+        box-shadow: {popover_shadow};
         overflow: hidden;
     }}
 
@@ -135,13 +138,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         opacity: 0.45;
     }}
 
-    .metis-notif-accent {{
-        min-width: 4px;
-        max-width: 4px;
-        background-color: {accent};
-    }}
-
-    /* Inner content inset — padding lives here so the kind strip stays edge-flush.
+    /* Inner content inset — padding lives here so content clears the border.
        Icon gets a right gap so title/body are not flush against the glyph. */
     .metis-notif-card > .metis-notif-icon-wrap,
     .metis-toast-card > .metis-notif-icon-wrap {{

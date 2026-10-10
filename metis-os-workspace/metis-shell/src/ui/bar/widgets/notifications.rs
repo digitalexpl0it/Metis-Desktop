@@ -316,20 +316,9 @@ pub(crate) fn widget_is_buttonish(widget: &impl IsA<gtk::Widget>) -> bool {
     false
 }
 
-/// Left-edge kind strip (colour set by `.metis-notif-card-* .metis-notif-accent`).
-pub(crate) fn notif_kind_accent() -> gtk::Box {
-    let accent = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .hexpand(false)
-        .vexpand(true)
-        .build();
-    accent.add_css_class("metis-notif-accent");
-    accent
-}
-
 /// Icon for toast / notification-center cards: prefer the app's icon, then the
 /// freedesktop `app_icon`, then a kind glyph. Kind colour tints the glyph only;
-/// cards use a solid fill with border + shadow.
+/// cards use a solid fill with border + left kind-colour border + shadow.
 pub(crate) fn notif_icon_badge(note: &BarNotification) -> gtk::Box {
     use crate::services::applications;
 
