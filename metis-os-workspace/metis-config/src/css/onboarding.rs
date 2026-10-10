@@ -15,7 +15,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         border-radius: 28px;
         background-color: {overlay_card_bg};
         border: 1px solid {border};
-        box-shadow: {shadow},
+        box-shadow: {popover_shadow},
                     inset 0 1px 0 rgba({text_rgb}, 0.05);
     }}
     .metis-splash-label {{
@@ -49,7 +49,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         border-radius: 24px;
         background-color: {overlay_card_bg};
         border: 1px solid {border};
-        box-shadow: {shadow},
+        box-shadow: {popover_shadow},
                     inset 0 1px 0 rgba({text_rgb}, 0.05);
         min-width: 520px;
         max-width: 520px;
@@ -166,7 +166,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         border: 1px solid {border};
         border-radius: 12px;
         padding: 12px 14px;
-        box-shadow: {shadow};
+        box-shadow: {popover_shadow};
     }}
     .metis-onboarding-wifi-sheet-title {{
         font-size: 13px;

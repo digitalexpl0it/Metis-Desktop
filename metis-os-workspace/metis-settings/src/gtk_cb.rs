@@ -18,4 +18,5 @@ pub type OptBarConfigMutate = RefCell<Option<BarConfigMutate>>;
 pub type OutputModesCache =
     Rc<RefCell<HashMap<String, (Vec<OutputModeInfo>, Option<OutputModeInfo>)>>>;
 pub type GamingPersist = Rc<dyn Fn(Box<dyn FnOnce(&mut GamingConfig)>)>;
-pub type TabBarHandler = (gtk::Box, FnStr);
+pub type TabBarButtons = Rc<RefCell<Vec<(String, gtk::ToggleButton)>>>;
+pub type TabBarHandler = (gtk::Box, FnStr, TabBarButtons);

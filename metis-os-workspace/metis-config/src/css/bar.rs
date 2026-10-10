@@ -179,14 +179,16 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         background-color: transparent;
     }}
 
+    /* Chrome (fill / border / soft shadow) lives on
+       `popover.metis-bar-popover contents` so the blur has room outside the
+       opaque card. Keep this panel transparent — only content padding. */
     .metis-bar-dropdown-panel {{
-        background-color: {raised};
-        border: 1px solid {border};
-        border-radius: {rl}px;
+        background-color: transparent;
+        border: none;
+        border-radius: 0;
         padding: 14px 16px;
         color: {text};
-        box-shadow: {shadow},
-                    inset 0 1px 0 rgba({text_rgb}, 0.05);
+        box-shadow: none;
     }}
 
     /* Popover form controls — drive from Metis theme tokens so entries and
@@ -585,15 +587,14 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         min-width: 140px;
         max-width: 240px;
     }}
-    /* Ensure volume/updates context menus keep a solid panel even when the
-       popover chrome itself is transparent (layer-shell popup pattern). */
+    /* Volume/updates context menus — tighter padding; chrome is on popover contents. */
     popover.metis-bar-volumes-menu .metis-bar-dropdown-panel {{
-        background-color: {raised};
-        border: 1px solid {border};
-        border-radius: {rl}px;
+        background-color: transparent;
+        border: none;
+        border-radius: 0;
         padding: 10px 12px;
         color: {text};
-        box-shadow: {shadow};
+        box-shadow: none;
     }}
     .metis-bar-volumes-menu-title {{
         max-width: 220px;

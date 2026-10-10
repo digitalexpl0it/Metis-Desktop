@@ -70,7 +70,12 @@ impl WidgetRefs {
             w.update(&snapshot.bluetooth);
         }
         if let Some(w) = self.network.borrow().as_ref() {
-            w.update(&snapshot.ethernet, &snapshot.wifi, snapshot.wifi_enabled);
+            w.update(
+                &snapshot.ethernet,
+                &snapshot.wifi,
+                snapshot.wifi_present,
+                snapshot.wifi_enabled,
+            );
         }
         if let Some(w) = self.vpn.borrow().as_ref() {
             w.update(&snapshot.vpn, &snapshot.vpn_feedback);

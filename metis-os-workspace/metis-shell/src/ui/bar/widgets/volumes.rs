@@ -117,10 +117,7 @@ fn show_context_menu(anchor: &gtk::Button, entry: &VolumeEntry) {
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 2);
     box_.add_css_class("metis-bar-dropdown-panel");
     box_.add_css_class("metis-bar-volumes-menu-panel");
-    box_.set_margin_top(6);
-    box_.set_margin_bottom(6);
-    box_.set_margin_start(6);
-    box_.set_margin_end(6);
+    // Soft shadow is on `popover.metis-bar-popover contents` (no popover padding).
 
     let title = gtk::Label::new(Some(&entry.label));
     title.set_xalign(0.0);

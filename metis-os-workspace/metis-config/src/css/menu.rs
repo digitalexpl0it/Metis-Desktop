@@ -5,8 +5,22 @@ use super::vars::CssVars;
 pub(crate) fn stylesheet(v: &CssVars) -> String {
     v.render(
         r#"
+    /* Menu chrome lives on `.metis-menu-panel` (not popover `contents`) so
+       `apply_menu_opacity` can set a translucent rgba fill without a solid
+       parent card covering it. */
+    popover.metis-menu-popover contents {{
+        background-color: transparent;
+        border: none;
+        box-shadow: none;
+    }}
+
     .metis-menu-panel {{
         padding: 14px;
+        background-color: {raised};
+        border: 1px solid {border};
+        border-radius: {rl}px;
+        box-shadow: {popover_shadow};
+        color: {text};
     }}
 
     /* Tooltip for the icon-only rail: a label inside the menu's GtkOverlay (drawn
@@ -21,12 +35,16 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         font-size: 12px;
     }}
 
-    /* Pin/Unpin sheet — same overlay trick as the rail tooltip. */
+    /* Pin/Unpin sheet — same overlay trick as the rail tooltip (not a
+       GtkPopover). Needs its own fill + soft shadow because
+       `.metis-bar-dropdown-panel` is transparent for real popovers. */
     .metis-menu-pin-context {{
         padding: 4px;
         border-radius: {rs}px;
         border: 1px solid {border};
         background-color: {raised};
+        box-shadow: {popover_shadow};
+        color: {text};
     }}
 
     .metis-menu-rail {{

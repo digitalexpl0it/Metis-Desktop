@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 
-use crate::gtk_cb::{OptFnStrRef, TabBarHandler};
+use crate::gtk_cb::{OptFnStrRef, TabBarButtons, TabBarHandler};
 use crate::net::{self, ActiveConn, EthDev, NetSnapshot, ProxyConfig, SavedConn, VpnConn};
 use crate::ui;
 use metis_i18n::tr;
@@ -55,12 +55,16 @@ struct Sections {
     vpn: gtk::Box,
     vpn_status: gtk::Label,
     proxy: gtk::Box,
+    stack: gtk::Stack,
+    tab_buttons: Rc<RefCell<Vec<(String, gtk::ToggleButton)>>>,
+    select_tab: Rc<dyn Fn(&str)>,
     /// Last values used to build DropDown/entry editors. Rebuilding those while a
     /// popover is open dismisses it (and wipes in-progress edits).
     last_proxy: RefCell<Option<ProxyConfig>>,
     last_active_wifi: RefCell<Option<Option<ActiveConn>>>,
     last_eth: RefCell<Option<Vec<EthDev>>>,
     last_vpn: RefCell<Option<Vec<VpnConn>>>,
+    last_wifi_present: Cell<Option<bool>>,
 }
 
 /// Build the Network page. `initial_tab` selects Wireless / DNS / Wired / VPN /
@@ -84,8 +88,8 @@ pub fn build(initial_tab: Option<&str>) -> gtk::Widget {
 
     // Pill buttons can be marked active before stack children exist; the
     // visible child is applied after all `add_named` calls below.
-    let (tab_bar, select_tab) = pill_tabs(&stack, &tabs, initial);
-    set_tab_request_handler(select_tab);
+    let (tab_bar, select_tab, tab_buttons) = pill_tabs(&stack, &tabs, initial);
+    set_tab_request_handler(select_tab.clone());
     content.append(&tab_bar);
     content.append(&stack);
 
@@ -197,10 +201,14 @@ pub fn build(initial_tab: Option<&str>) -> gtk::Widget {
         vpn: vpn_list,
         vpn_status: vpn_status.clone(),
         proxy: proxy_body,
+        stack: stack.clone(),
+        tab_buttons,
+        select_tab,
         last_proxy: RefCell::new(None),
         last_active_wifi: RefCell::new(None),
         last_eth: RefCell::new(None),
         last_vpn: RefCell::new(None),
+        last_wifi_present: Cell::new(None),
     });
 
     // Snapshot delivery: worker thread -> mpsc -> glib poll -> render.
@@ -326,13 +334,14 @@ fn resolve_initial_tab<'a>(tabs: &[(&'a str, &str)], requested: &'a str) -> &'a 
 
 /// A segmented pill-tab bar that switches `stack` between named children.
 /// Caller must call `stack.set_visible_child_name(initial)` after children exist.
-/// Returns the bar and a live `select(tab_name)` callback for external navigation.
+/// Returns the bar, a live `select(tab_name)` callback, and the button list
+/// (so tabs can be hidden when hardware is absent).
 fn pill_tabs(stack: &gtk::Stack, tabs: &[(&str, &str)], initial: &str) -> TabBarHandler {
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     bar.add_css_class("metis-settings-tabs");
     bar.set_halign(gtk::Align::Center);
 
-    let buttons: Rc<RefCell<Vec<(String, gtk::ToggleButton)>>> = Rc::new(RefCell::new(Vec::new()));
+    let buttons: TabBarButtons = Rc::new(RefCell::new(Vec::new()));
     let mut group: Option<gtk::ToggleButton> = None;
     for (name, label) in tabs {
         let btn = gtk::ToggleButton::with_label(&tr(label));
@@ -369,7 +378,7 @@ fn pill_tabs(stack: &gtk::Stack, tabs: &[(&str, &str)], initial: &str) -> TabBar
         })
     };
 
-    (bar, select)
+    (bar, select, buttons)
 }
 
 pub(crate) fn schedule_refresh(refresh: &Rc<impl Fn() + 'static>, delay_ms: u32) {
@@ -378,23 +387,45 @@ pub(crate) fn schedule_refresh(refresh: &Rc<impl Fn() + 'static>, delay_ms: u32)
 }
 
 fn render<F: Fn() + 'static>(sections: &Rc<Sections>, snap: &NetSnapshot, refresh: &Rc<F>) {
+    // Hide Wireless / Wi-Fi DNS tabs when no Wi-Fi adapter is present.
+    let wifi_present_changed = sections.last_wifi_present.get() != Some(snap.wifi_present);
+    if wifi_present_changed {
+        for (name, btn) in sections.tab_buttons.borrow().iter() {
+            if name == "wireless" || name == "dns" {
+                btn.set_visible(snap.wifi_present);
+            }
+        }
+        if !snap.wifi_present {
+            let on_wifi_tab = matches!(
+                sections.stack.visible_child_name().as_deref(),
+                Some("wireless" | "dns")
+            );
+            if on_wifi_tab {
+                (sections.select_tab)("wired");
+            }
+        }
+        sections.last_wifi_present.set(Some(snap.wifi_present));
+    }
+
     // Sync UI from nmcli without writing the radio back. Never flip the switch
     // OFF from a poll — HDMI modeset used to make nmcli report disabled and the
     // notify handler then ran `nmcli radio wifi off`.
-    sections.syncing_radio.set(true);
-    if snap.wifi_enabled && !sections.radio.is_active() {
-        sections.radio.set_active(true);
+    if snap.wifi_present {
+        sections.syncing_radio.set(true);
+        if snap.wifi_enabled && !sections.radio.is_active() {
+            sections.radio.set_active(true);
+        }
+        sections.syncing_radio.set(false);
+
+        // ---- Wi-Fi list ----
+        wireless::render_wifi_list(&sections.wifi, snap, refresh);
+
+        // ---- Known networks (button + top-slide sheet; list lives off Wireless) ----
+        wireless::update_known_button(&sections.known_btn, &snap.saved, &sections.last_saved);
     }
-    sections.syncing_radio.set(false);
-
-    // ---- Wi-Fi list ----
-    wireless::render_wifi_list(&sections.wifi, snap, refresh);
-
-    // ---- Known networks (button + top-slide sheet; list lives off Wireless) ----
-    wireless::update_known_button(&sections.known_btn, &snap.saved, &sections.last_saved);
 
     // ---- Wi-Fi DNS override (DNS tab) ----
-    {
+    if snap.wifi_present {
         let same = sections
             .last_active_wifi
             .borrow()

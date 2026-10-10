@@ -282,7 +282,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         border-radius: 999px;
         background-color: {raised};
         border: 1px solid rgba({accent_rgb}, 0.45);
-        box-shadow: {shadow};
+        box-shadow: {popover_shadow};
         color: {text};
     }}
     .metis-timer-hud-grip {{

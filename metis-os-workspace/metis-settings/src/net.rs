@@ -78,6 +78,8 @@ pub struct ProxyConfig {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct NetSnapshot {
+    /// Whether any Wi-Fi device exists (hide Wireless / Wi-Fi DNS when false).
+    pub wifi_present: bool,
     pub wifi_enabled: bool,
     pub wifi: Vec<WifiNet>,
     pub saved: Vec<SavedConn>,
@@ -91,15 +93,46 @@ pub struct NetSnapshot {
 
 /// Gather a full network snapshot (blocking — call on a worker thread).
 pub fn load_snapshot() -> NetSnapshot {
+    let wifi_present = wifi_adapter_present();
     NetSnapshot {
-        wifi_enabled: wifi_radio_enabled(),
-        wifi: wifi_networks(),
-        saved: saved_connections(),
+        wifi_present,
+        wifi_enabled: if wifi_present {
+            wifi_radio_enabled()
+        } else {
+            false
+        },
+        wifi: if wifi_present {
+            wifi_networks()
+        } else {
+            Vec::new()
+        },
+        saved: if wifi_present {
+            saved_connections()
+        } else {
+            Vec::new()
+        },
         eth: ethernet_devices(),
-        active_wifi: active_wifi_connection(),
+        active_wifi: if wifi_present {
+            active_wifi_connection()
+        } else {
+            None
+        },
         proxy: read_proxy(),
         vpn: list_vpn_connections(),
     }
+}
+
+/// True when NetworkManager reports at least one Wi-Fi device.
+pub fn wifi_adapter_present() -> bool {
+    let Some(text) = capture(
+        &["-t", "-f", "TYPE", "dev", "status"],
+        Duration::from_secs(4),
+    ) else {
+        return false;
+    };
+    text.lines()
+        .map(str::trim)
+        .any(|t| t == "wifi" || t == "802-11-wireless")
 }
 
 pub fn wifi_radio_enabled() -> bool {
@@ -190,6 +223,10 @@ fn is_wifi_connection_type(ctype: &str) -> bool {
     )
 }
 
+fn is_ethernet_device_type(dtype: &str) -> bool {
+    matches!(dtype, "ethernet" | "802-3-ethernet")
+}
+
 fn ethernet_devices() -> Vec<EthDev> {
     let Some(text) = capture(
         &["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev", "status"],
@@ -200,7 +237,7 @@ fn ethernet_devices() -> Vec<EthDev> {
     let mut devs = Vec::new();
     for line in text.lines() {
         let f = split(line);
-        if f.len() < 4 || f[1] != "ethernet" {
+        if f.len() < 4 || !is_ethernet_device_type(&f[1]) {
             continue;
         }
         let connected = f[2].starts_with("connected");
@@ -215,6 +252,16 @@ fn ethernet_devices() -> Vec<EthDev> {
         });
     }
     devs
+}
+
+/// Bring an ethernet NIC up via NetworkManager (`nmcli device connect`).
+/// Creates/activates a profile when none is active yet.
+pub fn connect_ethernet_device(device: &str) {
+    let device = device.to_string();
+    detached(
+        vec!["device".into(), "connect".into(), device],
+        Duration::from_secs(30),
+    );
 }
 
 /// Read the IPv4 config of a saved connection (blocking).

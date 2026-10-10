@@ -467,12 +467,10 @@ fn attach_entry_menu(btn: &gtk::Button, entry: &DirEntry, parent_dir: &Path) {
             return;
         };
         let popover = layer_shell_popover(true);
+        popover.add_css_class("metis-bar-popover");
         popover.set_parent(&btn);
         let panel = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        panel.set_margin_start(6);
-        panel.set_margin_end(6);
-        panel.set_margin_top(6);
-        panel.set_margin_bottom(6);
+        panel.add_css_class("metis-bar-dropdown-panel");
         popover.set_child(Some(&panel));
 
         {
@@ -605,14 +603,12 @@ fn attach_background_menu_box(list: &gtk::Box, parent_dir: Rc<PathBuf>) {
 
 fn show_background_menu(parent: &impl IsA<gtk::Widget>, parent_dir: &Path, x: f64, y: f64) {
     let popover = layer_shell_popover(false);
+    popover.add_css_class("metis-bar-popover");
     popover.set_parent(parent);
     let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
     popover.set_pointing_to(Some(&rect));
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    panel.set_margin_start(6);
-    panel.set_margin_end(6);
-    panel.set_margin_top(6);
-    panel.set_margin_bottom(6);
+    panel.add_css_class("metis-bar-dropdown-panel");
     popover.set_child(Some(&panel));
 
     let dir = parent_dir.to_path_buf();

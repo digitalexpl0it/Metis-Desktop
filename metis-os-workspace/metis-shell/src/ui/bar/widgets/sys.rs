@@ -404,6 +404,10 @@ pub struct NetworkWidget {
     eth_icon: gtk::Image,
     eth_label: gtk::Label,
     wifi_switch: gtk::Switch,
+    wifi_refresh: gtk::Button,
+    wifi_scroll: gtk::ScrolledWindow,
+    /// Mirrored from the poller — drives Wi-Fi chrome visibility.
+    wifi_present: Rc<Cell<bool>>,
     updating_switch: Rc<Cell<bool>>,
     /// Same pattern as Bluetooth: ignore poller echo after the user toggles.
     suppress_until: Rc<Cell<Instant>>,
@@ -503,6 +507,7 @@ impl NetworkWidget {
             .build();
         scroll.add_css_class("metis-net-scroll");
         panel.append(&scroll);
+        let wifi_present = Rc::new(Cell::new(true));
 
         let status_label = gtk::Label::new(Some(&metis_i18n::tr("Scanning…")));
         status_label.add_css_class("metis-net-status");
@@ -580,10 +585,15 @@ impl NetworkWidget {
             });
         }
 
-        // Trigger a scan whenever the popover opens.
-        super::super::dropdown::wire_toggle_prepare(&root, &panel, || {
-            crate::services::wifi_scan();
-        });
+        // Trigger a scan whenever the popover opens (Wi-Fi hardware only).
+        {
+            let wifi_present = wifi_present.clone();
+            super::super::dropdown::wire_toggle_prepare(&root, &panel, move || {
+                if wifi_present.get() {
+                    crate::services::wifi_scan();
+                }
+            });
+        }
 
         Self {
             root,
@@ -592,6 +602,9 @@ impl NetworkWidget {
             eth_icon,
             eth_label,
             wifi_switch,
+            wifi_refresh: refresh,
+            wifi_scroll: scroll,
+            wifi_present,
             updating_switch,
             suppress_until,
             wifi_off_streak: Cell::new(0),
@@ -603,24 +616,41 @@ impl NetworkWidget {
         &self.root
     }
 
-    pub fn update(&self, eth: &EthernetStatus, wifi: &[WifiNetwork], wifi_enabled: bool) {
+    pub fn update(
+        &self,
+        eth: &EthernetStatus,
+        wifi: &[WifiNetwork],
+        wifi_present: bool,
+        wifi_enabled: bool,
+    ) {
+        self.wifi_present.set(wifi_present);
+
         let hotplug = crate::services::wifi_hotplug_suppressed();
         let mut wifi_enabled = wifi_enabled;
-        if wifi_enabled {
-            self.wifi_off_streak.set(0);
-        } else {
-            let streak = self.wifi_off_streak.get().saturating_add(1);
-            self.wifi_off_streak.set(streak);
-            // Ignore transient "off" during/after HDMI modeset. Need a long
-            // consistent streak before the switch is allowed to show off.
-            if hotplug || streak < 6 {
-                wifi_enabled = true;
+        if wifi_present {
+            if wifi_enabled {
+                self.wifi_off_streak.set(0);
+            } else {
+                let streak = self.wifi_off_streak.get().saturating_add(1);
+                self.wifi_off_streak.set(streak);
+                // Ignore transient "off" during/after HDMI modeset. Need a long
+                // consistent streak before the switch is allowed to show off.
+                if hotplug || streak < 6 {
+                    wifi_enabled = true;
+                }
             }
+        } else {
+            wifi_enabled = false;
+            self.wifi_off_streak.set(0);
         }
 
-        icons::set_icon(&self.icon, bar_icon(eth, wifi, wifi_enabled));
-        self.root
-            .set_tooltip_text(Some(&network_tooltip(eth, wifi, wifi_enabled)));
+        icons::set_icon(&self.icon, bar_icon(eth, wifi, wifi_present, wifi_enabled));
+        self.root.set_tooltip_text(Some(&network_tooltip(
+            eth,
+            wifi,
+            wifi_present,
+            wifi_enabled,
+        )));
 
         self.eth_row.set_visible(eth.present);
         if eth.present {
@@ -635,17 +665,28 @@ impl NetworkWidget {
             self.eth_label.set_text(&eth.label);
         }
 
-        let suppressed = Instant::now() < self.suppress_until.get() || hotplug;
-        if !suppressed {
-            self.updating_switch.set(true);
-            // Poll may turn the switch ON to match NM — never OFF (only the user can).
-            if wifi_enabled && !self.wifi_switch.is_active() {
-                self.wifi_switch.set_active(true);
+        // Hide Wi-Fi chrome when no adapter (wired-only machines).
+        self.wifi_switch.set_visible(wifi_present);
+        self.wifi_refresh.set_visible(wifi_present);
+        self.wifi_scroll.set_visible(wifi_present);
+        self.inner.status_label.set_visible(wifi_present);
+        if !wifi_present {
+            self.inner.connect_box.set_visible(false);
+        }
+
+        if wifi_present {
+            let suppressed = Instant::now() < self.suppress_until.get() || hotplug;
+            if !suppressed {
+                self.updating_switch.set(true);
+                // Poll may turn the switch ON to match NM — never OFF (only the user can).
+                if wifi_enabled && !self.wifi_switch.is_active() {
+                    self.wifi_switch.set_active(true);
+                }
+                let updating = self.updating_switch.clone();
+                glib::timeout_add_local_once(Duration::from_millis(400), move || {
+                    updating.set(false);
+                });
             }
-            let updating = self.updating_switch.clone();
-            glib::timeout_add_local_once(Duration::from_millis(400), move || {
-                updating.set(false);
-            });
         }
 
         // Clear a stale "connecting" spinner once the target is active (or it
@@ -663,10 +704,21 @@ impl NetworkWidget {
         *self.inner.wifi.borrow_mut() = wifi.to_vec();
         self.inner.wifi_enabled.set(wifi_enabled);
 
-        let sig = network_signature(wifi, wifi_enabled, &self.inner.pending.borrow());
+        let sig = network_signature(
+            wifi,
+            wifi_present,
+            wifi_enabled,
+            &self.inner.pending.borrow(),
+        );
         if *self.inner.last_sig.borrow() != sig {
             *self.inner.last_sig.borrow_mut() = sig;
-            self.inner.rebuild_list();
+            if wifi_present {
+                self.inner.rebuild_list();
+            } else {
+                while let Some(child) = self.inner.list.first_child() {
+                    self.inner.list.remove(&child);
+                }
+            }
         }
     }
 }
@@ -1046,12 +1098,24 @@ fn wifi_signal_icon(signal: u8) -> &'static str {
     }
 }
 
-fn bar_icon(eth: &EthernetStatus, wifi: &[WifiNetwork], wifi_enabled: bool) -> &'static str {
-    if let Some(active) = wifi.iter().find(|n| n.active) {
+fn bar_icon(
+    eth: &EthernetStatus,
+    wifi: &[WifiNetwork],
+    wifi_present: bool,
+    wifi_enabled: bool,
+) -> &'static str {
+    if wifi_present && let Some(active) = wifi.iter().find(|n| n.active) {
         return wifi_signal_icon(active.signal);
     }
     if eth.connected {
         return "network-wired-symbolic";
+    }
+    if eth.present && !wifi_present {
+        return "network-wired-disconnected-symbolic";
+    }
+    if !wifi_present {
+        // No Wi-Fi and no ethernet — still a Network affordance for Settings.
+        return "network-wired-disconnected-symbolic";
     }
     if !wifi_enabled {
         return "network-wireless-disabled-symbolic";
@@ -1059,12 +1123,23 @@ fn bar_icon(eth: &EthernetStatus, wifi: &[WifiNetwork], wifi_enabled: bool) -> &
     "network-wireless-offline-symbolic"
 }
 
-fn network_tooltip(eth: &EthernetStatus, wifi: &[WifiNetwork], wifi_enabled: bool) -> String {
-    if let Some(active) = wifi.iter().find(|n| n.active) {
+fn network_tooltip(
+    eth: &EthernetStatus,
+    wifi: &[WifiNetwork],
+    wifi_present: bool,
+    wifi_enabled: bool,
+) -> String {
+    if wifi_present && let Some(active) = wifi.iter().find(|n| n.active) {
         return active.ssid.clone();
     }
     if eth.connected {
         return eth.label.clone();
+    }
+    if eth.present && !wifi_present {
+        return eth.label.clone();
+    }
+    if !wifi_present {
+        return metis_i18n::tr("Offline");
     }
     if !wifi_enabled {
         return metis_i18n::tr("Wi-Fi off");
@@ -1074,10 +1149,11 @@ fn network_tooltip(eth: &EthernetStatus, wifi: &[WifiNetwork], wifi_enabled: boo
 
 fn network_signature(
     wifi: &[WifiNetwork],
+    wifi_present: bool,
     enabled: bool,
     pending: &Option<(String, Instant)>,
 ) -> String {
-    let mut s = format!("e{}|", enabled as u8);
+    let mut s = format!("p{}|e{}|", wifi_present as u8, enabled as u8);
     for n in wifi {
         // Bucket the signal so minor RSSI jitter doesn't trigger a rebuild.
         s.push_str(&format!(

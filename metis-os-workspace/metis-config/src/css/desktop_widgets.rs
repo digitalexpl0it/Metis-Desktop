@@ -16,7 +16,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         border: 1px solid {border};
         border-radius: {rm}px;
         padding: 0;
-        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+        box-shadow: {popover_shadow};
     }}
     .metis-dw-confirm-sheet {{
         background-color: {surface_solid};

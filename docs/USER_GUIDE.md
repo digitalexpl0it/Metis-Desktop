@@ -111,7 +111,7 @@ Widgets appear in the order set by `bar.json#widgets`. The defaults:
 | **Weather** | Condition icon + temperature. Click for a forecast popover with hourly strip and saved locations. |
 | **Battery** | Charge level and state (hidden on desktops without a battery). Click to open Power settings. |
 | **Bluetooth** | Shown when a Bluetooth adapter is present. Click for connected devices (with battery level and charging icon when reported), plus a shortcut to Bluetooth settings. |
-| **Network** | Wired/Wi-Fi status. Click for a network popover (Wi-Fi scan/connect, Ethernet status). The signal icon stays stable during background rescans. |
+| **Network** | Wired/Wi-Fi status (one icon). Shows a Wi-Fi signal when joined, or a wired glyph when ethernet is up; on Wi-Fi-less machines the popover hides the radio/scan UI and keeps Ethernet + Network Settings. The signal icon stays stable during background rescans. |
 | **VPN** | NetworkManager VPN / WireGuard. Click for connect/disconnect per profile (bar spinner while connecting; toast + notification on result). If a password is required, the popover (or Settings) prompts and can remember it on the profile. Tooltip shows active tunnel names. **VPN Settings…** opens Settings → Network → VPN. Profiles with **Auto-connect** are brought up after login once Wi‑Fi/Ethernet is ready (one profile at a time). |
 | **Volume** | Current output volume. Click for a slider + mute. |
 | **Updates** | *(ephemeral)* Appears when software updates are pending (PackageKit, Flatpak, and/or fwupd). Badge shows the count. Click opens the updater; right-click to snooze (1 hour / tonight / 1 day) or open the updater. Hidden while snoozed or when up to date. |
@@ -989,12 +989,13 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   (reorder/remove), °F/°C unit, and an IP-geolocation toggle.
 - **Network** — Wireless / Wired / **VPN** / **DNS** / Proxy. Wi-Fi
   scan/connect/forget with zebra rows; **Known Wi‑Fi** and Wi‑Fi password as
-  top-slide sheets; wired DHCP vs static; VPN import (OpenVPN `.ovpn`,
-  WireGuard `.conf`) plus **Add OpenVPN…** / **Add WireGuard…** top-slide forms,
-  autoconnect toggle, and connect/disconnect/delete for NetworkManager profiles.
-  On Debian/Ubuntu/Mint install `network-manager-openvpn` for OpenVPN; WireGuard
-  is built into modern NetworkManager. Edge-bar **VPN** icon toggles
-  connect/disconnect.
+  top-slide sheets; wired DHCP vs static (or **Connect** when a NIC has no
+  active profile); VPN import (OpenVPN `.ovpn`, WireGuard `.conf`) plus
+  **Add OpenVPN…** / **Add WireGuard…** top-slide forms, autoconnect toggle, and
+  connect/disconnect/delete for NetworkManager profiles. Machines without a
+  Wi-Fi adapter hide the Wireless and DNS tabs. On Debian/Ubuntu/Mint install
+  `network-manager-openvpn` for OpenVPN; WireGuard is built into modern
+  NetworkManager. Edge-bar **VPN** icon toggles connect/disconnect.
 - **Calendars** — calendar accounts (local / CalDAV / Thunderbird / Microsoft
   365) used by the Notification Center calendar. **Add account** uses a
   top-slide sheet. Account metadata lives in `calendars.json`; **passwords and

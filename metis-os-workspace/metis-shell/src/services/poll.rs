@@ -160,6 +160,8 @@ pub struct BarSnapshot {
     pub bluetooth: BluetoothStatus,
     pub wifi: Vec<WifiNetwork>,
     pub ethernet: EthernetStatus,
+    /// Whether any Wi-Fi device exists (hide Wi-Fi chrome when false).
+    pub wifi_present: bool,
     pub wifi_enabled: bool,
     pub vpn: Vec<VpnStatus>,
     pub vpn_feedback: VpnFeedback,
@@ -601,10 +603,16 @@ fn poll_loop(
             5
         };
         if network_dirty || tick.is_multiple_of(network_tick) {
-            cached.wifi_enabled = read_wifi_radio_enabled();
-            if let Some(eth) = read_ethernet_status() {
-                cached.ethernet = eth;
+            if let Some(devs) = read_nm_devices() {
+                cached.wifi_present = devs.wifi_present;
+                cached.ethernet = devs.ethernet;
             }
+            // Radio state is only meaningful when a Wi-Fi adapter exists.
+            cached.wifi_enabled = if cached.wifi_present {
+                read_wifi_radio_enabled()
+            } else {
+                false
+            };
             if let Some(vpn) = read_vpn_status() {
                 if let Ok(mut names) = LAST_VPN_NAMES.lock() {
                     *names = vpn
@@ -615,7 +623,7 @@ fn poll_loop(
                 cached.vpn = vpn;
             }
             cached.vpn_feedback = read_vpn_feedback(&cached.vpn);
-            if cached.wifi_enabled {
+            if cached.wifi_present && cached.wifi_enabled {
                 if let Some(networks) = read_wifi_networks() {
                     let in_scan_grace = wifi_scan_grace_until
                         .is_some_and(|until| std::time::Instant::now() < until);
@@ -1260,15 +1268,77 @@ fn nmcli_split(line: &str) -> Vec<String> {
 
 /// One-shot Wi-Fi / ethernet read for onboarding (and other UI that is not on
 /// the bar poll tick). Prefer the poller's cached snapshot when possible.
-pub fn network_snapshot_for_ui() -> (bool, EthernetStatus, Vec<WifiNetwork>) {
-    let wifi_enabled = read_wifi_radio_enabled();
-    let ethernet = read_ethernet_status().unwrap_or_default();
-    let wifi = if wifi_enabled {
+///
+/// Returns `(wifi_present, wifi_enabled, ethernet, wifi_networks)`.
+pub fn network_snapshot_for_ui() -> (bool, bool, EthernetStatus, Vec<WifiNetwork>) {
+    let devs = read_nm_devices().unwrap_or_default();
+    let wifi_enabled = if devs.wifi_present {
+        read_wifi_radio_enabled()
+    } else {
+        false
+    };
+    let wifi = if devs.wifi_present && wifi_enabled {
         read_wifi_networks().unwrap_or_default()
     } else {
         Vec::new()
     };
-    (wifi_enabled, ethernet, wifi)
+    (devs.wifi_present, wifi_enabled, devs.ethernet, wifi)
+}
+
+#[derive(Debug, Clone, Default)]
+struct NmDevices {
+    wifi_present: bool,
+    ethernet: EthernetStatus,
+}
+
+fn is_wifi_device_type(dtype: &str) -> bool {
+    matches!(dtype, "wifi" | "802-11-wireless")
+}
+
+fn is_ethernet_device_type(dtype: &str) -> bool {
+    // Device TYPE is normally `ethernet`; accept the connection-style name too.
+    matches!(dtype, "ethernet" | "802-3-ethernet")
+}
+
+/// Single `nmcli device status` pass for Wi-Fi presence + first ethernet NIC.
+fn read_nm_devices() -> Option<NmDevices> {
+    let mut cmd = std::process::Command::new("nmcli");
+    cmd.args(["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev", "status"]);
+    let output = run_command(&mut cmd)?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut out = NmDevices::default();
+    let mut eth_found = false;
+    for line in text.lines() {
+        let fields = nmcli_split(line);
+        if fields.len() < 4 {
+            continue;
+        }
+        let dtype = fields[1].as_str();
+        if is_wifi_device_type(dtype) {
+            out.wifi_present = true;
+        }
+        if eth_found || !is_ethernet_device_type(dtype) {
+            continue;
+        }
+        eth_found = true;
+        let connected = fields[2].starts_with("connected");
+        let label = if connected {
+            let conn = fields[3].clone();
+            if conn.is_empty() || conn == "--" {
+                "Connected".to_string()
+            } else {
+                conn
+            }
+        } else {
+            "Not connected".to_string()
+        };
+        out.ethernet = EthernetStatus {
+            present: true,
+            connected,
+            label,
+        };
+    }
+    Some(out)
 }
 
 fn read_wifi_radio_enabled() -> bool {
@@ -1366,36 +1436,6 @@ fn stabilize_wifi_list(
     });
     networks.sort_by(|a, b| b.active.cmp(&a.active).then(b.signal.cmp(&a.signal)));
     networks
-}
-
-fn read_ethernet_status() -> Option<EthernetStatus> {
-    let mut cmd = std::process::Command::new("nmcli");
-    cmd.args(["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev", "status"]);
-    let output = run_command(&mut cmd)?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        let fields = nmcli_split(line);
-        if fields.len() < 4 || fields[1] != "ethernet" {
-            continue;
-        }
-        let connected = fields[2].starts_with("connected");
-        let label = if connected {
-            let conn = fields[3].clone();
-            if conn.is_empty() || conn == "--" {
-                "Connected".to_string()
-            } else {
-                conn
-            }
-        } else {
-            "Not connected".to_string()
-        };
-        return Some(EthernetStatus {
-            present: true,
-            connected,
-            label,
-        });
-    }
-    Some(EthernetStatus::default())
 }
 
 fn read_vpn_status() -> Option<Vec<VpnStatus>> {

@@ -33,7 +33,19 @@ pub(crate) fn ethernet_editor<F: Fn() + 'static>(
     card.append(&title);
 
     let Some(conn) = dev.connection.clone() else {
-        card.append(&hint(&tr("No active profile for this device.")));
+        card.append(&hint(&tr(
+            "No active profile for this device. Connect to let NetworkManager create one, then configure IPv4 / DNS.",
+        )));
+        let connect = gtk::Button::with_label(&tr("Connect"));
+        connect.add_css_class("suggested-action");
+        connect.set_halign(gtk::Align::Start);
+        let refresh = refresh.clone();
+        let device = dev.device.clone();
+        connect.connect_clicked(move |_| {
+            net::connect_ethernet_device(&device);
+            schedule_refresh(&refresh, 2500);
+        });
+        card.append(&connect);
         return card.upcast();
     };
 

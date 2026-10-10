@@ -352,7 +352,9 @@ decorations so it (and every app) gets a real titlebar.
       (`system_wallpaper_dirs` / `/usr/share/backgrounds`); pagination + async
       thumbs in Settings → Background
 - [x] Network page — wired/NIC config (DHCP vs static), Wi-Fi scan/connect/forget;
-      bar "wired-only" network click opens this page
+      bar "wired-only" network click opens this page; **wifi_present** (2026-10-09)
+      hides Wireless/DNS + bar Wi-Fi chrome on wired-only machines; eth Connect
+      when no active profile
 - [x] Network page — **VPN** tab (OpenVPN `.ovpn` + WireGuard `.conf` import,
       simple WireGuard create, connect/disconnect/delete via `nmcli`); dedicated
       edge-bar VPN icon + popover. Deferred: PPTP/L2TP/IPsec editors, full

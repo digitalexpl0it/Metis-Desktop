@@ -541,10 +541,10 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     }}
 
     .metis-bar-popover-panel {{
-        background-color: {surface};
-        border: 1px solid {border};
-        border-radius: {rm}px;
-        box-shadow: {shadow};
+        background-color: transparent;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
     }}
 
     .metis-bar-calendar {{

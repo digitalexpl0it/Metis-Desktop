@@ -25,6 +25,8 @@ pub(crate) struct CssVars {
     pub dash_shadow_up: String,
     pub font_decls: String,
     pub launcher_icon_shadow: String,
+    /// Soft drop shadow for edge-bar / overlay popovers (`offset blur color`).
+    pub popover_shadow: String,
     pub muted: String,
     pub nc_card_bg: String,
     pub nc_panel_bg: String,
@@ -117,6 +119,14 @@ impl CssVars {
         } else {
             "0 -12px 32px rgba(0, 0, 0, 0.42)".to_string()
         };
+        // Full `box-shadow` value — never use bare `{shadow}` (color-only).
+        // Keep blur modest: we cannot pad the `popover` node (that shifts
+        // placement off the anchor), so outer fringe may clip slightly.
+        let popover_shadow = if is_light {
+            format!("0 1px 3px {shadow}, 0 4px 12px {shadow}")
+        } else {
+            "0 1px 3px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.55)".to_string()
+        };
         let screenshot_toolbar_bg = dash_panel_bg.clone();
         let nc_panel_bg = dash_panel_bg.clone();
         let nc_card_bg = dash_card_bg.clone();
@@ -151,6 +161,7 @@ impl CssVars {
             dash_shadow_up,
             font_decls,
             launcher_icon_shadow,
+            popover_shadow,
             muted: theme.text_muted.clone(),
             nc_card_bg,
             nc_panel_bg,
@@ -199,6 +210,7 @@ impl CssVars {
         out = out.replace("{dash_shadow_up}", &self.dash_shadow_up);
         out = out.replace("{font_decls}", &self.font_decls);
         out = out.replace("{launcher_icon_shadow}", &self.launcher_icon_shadow);
+        out = out.replace("{popover_shadow}", &self.popover_shadow);
         out = out.replace("{muted}", &self.muted);
         out = out.replace("{nc_card_bg}", &self.nc_card_bg);
         out = out.replace("{nc_panel_bg}", &self.nc_panel_bg);

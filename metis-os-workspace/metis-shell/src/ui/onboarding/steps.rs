@@ -517,7 +517,7 @@ fn build_network() -> gtk::Widget {
             while let Some(child) = list.first_child() {
                 list.remove(&child);
             }
-            let (wifi_on, eth, networks) = crate::services::network_snapshot_for_ui();
+            let (wifi_present, wifi_on, eth, networks) = crate::services::network_snapshot_for_ui();
             *nets.borrow_mut() = networks.clone();
 
             let mut lines = Vec::new();
@@ -528,7 +528,11 @@ fn build_network() -> gtk::Widget {
                     lines.push(metis_i18n::tr("Wired: available"));
                 }
             }
-            if !wifi_on {
+            if !wifi_present {
+                if !eth.present {
+                    lines.push(metis_i18n::tr("No Wi-Fi or Ethernet adapter found"));
+                }
+            } else if !wifi_on {
                 lines.push(metis_i18n::tr("Wi-Fi radio is off"));
             } else if networks.is_empty() {
                 lines.push(metis_i18n::tr("Scanning for Wi-Fi networks…"));
@@ -539,7 +543,7 @@ fn build_network() -> gtk::Widget {
             }
             status.set_text(&lines.join("\n"));
 
-            if !wifi_on {
+            if !wifi_present || !wifi_on {
                 return;
             }
             for (i, net) in networks.iter().take(12).enumerate() {

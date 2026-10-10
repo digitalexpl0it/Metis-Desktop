@@ -112,10 +112,7 @@ fn show_context_menu(anchor: &gtk::Button) {
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 2);
     box_.add_css_class("metis-bar-dropdown-panel");
     box_.add_css_class("metis-bar-volumes-menu-panel");
-    box_.set_margin_top(2);
-    box_.set_margin_bottom(2);
-    box_.set_margin_start(2);
-    box_.set_margin_end(2);
+    // Soft shadow is on `popover.metis-bar-popover contents` (no popover padding).
 
     let title = gtk::Label::new(Some(&metis_i18n::tr("Software updates")));
     title.set_xalign(0.0);

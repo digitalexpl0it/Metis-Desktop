@@ -9,6 +9,16 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **Network icon / Settings without Wi-Fi** — detect Wi-Fi adapter presence via
+  NetworkManager; wired-only machines show a wired (or wired-offline) bar icon
+  and hide Wi-Fi radio/scan chrome in the popover; Settings hides Wireless/DNS
+  tabs and offers **Connect** on ethernet NICs that have no active profile.
+- **Edge-bar / overlay popover shadows** — soft `{popover_shadow}` on
+  `popover.metis-bar-popover contents` (GTK’s documented node); panel fill moves
+  off the inner box onto `contents`. Do not pad the `popover` node — that
+  shifts menus off the anchor (taskbar right-click). Metis Menu keeps fill +
+  shadow on `.metis-menu-panel` (transparent `contents`) so Panel opacity still
+  works; pin/unpin overlay sheet keeps its own fill + shadow.
 - **Notification cards** — solid fill (no kind gradient), light border + drop
   shadow, left kind-colour edge strip; long title/body clamps with a **⋯**
   expand control; per-card **✕** dismiss on Notification Center (and toasts).

@@ -5,6 +5,9 @@ use super::vars::CssVars;
 pub(crate) fn stylesheet(v: &CssVars) -> String {
     v.render(
         r#"
+    /* No padding/margin on the `popover` node — GTK uses that for popup
+       placement, and padding shifts the menu off the anchor (taskbar
+       right-click). Soft shadow lives on `contents` (GTK’s documented node). */
     popover.metis-bar-popover {{
         background-color: transparent;
         padding: 0;
@@ -14,8 +17,11 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
 
     popover.metis-bar-popover contents {{
         padding: 0;
-        border: none;
-        background-color: transparent;
+        border: 1px solid {border};
+        border-radius: {rl}px;
+        background-color: {raised};
+        box-shadow: {popover_shadow};
+        color: {text};
     }}
 
     popover.metis-bar-popover > arrow {{
