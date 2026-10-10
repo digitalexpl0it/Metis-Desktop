@@ -108,7 +108,12 @@ pub(crate) fn open_configure_dialog(
         rebuild();
     }
 
-    dialog.set_child(Some(&ui::dialog_sheet(&outer)));
+    // Own sheet host so Pick a Color / Font land on this modal (not behind it
+    // on the main Settings overlay).
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&ui::dialog_sheet(&outer)));
+    crate::dialog::install(&overlay);
+    dialog.set_child(Some(&overlay));
 
     {
         let dialog = dialog.clone();
@@ -118,12 +123,14 @@ pub(crate) fn open_configure_dialog(
             if let Some(refresh) = refresh_list.borrow().as_ref() {
                 refresh();
             }
+            crate::dialog::uninstall();
             dialog.close();
         });
     }
     {
         let refresh_list = refresh_list.clone();
         dialog.connect_close_request(move |_| {
+            crate::dialog::uninstall();
             if let Some(refresh) = refresh_list.borrow().as_ref() {
                 refresh();
             }

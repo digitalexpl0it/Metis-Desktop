@@ -3,6 +3,10 @@
 //! Hosted as GtkOverlay children so the sheet floats over chrome without
 //! pushing layout. When closed, overlays are invisible and `can_target=false`
 //! so they cannot steal clicks (the old Overlay pitfall on GTK 4.22).
+//!
+//! Hosts stack: the main Settings window installs one, and modal Configure
+//! dialogs install another on top so Pick a Color / Font land on the active
+//! window (not behind a modal on the parent).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -25,10 +29,12 @@ struct SheetHost {
 }
 
 thread_local! {
-    static HOST: RefCell<Option<SheetHost>> = const { RefCell::new(None) };
+    /// Stack of sheet hosts — topmost is used by [`show_sheet`] / [`dismiss`].
+    static HOSTS: RefCell<Vec<SheetHost>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Install the top-sheet host on `overlay` (chrome is the overlay's child).
+/// Install a top-sheet host on `overlay` (chrome is the overlay's child).
+/// Push onto the host stack so nested modals can own their own sheet.
 pub fn install(overlay: &gtk::Overlay) {
     // Full-bleed dimmer — paints a scrim and dismisses on click. Never use
     // opacity on the chrome itself (wallpaper bleeds through translucent UI).
@@ -108,8 +114,8 @@ pub fn install(overlay: &gtk::Overlay) {
         card.add_controller(key);
     }
 
-    HOST.with(|slot| {
-        *slot.borrow_mut() = Some(SheetHost {
+    HOSTS.with(|hosts| {
+        hosts.borrow_mut().push(SheetHost {
             dimmer,
             revealer,
             title,
@@ -119,10 +125,19 @@ pub fn install(overlay: &gtk::Overlay) {
     });
 }
 
+/// Pop the most recently installed host (call when a modal Configure window
+/// closes so sheets return to the main Settings overlay).
+pub fn uninstall() {
+    dismiss_silent();
+    HOSTS.with(|hosts| {
+        hosts.borrow_mut().pop();
+    });
+}
+
 fn show_sheet(title: &str, content: &impl IsA<gtk::Widget>, on_cancel: Rc<dyn Fn()>) {
-    HOST.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        let Some(host) = slot.as_mut() else {
+    HOSTS.with(|hosts| {
+        let mut hosts = hosts.borrow_mut();
+        let Some(host) = hosts.last_mut() else {
             return;
         };
         while let Some(child) = host.body.first_child() {
@@ -143,9 +158,10 @@ fn show_sheet(title: &str, content: &impl IsA<gtk::Widget>, on_cancel: Rc<dyn Fn
 
 /// True while a top-sheet is revealed (or animating closed still visible).
 pub fn is_open() -> bool {
-    HOST.with(|slot| {
-        slot.borrow()
-            .as_ref()
+    HOSTS.with(|hosts| {
+        hosts
+            .borrow()
+            .last()
             .map(|h| h.revealer.is_visible() || h.revealer.reveals_child())
             .unwrap_or(false)
     })
@@ -153,9 +169,9 @@ pub fn is_open() -> bool {
 
 /// Close the sheet. If `run_cancel` is true, invoke the cancel callback.
 pub fn dismiss(run_cancel: bool) {
-    HOST.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        let Some(host) = slot.as_mut() else {
+    HOSTS.with(|hosts| {
+        let mut hosts = hosts.borrow_mut();
+        let Some(host) = hosts.last_mut() else {
             return;
         };
         let cancel = if run_cancel {
@@ -183,18 +199,36 @@ pub fn dismiss_silent() {
     dismiss(false);
 }
 
+fn host_ready() -> bool {
+    HOSTS.with(|hosts| !hosts.borrow().is_empty())
+}
+
 /// Open a top-slide colour picker. `on_done(None)` = cancelled.
 ///
 /// Uses the deprecated ColorChooserWidget deliberately so the picker lives
 /// inside our top-sheet (ColorDialog always opens a separate window).
 #[allow(deprecated)]
 pub fn pick_color(initial: gdk::RGBA, on_done: Rc<dyn Fn(Option<gdk::RGBA>)>) {
+    if !host_ready() {
+        on_done(None);
+        return;
+    }
+
     let chooser = gtk::ColorChooserWidget::new();
     chooser.set_use_alpha(false);
     chooser.set_rgba(&initial);
     chooser.add_css_class("metis-settings-color-chooser");
     chooser.set_halign(gtk::Align::Fill);
     chooser.set_hexpand(true);
+
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .max_content_height(360)
+        .child(&chooser)
+        .build();
+    scroll.set_hexpand(true);
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.set_halign(gtk::Align::End);
@@ -205,21 +239,42 @@ pub fn pick_color(initial: gdk::RGBA, on_done: Rc<dyn Fn(Option<gdk::RGBA>)>) {
     let wrap = gtk::Box::new(gtk::Orientation::Vertical, 12);
     wrap.add_css_class("metis-settings-top-sheet-body");
     wrap.set_hexpand(true);
-    wrap.append(&chooser);
+    wrap.append(&scroll);
     wrap.append(&actions);
 
-    let done = on_done.clone();
-    select.connect_clicked({
-        let chooser = chooser.clone();
-        let done = done.clone();
-        move |_| {
-            let rgba = chooser.rgba();
+    let resolved = Rc::new(Cell::new(false));
+    let finish = {
+        let resolved = resolved.clone();
+        let done = on_done.clone();
+        Rc::new(move |rgba: Option<gdk::RGBA>| {
+            if resolved.get() {
+                return;
+            }
+            resolved.set(true);
             dismiss(false);
-            done(Some(rgba));
-        }
-    });
+            done(rgba);
+        })
+    };
 
-    show_sheet(&tr("Pick a Color"), &wrap, Rc::new(move || on_done(None)));
+    {
+        let chooser = chooser.clone();
+        let finish = finish.clone();
+        select.connect_clicked(move |_| {
+            finish(Some(chooser.rgba()));
+        });
+    }
+    {
+        let finish = finish.clone();
+        chooser.connect_color_activated(move |_chooser, rgba| {
+            finish(Some(*rgba));
+        });
+    }
+
+    let on_cancel = {
+        let finish = finish.clone();
+        Rc::new(move || finish(None)) as Rc<dyn Fn()>
+    };
+    show_sheet(&tr("Pick a Color"), &wrap, on_cancel);
 }
 
 /// Open a top-slide font picker. `on_done(None)` = cancelled.
@@ -231,6 +286,11 @@ pub fn pick_font(
     initial: Option<pango::FontDescription>,
     on_done: Rc<dyn Fn(Option<pango::FontDescription>)>,
 ) {
+    if !host_ready() {
+        on_done(None);
+        return;
+    }
+
     let chooser = gtk::FontChooserWidget::new();
     chooser.add_css_class("metis-settings-font-chooser");
     if let Some(desc) = initial.as_ref() {
@@ -252,26 +312,40 @@ pub fn pick_font(
     wrap.append(&chooser);
     wrap.append(&actions);
 
-    let done = on_done.clone();
-    select.connect_clicked({
-        let chooser = chooser.clone();
-        let done = done.clone();
-        move |_| {
-            let desc = chooser.font_desc();
+    let resolved = Rc::new(Cell::new(false));
+    let finish = {
+        let resolved = resolved.clone();
+        let done = on_done.clone();
+        Rc::new(move |desc: Option<pango::FontDescription>| {
+            if resolved.get() {
+                return;
+            }
+            resolved.set(true);
             dismiss(false);
             done(desc);
-        }
-    });
+        })
+    };
 
-    show_sheet(&tr("Pick a Font"), &wrap, Rc::new(move || on_done(None)));
+    {
+        let chooser = chooser.clone();
+        let finish = finish.clone();
+        select.connect_clicked(move |_| {
+            finish(chooser.font_desc());
+        });
+    }
+
+    let on_cancel = {
+        let finish = finish.clone();
+        Rc::new(move || finish(None)) as Rc<dyn Fn()>
+    };
+    show_sheet(&tr("Pick a Font"), &wrap, on_cancel);
 }
 
 /// Present arbitrary content in the top-slide sheet. Caller owns actions and
 /// dismisses via [`dismiss`] / [`dismiss_silent`]. Returns false if the host
 /// is not installed.
 pub fn present(title: &str, content: &impl IsA<gtk::Widget>, on_cancel: Rc<dyn Fn()>) -> bool {
-    let ready = HOST.with(|slot| slot.borrow().is_some());
-    if !ready {
+    if !host_ready() {
         return false;
     }
     show_sheet(title, content, on_cancel);
@@ -303,8 +377,7 @@ pub fn confirm_with_extra(
     on_accept: Rc<dyn Fn()>,
     on_cancel: Rc<dyn Fn()>,
 ) -> bool {
-    let ready = HOST.with(|slot| slot.borrow().is_some());
-    if !ready {
+    if !host_ready() {
         return false;
     }
 

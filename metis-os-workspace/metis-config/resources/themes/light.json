@@ -6,7 +6,7 @@
   "surface_raised": "#F0F0F4",
   "border": "#E2E2E8",
   "text": "#1A1A1E",
-  "text_muted": "#6B6B76",
+  "text_muted": "#4A4A54",
   "accent": ["#0099CC", "#3B8ED0", "#2EAD6A"],
   "radius_sm": 4,
   "radius_md": 6,

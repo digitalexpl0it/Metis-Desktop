@@ -1052,9 +1052,11 @@ fn apply_card_chrome(
 
     let mut extra = String::new();
     if let Some(text_rgb) = hex_to_rgb_triplet(text_color) {
+        // Hint alpha 0.82 keeps secondary lines readable on light fills.
         extra.push_str(&format!(
             ".metis-dw-card.{style_class} label {{ color: rgb({text_rgb}); }}\
-             .metis-dw-card.{style_class} .metis-dw-hint {{ color: rgba({text_rgb}, 0.72); }}\
+             .metis-dw-card.{style_class} .metis-dw-hint {{ color: rgba({text_rgb}, 0.82); }}\
+             .metis-dw-card.{style_class} .metis-dw-clock-date {{ color: rgba({text_rgb}, 0.86); }}\
              .metis-dw-card.{style_class} .metis-dw-title {{ color: rgb({text_rgb}); }}\
              .metis-dw-card.{style_class} image {{ color: rgb({text_rgb}); }}"
         ));

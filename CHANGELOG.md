@@ -9,6 +9,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **Settings colour picker / desktop widgets (light)** — Pick a Color/Font sheet
+  hosts stack per window so Configure modals can select colours (was trapped
+  behind the parent sheet); Select + double-click activate commit reliably.
+  Light-mode widget secondary text uses stronger `text` alphas (and darker
+  `text_muted`) so clock/weather/system hints stay readable.
 - **Network icon / Settings without Wi-Fi** — detect Wi-Fi adapter presence via
   NetworkManager; wired-only machines show a wired (or wired-offline) bar icon
   and hide Wi-Fi radio/scan chrome in the popover; Settings hides Wireless/DNS

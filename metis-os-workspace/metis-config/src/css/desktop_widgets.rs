@@ -73,10 +73,11 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     .metis-dw-body {{
         min-height: 40px;
     }}
+    /* Secondary copy uses text@alpha (not `{muted}` + opacity) so light-mode
+       cards stay readable on pale `surface_raised` fills. */
     .metis-dw-hint {{
-        color: {muted};
+        color: rgba({text_rgb}, 0.72);
         font-size: 0.85rem;
-        opacity: 0.9;
     }}
     .metis-dw-list {{
         padding: 0;
@@ -128,7 +129,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     }}
     .metis-dw-clock-date {{
         font-size: 0.95rem;
-        color: {muted};
+        color: rgba({text_rgb}, 0.78);
     }}
     .metis-dw-metric-label {{
         font-weight: 600;

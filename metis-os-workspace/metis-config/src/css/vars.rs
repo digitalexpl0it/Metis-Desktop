@@ -132,7 +132,7 @@ impl CssVars {
         let screenshot_toolbar_bg = dash_panel_bg.clone();
         let nc_panel_bg = dash_panel_bg.clone();
         let nc_card_bg = dash_card_bg.clone();
-        // Solid fill on layer-shell toast/NC cards — translucent rgba + 
+        // Solid fill on layer-shell toast/NC cards — translucent rgba +
         // border-radius lets wallpaper bleed through the corners (especially
         // light mode) and fights soft box-shadow.
         let toast_card_bg = raised.clone();
