@@ -7,7 +7,9 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         r#"
     /* Menu chrome lives on `.metis-menu-panel` (not popover `contents`) so
        `apply_menu_opacity` can set a translucent rgba fill without a solid
-       parent card covering it. */
+       parent card covering it. Margin gives the soft shadow room to paint —
+       GTK clips box-shadow to the popup surface, and we cannot pad the
+       `popover` node (that shifts placement off the launcher). */
     popover.metis-menu-popover contents {{
         background-color: transparent;
         border: none;
@@ -15,6 +17,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     }}
 
     .metis-menu-panel {{
+        margin: 10px;
         padding: 14px;
         background-color: {raised};
         border: 1px solid {border};
