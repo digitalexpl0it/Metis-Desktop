@@ -31,6 +31,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   beside the sRGB atlas so `outputs.json` ICC profiles apply again on the float
   scene-linear path without double-TRC before BT.2390/PQ encode.
   `wp_color_management_v1` remains opt-in (`METIS_COLOR_MGMT=1`).
+- **Metis Remote (RUDP) security** — per-IP auth rate limit / lockout
+  (`rate_limited`), session/handshake caps, password zeroize, refuse empty
+  allowlist; Settings **Unlock session when I connect** (`unlock_session_on_auth`);
+  fail-closed LAN (no bind until firewall applies); pause video/audio while the
+  session is locked. See `docs/RUDP_CLIENT.md` and `SECURITY.md`.
 
 ## [2026-10-08]
 

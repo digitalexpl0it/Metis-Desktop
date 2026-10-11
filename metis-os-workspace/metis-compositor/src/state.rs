@@ -369,6 +369,8 @@ pub struct MetisState {
         Option<smithay::reexports::calloop::channel::Channel<crate::rudp_host::RudpInputEvent>>,
     /// Shared with Quinn: active Wayland pointer lock → advertise `PointerLock`.
     pub(crate) rudp_pointer_locked: Arc<AtomicBool>,
+    /// Shared with RUDP host: PAM or ext-session-lock owns the session.
+    pub(crate) rudp_session_locked: Arc<AtomicBool>,
     pub(crate) color_mgmt: crate::color_management::ColorManagementRuntime,
     /// Idle detection + screen-blank (DPMS) + inhibitor bookkeeping.
     pub(crate) idle: crate::idle::IdleManager,
@@ -1048,6 +1050,7 @@ impl MetisState {
             rudp_input_tx,
             rudp_input_rx: Some(rudp_input_rx),
             rudp_pointer_locked: Arc::new(AtomicBool::new(false)),
+            rudp_session_locked: Arc::new(AtomicBool::new(false)),
             color_mgmt: crate::color_management::ColorManagementRuntime::new(&dh),
             idle,
             lock: crate::lock::LockState::new(),
@@ -3111,35 +3114,36 @@ impl MetisState {
                     tracing::info!("rudp host stopped (disabled in rudp.json)");
                 }
             }
-            Some((config, users, lan_only, prefs)) => {
+            Some(desired) => {
                 if let Some(host) = self.rudp_host.as_mut()
-                    && host.bind == config.bind
-                    && host.encode_prefs == prefs
+                    && host.bind == desired.config.bind
+                    && host.encode_prefs == desired.encode_prefs
                     && host.render_node_path == render_path
                 {
-                    host.allowed_users = users.clone();
-                    host.lan_only = lan_only;
+                    host.allowed_users = desired.allowed_users.clone();
+                    host.lan_only = desired.lan_only;
+                    host.unlock_session_on_auth
+                        .store(desired.unlock_session_on_auth, Ordering::Relaxed);
                     if let Ok(mut guard) = host.allowed_users_live.write() {
-                        *guard = users;
+                        *guard = desired.allowed_users;
                     }
                     tracing::info!(
                         bind = %host.bind,
                         allowed = ?host.allowed_users,
-                        "rudp host allowlist refreshed (same bind/encode)"
+                        unlock_on_auth = desired.unlock_session_on_auth,
+                        "rudp host policy refreshed (same bind/encode)"
                     );
                     return;
                 }
                 self.rudp_host = None;
                 match crate::rudp_host::RudpHostSystem::spawn(
-                    config,
+                    desired,
                     std::sync::Arc::clone(&self.stream_export),
-                    users,
-                    lan_only,
-                    prefs,
                     render_path,
                     crate::rudp_host::RudpCalloopBridge {
                         input_tx: self.rudp_input_tx.clone(),
                         pointer_locked: Arc::clone(&self.rudp_pointer_locked),
+                        session_locked: Arc::clone(&self.rudp_session_locked),
                     },
                 ) {
                     Ok(host) => {
@@ -3150,6 +3154,12 @@ impl MetisState {
                 }
             }
         }
+    }
+
+    /// Push PAM / protocol lock state to the RUDP host (pause stream while locked).
+    pub(crate) fn sync_rudp_session_locked(&self) {
+        self.rudp_session_locked
+            .store(self.session_is_locked(), Ordering::Relaxed);
     }
 
     /// Register Quinn → calloop input inject (once at startup).

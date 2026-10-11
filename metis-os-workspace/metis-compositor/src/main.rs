@@ -42,6 +42,7 @@ mod pam_auth;
 mod remote_input;
 mod render;
 mod rudp_audio;
+mod rudp_auth_guard;
 mod rudp_guard;
 mod rudp_host;
 mod rudp_identity;
@@ -194,8 +195,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rudp_host::RudpCalloopBridge {
                     input_tx: state.rudp_input_tx.clone(),
                     pointer_locked: std::sync::Arc::clone(&state.rudp_pointer_locked),
+                    session_locked: std::sync::Arc::clone(&state.rudp_session_locked),
                 },
             );
+            state.sync_rudp_session_locked();
         }
     }
 

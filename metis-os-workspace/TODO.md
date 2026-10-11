@@ -70,8 +70,10 @@ Security items from the **2026-09-27 code review** sit above product stretch.
 - [x] **3. Metis-native remote host** — **Partial→landed core (2026-10-03):**
       **RUDP** Phases 1–8 + clipboard/audio/HW decode/AV1/packet queue;
       **Metis native RDP** via `metis-rdp-host` (portal ScreenCast + FreeRDP;
-      GRD remains default on **Remote access**). Residual: multi-monitor /
-      credential parity before flipping default away from GRD; AV1 soft encode.
+      GRD remains default on **Remote access**). **2026-10-10:** RUDP auth
+      rate-limit/lockout, unlock-on-connect policy, LAN fail-closed, pause
+      stream while locked. Residual: multi-monitor / credential parity before
+      flipping default away from GRD; AV1 soft encode.
       → Wave 4c, Phase 7 §B RUDP-Stream, Phase 15 §F,
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 - [x] **4. Per-Steam-appid Gamescope profile UI** — Settings → Gaming editor for

@@ -228,6 +228,7 @@ impl MetisState {
         // Pause RDP listen without clearing remote.json.enabled. Capture/inject
         // denials remain belt-and-suspenders while locked.
         spawn_metis_remote(&["pause"]);
+        self.sync_rudp_session_locked();
         self.damaged = true;
         self.request_redraw();
     }
@@ -249,6 +250,7 @@ impl MetisState {
         tracing::info!("lock: session unlocked");
         // Resume RDP only when remote.json still wants sharing.
         spawn_metis_remote(&["resume"]);
+        self.sync_rudp_session_locked();
         self.damaged = true;
         self.request_redraw();
     }

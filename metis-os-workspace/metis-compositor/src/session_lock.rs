@@ -106,6 +106,7 @@ impl MetisState {
         };
         tracing::info!("protocol session lock active");
         crate::lock::spawn_metis_remote(&["pause"]);
+        self.sync_rudp_session_locked();
         self.damaged = true;
         self.request_redraw();
     }
@@ -117,6 +118,7 @@ impl MetisState {
         self.protocol_lock = ProtocolLock::Unlocked;
         tracing::info!("protocol session lock released");
         crate::lock::spawn_metis_remote(&["resume"]);
+        self.sync_rudp_session_locked();
         self.damaged = true;
         self.request_redraw();
     }

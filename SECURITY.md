@@ -67,6 +67,23 @@ Hardware ICC / LUT / HDR do **not** need that env var.
 Tracking: [docs/upstream/README.md](docs/upstream/README.md),
 [wayland-rs ObjectData UAF](docs/upstream/wayland-rs-server-objectdata-uaf.md).
 
+## Metis Remote (RUDP)
+
+Quinn / TLS host in the compositor (`rudp_host`); clients use TOFU
+(`known_hosts`) + PAM allowlist (`rudp.json` `allowed_users`). Passwords are
+never stored in config. Host behaviour:
+
+| Control | Behaviour |
+|---------|-----------|
+| Auth rate limit | Per peer IP: 5 failures / 60s → 60s lockout; emits `rate_limited`; exponential backoff on fails; caps on in-flight auths and authenticated sessions |
+| Unlock on connect | `unlock_session_on_auth` (default on) — session owner only; never clears `ext-session-lock` |
+| Stream while locked | Video/audio paused while Metis PAM or protocol lock is active; input/clipboard already gated |
+| LAN fail-closed | With `lan_only`, host does not bind until `firewall_applied`; Settings applies firewall before enabling |
+| Empty allowlist | Host refuses to start |
+
+Client contract: [docs/RUDP_CLIENT.md](docs/RUDP_CLIENT.md). Classic RDP/GRD
+pause-on-lock remains separate (`metis-remote pause`).
+
 ## Native libraries
 
 GTK, lcms2, OpenSSL/system TLS, libinput, PipeWire, and similar C dependencies
@@ -94,4 +111,5 @@ Tracked as **[Phase 18](metis-os-workspace/TODO.md#phase-18--security-polish-ipc
 4. ~~True per-app / per-sandbox rootless XWayland (beyond the two-bucket prototype).~~ **Done as soft policy** (Phase 18 D — class-based lazy gaming bucket + Settings; not an enforceable sandbox).
 5. Default-on colour management after a wayland-rs **server/sys** fix (no local
    ObjectData UAF workaround in-tree).
-6. GLES `MultiRenderer` compositor stretch (ScreenCast dmabuf already shipped).
+6. ~~GLES `MultiRenderer` compositor stretch~~ **Done** (Wave A/B/C 2026-10-03 —
+   hybrid MultiRenderer with SSD/blur/HDR/LUT; see Urgent #1).

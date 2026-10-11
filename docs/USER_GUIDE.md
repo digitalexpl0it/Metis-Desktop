@@ -1091,7 +1091,8 @@ not ship Win/mac clients yet; that doc is the integration contract.
 
 1. Open **Settings → Metis Remote**.
 2. Turn on **Allow Metis Remote connections**. Metis writes `~/.config/metis/rudp.json`
-   and asks the compositor to listen (default UDP **7843**).
+   and asks the compositor to listen (default UDP **7843**). With **LAN only**
+   on, the host does **not** listen until firewall rules apply successfully.
 3. Set the **UDP port** if needed (1024–65535).
 4. Under **Hardware encode**, choose **Encoder** (`Auto` / `VAAPI` / `NVENC`),
    preferred codec (H.264 default, HEVC optional with H.264 fallback), and target
@@ -1113,11 +1114,16 @@ not ship Win/mac clients yet; that doc is the integration contract.
    stream).
 5. Under **Allowed accounts**, toggle which local system users may authenticate
    (PAM). The first enable seeds your current account when the list is empty;
-   at least one account must stay allowed while the host is on.
+   at least one account must stay allowed while the host is on (empty allowlist
+   refuses to start the host).
 6. Leave **LAN only** on (default). Metis applies nftables (preferred) or ufw so
    only private / loopback / link-local sources can reach the UDP port. A
-   PolicyKit dialog may appear; use **Retry firewall apply** if needed.
-7. Note the **Host fingerprint** (SHA-256). Clients pin it on first connect (TOFU);
+   PolicyKit dialog may appear; use **Retry firewall apply** if needed. If apply
+   fails, the host stays off (fail-closed).
+7. Optionally leave **Unlock session when I connect** on (default) so a PAM login
+   as the session owner clears the Metis lock screen. Turn it off to keep the
+   desktop locked until you unlock locally (video/audio stay paused while locked).
+8. Note the **Host fingerprint** (SHA-256). Clients pin it on first connect (TOFU);
    a mismatch refuses the connection until you clear the pin.
 
 **Connect with Metis Viewer** (DRM Metis session with the host enabled):
@@ -1131,15 +1137,16 @@ not ship Win/mac clients yet; that doc is the integration contract.
    cancel); failures stay inline there (no separate modal).
 
 Metis Remote accepts pointer and keyboard on the Quinn control stream (absolute /
-relative pointer, buttons, scroll, keys). **Session lock:** if the host uses the
-Metis PAM lock (`Super+L`) and you authenticate as the **session owner** (the
-logged-in `$USER`), a successful RUDP PAM login **unlocks** the desktop — you do
-not type the password again into the lock UI. Third-party lockers
-(`ext-session-lock`, e.g. swaylock) are not cleared; allowlisted users other than
-the session owner can still connect for video but cannot unlock or inject input
-while locked. Classic RDP still pauses listen on lock (separate from Metis Remote).
-When a game locks the pointer, the host advertises `PointerLock` so the Viewer
-sends relative motion.
+relative pointer, buttons, scroll, keys). **Session lock:** while the Metis PAM
+lock or a third-party `ext-session-lock` locker is active, the host **pauses
+video and audio** (RDP-parity). With **Unlock session when I connect** on, a
+successful RUDP PAM login as the **session owner** (logged-in `$USER`) unlocks
+the Metis PAM lock so you need not type into the lock UI again. Third-party
+lockers are never cleared by RUDP; other allowlisted users never unlock and
+cannot inject input while locked. Classic RDP still pauses listen on lock
+(separate from Metis Remote). Failed PAM attempts are rate-limited per peer IP
+(`rate_limited` reject). When a game locks the pointer, the host advertises
+`PointerLock` so the Viewer sends relative motion.
 
 **Audio.** While a Viewer session is connected, Metis Remote captures the host
 **default sink monitor** (system audio via Pulse/PipeWire-pulse), encodes Opus,
@@ -1455,7 +1462,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `updates.json` | Software updates prefs: enabled, check interval, snooze, notify, auto-install security, PackageKit/Flatpak/fwupd sources, last check/error |
 | *(cache)* `~/.cache/metis/updates-snapshot.json` | Pending update list shared by Settings Check now, the edge-bar badge, and the updater |
 | `remote.json` | Classic RDP / third-party desktop sharing: enabled, backend (`gnome_rdp` default / `rustdesk` / `metis_native`), auto-start, LAN-only + firewall state |
-| `rudp.json` | Metis Remote (RUDP): enabled, UDP port (default 7843), LAN-only + firewall status, `allowed_users` (PAM), `encoder` / `codec` / `bitrate_kbps`; host TLS under `rudp/host.{crt,key}` + fingerprint |
+| `rudp.json` | Metis Remote (RUDP): enabled, UDP port (default 7843), LAN-only + firewall status, `unlock_session_on_auth`, `allowed_users` (PAM), `encoder` / `codec` / `bitrate_kbps`; host TLS under `rudp/host.{crt,key}` + fingerprint |
 | `dashboard.json` | Control Center: enabled, widgets, height %, refresh, confirm-before-kill, process monitor |
 | `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, `extra_steam_paths`, Metis MangoHud/Gamescope toggles, per-appid `gamescope_profiles` |
 | `gaming-flatpak.json` | Record of applied Flatpak gaming overrides (managed by `metis-gaming`) |

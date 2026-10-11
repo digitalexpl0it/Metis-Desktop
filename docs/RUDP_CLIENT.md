@@ -91,10 +91,20 @@ client.
 Reject reasons (`snake_case`): `not_allowed`, `auth_failed`, `protocol`,
 `rate_limited`.
 
-**Session lock (host behaviour clients should know):** authenticating as the
-Metis session owner unlocks the Metis PAM lock. Other allowlisted users can
-receive video but not inject input while locked. Third-party
-`ext-session-lock` lockers are not cleared by RUDP.
+The host **emits `rate_limited`** when a peer IP exceeds the auth failure budget
+(5 failures / 60s → 60s lockout) or when session/handshake caps are saturated.
+Clients should surface this distinctly from `auth_failed` and back off.
+
+**Session lock (host behaviour clients should know):**
+
+- When `rudp.json` `unlock_session_on_auth` is **true** (default), authenticating
+  as the Metis session owner unlocks the Metis PAM lock. When **false**, the
+  lock stays until local unlock.
+- While the session is locked (Metis PAM or `ext-session-lock`), the host
+  **pauses video and audio** (control stream stays up; input/clipboard remain
+  gated). Media resumes after unlock with a keyframe.
+- Other allowlisted users never unlock the Metis PAM lock. Third-party
+  `ext-session-lock` lockers are never cleared by RUDP.
 
 ---
 

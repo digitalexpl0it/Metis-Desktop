@@ -68,9 +68,23 @@ pub fn build() -> gtk::Widget {
     lan.set_active(cfg.borrow().lan_only);
     lan.set_halign(gtk::Align::End);
     lan.set_tooltip_text(Some(&tr(
-        "When on, Metis applies nftables/ufw rules so only LAN/link-local can reach the UDP port.",
+        "When on, Metis applies nftables/ufw rules so only LAN/link-local can reach the UDP port. \
+         The host will not listen until those rules apply successfully.",
     )));
     host_body.append(&ui::row(&tr("LAN only (recommended)"), &lan));
+
+    let unlock_on_auth = gtk::Switch::new();
+    unlock_on_auth.set_active(cfg.borrow().unlock_session_on_auth);
+    unlock_on_auth.set_halign(gtk::Align::End);
+    unlock_on_auth.set_tooltip_text(Some(&tr(
+        "When on, signing in over Metis Remote as your session account unlocks the \
+         Metis lock screen. Turn off to keep the session locked until you unlock locally \
+         (stream stays paused while locked).",
+    )));
+    host_body.append(&ui::row(
+        &tr("Unlock session when I connect"),
+        &unlock_on_auth,
+    ));
 
     let conn_addr = gtk::Label::new(None);
     conn_addr.set_xalign(0.0);
@@ -300,18 +314,51 @@ pub fn build() -> gtk::Widget {
         let persist = persist.clone();
         let toggling = toggling.clone();
         let list = list.clone();
+        let enable_sw = enable.clone();
         enable.connect_active_notify(move |sw| {
             if toggling.get() {
                 return;
             }
             let on = sw.is_active();
-            {
-                let mut c = cfg.borrow_mut();
-                c.enabled = on;
-                if on {
+            if on {
+                {
+                    let mut c = cfg.borrow_mut();
                     let user = std::env::var("USER").unwrap_or_default();
                     c.seed_current_user_if_needed(&user);
+                    // Persist allowlist/port before firewall apply; keep host off
+                    // until LAN rules succeed when lan_only is on.
+                    c.enabled = false;
                 }
+                if let Err(err) = metis_config::save_rudp_config(&cfg.borrow()) {
+                    tracing::warn!(%err, "failed to save rudp.json before enable");
+                }
+                let lan_only = cfg.borrow().lan_only;
+                if lan_only {
+                    match metis_remote::firewall_rudp_apply() {
+                        Ok(_) => {
+                            *cfg.borrow_mut() = metis_config::load_rudp_config();
+                            cfg.borrow_mut().enabled = true;
+                            let user = std::env::var("USER").unwrap_or_default();
+                            cfg.borrow_mut().seed_current_user_if_needed(&user);
+                            rebuild_accounts(&list, &cfg, &persist, &toggling);
+                            persist();
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, "rudp firewall apply failed — host stays off");
+                            *cfg.borrow_mut() = metis_config::load_rudp_config();
+                            cfg.borrow_mut().enabled = false;
+                            toggling.set(true);
+                            enable_sw.set_active(false);
+                            toggling.set(false);
+                            rebuild_accounts(&list, &cfg, &persist, &toggling);
+                            persist();
+                        }
+                    }
+                    return;
+                }
+                cfg.borrow_mut().enabled = true;
+            } else {
+                cfg.borrow_mut().enabled = false;
             }
             rebuild_accounts(&list, &cfg, &persist, &toggling);
             persist();
@@ -335,6 +382,18 @@ pub fn build() -> gtk::Widget {
                 return;
             }
             cfg.borrow_mut().lan_only = sw.is_active();
+            persist();
+        });
+    }
+    {
+        let cfg = cfg.clone();
+        let persist = persist.clone();
+        let toggling = toggling.clone();
+        unlock_on_auth.connect_active_notify(move |sw| {
+            if toggling.get() {
+                return;
+            }
+            cfg.borrow_mut().unlock_session_on_auth = sw.is_active();
             persist();
         });
     }
