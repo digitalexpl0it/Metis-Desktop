@@ -225,11 +225,22 @@ pub fn title_looks_metis_remote_session(title: &str) -> bool {
 }
 
 /// FreeRDP client **or** Viewer window hosting a Metis Remote session.
+///
+/// Metis Remote session titles alone are enough when `app_id` is unset: plain
+/// `gtk::Window` (before `set_application`) often omits xdg `app_id` on first
+/// map. Connect UI stays `Metis Viewer` and never matches the title prefix.
 pub fn looks_like_remote_viewer_session(app_id: Option<&str>, title: &str) -> bool {
     if app_id.is_some_and(id_looks_freerdp_client) {
         return true;
     }
-    app_id.is_some_and(id_looks_metis_viewer) && title_looks_metis_remote_session(title)
+    if !title_looks_metis_remote_session(title) {
+        return false;
+    }
+    match app_id {
+        None => true,
+        Some(id) if id_looks_metis_viewer(id) => true,
+        Some(_) => false,
+    }
 }
 
 #[cfg(test)]
@@ -257,9 +268,15 @@ mod freerdp_detect_tests {
             Some("com.metis.Viewer"),
             "Metis Remote — HDMI-A-1"
         ));
+        assert!(looks_like_remote_viewer_session(None, "Metis Remote"));
         assert!(!looks_like_remote_viewer_session(
             Some("com.metis.Viewer"),
             "Metis Viewer"
+        ));
+        assert!(!looks_like_remote_viewer_session(None, "Metis Viewer"));
+        assert!(!looks_like_remote_viewer_session(
+            Some("firefox"),
+            "Metis Remote"
         ));
         assert!(looks_like_remote_viewer_session(
             Some("wlfreerdp"),

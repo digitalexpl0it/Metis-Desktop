@@ -7,6 +7,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-10-11]
 
+### Fixed
+
+- **Metis Remote dedicated desktop** — session windows are plain GTK windows and
+  often had no xdg `app_id` on first map, so Metis never matched them for the
+  ephemeral remote desk. Viewer now attaches the GTK application; the compositor
+  also accepts the stable `Metis Remote` title when `app_id` is still unset.
+  Dedicated placement **maximizes** the session so the remote fills the desk
+  (edge bar remains for Super+Alt desk switching).
+
 ### Added
 
 - **Metis Remote multi-monitor (protocol v3)** — the host sends `DesktopLayout`

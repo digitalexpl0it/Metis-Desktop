@@ -1181,11 +1181,14 @@ output. The host only encodes outputs some Viewer is watching.
 
 **Metis placement (client under Metis).** Same as FreeRDP: default **Dedicated
 desktop** moves Metis Remote session window(s) onto an ephemeral workspace past
-your configured dots (accent edge-bar dot while active; Super+Alt+←/→ or Task
-View). Multi-monitor windows share that one remote desk. Choose **Window on
-current desktop** in the Metis Remote **Metis placement** control (saved with the
-host’s Display options in `viewer.json`) to keep the session on the desk you
-connected from. The Viewer connect UI always stays on the current desktop.
+your configured dots, **maximized** to fill that desk (local edge bar stays so
+you can Super+Alt+←/→ or use Task View between local desks and the remote). The
+stream already shows the host wallpaper/edge bar — Metis does not draw a second
+desktop chrome. Multi-monitor windows share that one remote desk. Choose
+**Window on current desktop** in the Metis Remote **Metis placement** control
+(saved with the host’s Display options in `viewer.json`) to keep a normal window
+on the desk you connected from. The Viewer connect UI always stays on the
+current desktop.
 
 Host identity files: `~/.config/metis/rudp/host.crt`, `host.key`, `identity.json`.
 Client pins: `~/.config/metis/rudp/known_hosts`.

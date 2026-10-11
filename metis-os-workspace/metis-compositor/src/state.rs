@@ -5120,6 +5120,10 @@ impl MetisState {
         if !already_on_desk {
             self.switch_workspace(&key, target);
         }
+        // Fill the dedicated desk (usable area under the edge bar) so Super+Alt
+        // desk switching feels like local ↔ remote integration — not a floating
+        // window on an empty workspace.
+        self.set_maximized(id, true);
         self.focus_window_id(id);
     }
 

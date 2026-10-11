@@ -16,6 +16,7 @@ use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
+use metis_config::ViewerPlacement;
 use metis_decode::{RudpCodec, open_decoder};
 use metis_i18n::tr;
 use metis_protocol::{
@@ -159,6 +160,7 @@ enum ToWorker {
 ///
 /// Returns a cancel handle while the handshake is in flight (or `None` when
 /// the attempt failed synchronously before a worker started).
+#[allow(clippy::too_many_arguments)]
 pub fn open_rudp_session(
     parent: &impl IsA<gtk::Window>,
     host: String,
@@ -166,6 +168,7 @@ pub fn open_rudp_session(
     username: String,
     mut password: String,
     monitors: MonitorChoice,
+    placement: ViewerPlacement,
     on_outcome: impl Fn(Result<(), String>) + 'static,
 ) -> Option<RudpConnectCancel> {
     let host_key = format!("{host}:{port}");
@@ -226,7 +229,13 @@ pub fn open_rudp_session(
                 drop(rx);
                 if !session_built.get() {
                     session_built.set(true);
-                    SessionUi::start(worker_tx.clone(), gtk_rx.clone(), monitors.clone());
+                    SessionUi::start(
+                        &parent,
+                        worker_tx.clone(),
+                        gtk_rx.clone(),
+                        monitors.clone(),
+                        placement,
+                    );
                     on_outcome(Ok(()));
                 }
                 // Session window owns further event polling.
@@ -555,19 +564,27 @@ impl StreamWindow {
     }
 }
 
+/// Stable product prefix — must match compositor
+/// [`title_looks_metis_remote_session`] (do not translate; connect UI is
+/// “Metis Viewer”).
+pub(crate) const RUDP_SESSION_TITLE_PREFIX: &str = "Metis Remote";
+
 /// Window title for a Metis Remote stream — always prefixed so the compositor
 /// can place session windows without matching the Viewer connect UI.
 pub(crate) fn rudp_session_window_title(output_id: &str, multi_monitor: bool) -> String {
-    let base = tr("Metis Remote");
     if !multi_monitor || output_id.is_empty() {
-        base
+        RUDP_SESSION_TITLE_PREFIX.to_string()
     } else {
-        format!("{base} — {output_id}")
+        format!("{RUDP_SESSION_TITLE_PREFIX} — {output_id}")
     }
 }
 
 /// Shared state for one Metis Remote session (all of its windows).
 struct SessionUi {
+    /// Owning GTK application — required so Wayland xdg `app_id` is set.
+    app: Option<gtk::Application>,
+    /// When [`ViewerPlacement::Workspace`], maximize to fill the dedicated desk.
+    fill_dedicated_desk: bool,
     worker_tx: Rc<Sender<ToWorker>>,
     choice: MonitorChoice,
     layout: RefCell<Vec<RudpMonitorInfo>>,
@@ -589,11 +606,16 @@ struct SessionUi {
 impl SessionUi {
     /// Build the session UI (one placeholder window) and start the event pump.
     fn start(
+        parent: &gtk::Window,
         worker_tx: Rc<Sender<ToWorker>>,
         gtk_rx: Rc<Mutex<Receiver<ToGtk>>>,
         choice: MonitorChoice,
+        placement: ViewerPlacement,
     ) {
+        let app = parent.application();
         let ui = Rc::new(Self {
+            app,
+            fill_dedicated_desk: placement == ViewerPlacement::Workspace,
             worker_tx,
             choice,
             layout: RefCell::new(Vec::new()),
@@ -729,11 +751,15 @@ impl SessionUi {
         // No transient_for: Metis must be able to move these onto the ephemeral
         // remote desk; dialogs keep an explicit parent separately.
         let win = gtk::Window::builder()
-            .title(tr("Metis Remote"))
+            .title(RUDP_SESSION_TITLE_PREFIX)
             .default_width(1280)
             .default_height(720)
             .modal(false)
             .build();
+        // Advertise `com.metis.Viewer` as xdg app_id (plain Window omits it).
+        if let Some(app) = self.app.as_ref() {
+            win.set_application(Some(app));
+        }
         win.add_css_class("metis-viewer-window");
 
         let picture = gtk::Picture::new();
@@ -776,6 +802,11 @@ impl SessionUi {
         }
         self.attach_input(&sw);
         win.present();
+        if self.fill_dedicated_desk {
+            // Ask the compositor to fill the dedicated remote desk (Metis also
+            // maximizes on place; this covers non-Metis / race before place).
+            win.maximize();
+        }
         sw
     }
 
@@ -1319,12 +1350,17 @@ mod tests {
 
     #[test]
     fn session_window_title_always_prefixes_metis_remote() {
-        let base = tr("Metis Remote");
-        assert_eq!(rudp_session_window_title("", false), base);
-        assert_eq!(rudp_session_window_title("DP-1", false), base);
+        assert_eq!(
+            rudp_session_window_title("", false),
+            RUDP_SESSION_TITLE_PREFIX
+        );
+        assert_eq!(
+            rudp_session_window_title("DP-1", false),
+            RUDP_SESSION_TITLE_PREFIX
+        );
         assert_eq!(
             rudp_session_window_title("DP-2", true),
-            format!("{base} — DP-2")
+            format!("{RUDP_SESSION_TITLE_PREFIX} — DP-2")
         );
         assert!(
             !rudp_session_window_title("DP-2", true).starts_with("DP-"),

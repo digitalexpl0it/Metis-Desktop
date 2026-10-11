@@ -1027,6 +1027,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     username.trim().to_string(),
                     password,
                     monitors,
+                    options.placement,
                     move |outcome| {
                         *rudp_cancel_cb.borrow_mut() = None;
                         *cancel_action_cb.borrow_mut() = None;
