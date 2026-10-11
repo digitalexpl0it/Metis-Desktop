@@ -878,7 +878,13 @@ fn render_local_output_frame(
         Ok(res) => {
             let empty = res.is_empty;
             *frame_states = Some(res.states);
-            if !empty || state.stream_export.forced_frame_pending() {
+            // Skip the primary-key lookup entirely while no RUDP client wants frames.
+            if state.stream_export.wants_frames()
+                && (!empty
+                    || state
+                        .stream_export
+                        .forced_frame_pending_for(output_name.as_str(), &state.primary_key()))
+            {
                 crate::stream_export::maybe_export_frame(state, renderer, render_node, output);
             }
             Ok(!empty)

@@ -371,7 +371,7 @@ pub fn pkexec_failure_message(output: &std::process::Output, context: &str) -> S
 }
 
 /// Resolve `$XDG_RUNTIME_DIR` for one-shot secrets. Refuses `/tmp` fallback.
-fn require_xdg_runtime_dir() -> Result<PathBuf, String> {
+pub(crate) fn require_xdg_runtime_dir() -> Result<PathBuf, String> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(|p| p.is_dir())

@@ -1097,7 +1097,11 @@ not ship Win/mac clients yet; that doc is the integration contract.
 4. Under **Hardware encode**, choose **Encoder** (`Auto` / `VAAPI` / `NVENC`),
    preferred codec (H.264 default, HEVC optional with H.264 fallback), and target
    **Bitrate**. Auto uses the render GPU's encoder first (VAAPI on Intel/AMD,
-   NVENC on NVIDIA) and falls back to the other GPU on hybrid systems.
+   NVENC on NVIDIA) and falls back to the other GPU on hybrid systems. With
+   **Preferred codec** AV1, Auto tries GPU AV1, then CPU **software AV1**
+   (`libsvtav1` / `libaom-av1`), then H.264/HEVC. Choose **Encoder → Software**
+   to force software AV1 only — it is CPU-heavy, so use it only when no GPU
+   encoder works.
    Nothing is captured or encoded until an authenticated client connects —
    enabling the host adds no GPU work on its own. Capture uses a LINEAR GBM
    pool; frames are converted to NV12 and encoded inside a separate
@@ -1164,6 +1168,24 @@ metis-rudp-smoke 192.168.1.10:7843 --user "$USER" --video-secs 5
 # send a short pointer/keyboard sequence on the control stream:
 metis-rudp-smoke 192.168.1.10:7843 --user "$USER" --input-smoke
 ```
+
+**Multiple monitors.** After login the host advertises its monitor layout. By
+default the Viewer shows the **primary** monitor in one window. In the Viewer
+host options tick **Open each host monitor in its own window** (saved per host as
+`rudp_separate_monitor_windows` in `viewer.json`), or run
+`metis-viewer --rudp --host HOST --all-monitors` / `--monitor DP-2` (repeatable)
+to open one window per monitor (up to 4) over a single connection; window titles
+are `Metis Remote` / `Metis Remote — OUTPUT`, and pointer/keyboard input follows
+the focused window. `metis-rudp-smoke … --monitor NAME` subscribes to a specific
+output. The host only encodes outputs some Viewer is watching.
+
+**Metis placement (client under Metis).** Same as FreeRDP: default **Dedicated
+desktop** moves Metis Remote session window(s) onto an ephemeral workspace past
+your configured dots (accent edge-bar dot while active; Super+Alt+←/→ or Task
+View). Multi-monitor windows share that one remote desk. Choose **Window on
+current desktop** in the Metis Remote **Metis placement** control (saved with the
+host’s Display options in `viewer.json`) to keep the session on the desk you
+connected from. The Viewer connect UI always stays on the current desktop.
 
 Host identity files: `~/.config/metis/rudp/host.crt`, `host.key`, `identity.json`.
 Client pins: `~/.config/metis/rudp/known_hosts`.
@@ -1232,7 +1254,13 @@ A **Metis native** RDP host (`metis-remote native enable` → `metis-rdp-host`) 
 also RDP-compatible with this viewer: it captures the Wayland session via the
 portal (PipeWire) and serves RDP on port 3389. GRD remains the supported default
 under **Settings → Remote access**. Enable **Metis native RDP** there after
-installing Metis with `metis-rdp-host` present.
+installing Metis with `metis-rdp-host` present. Like GRD, native RDP **requires
+credentials**: set a username/password under Remote access (or
+`metis-remote native set-credentials <user>` with the password on stdin) before
+enabling. The password is stored only in `$XDG_RUNTIME_DIR/metis/rdp-password`
+(mode 0600, cleared at logout — set it again after signing back in); the
+username is saved in `remote.json`. The host refuses to start, and rejects every
+login, when no password is configured.
 
 1. Install a FreeRDP client on the machine that will connect (Ubuntu):
    `sudo apt install freerdp3-wayland`  

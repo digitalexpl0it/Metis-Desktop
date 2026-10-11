@@ -196,9 +196,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     input_tx: state.rudp_input_tx.clone(),
                     pointer_locked: std::sync::Arc::clone(&state.rudp_pointer_locked),
                     session_locked: std::sync::Arc::clone(&state.rudp_session_locked),
+                    layout: std::sync::Arc::clone(&state.rudp_layout),
                 },
             );
             state.sync_rudp_session_locked();
+            state.refresh_rudp_layout();
         }
     }
 

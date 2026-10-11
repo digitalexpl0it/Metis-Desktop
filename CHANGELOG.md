@@ -5,6 +5,35 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-11]
+
+### Added
+
+- **Metis Remote multi-monitor (protocol v3)** — the host sends `DesktopLayout`
+  after login and streams only the outputs a session subscribes to (default:
+  primary; max 4), one encoder and `stream_id` per output. `metis-rudp-client`
+  adds `RudpSession::subscribe_outputs`, `SessionEvent::DesktopLayout`, and
+  `stream_id`/`output_id` on `VideoReady` / `AccessUnitEvent` with per-stream
+  reassembly (**breaking for third-party clients**, see `docs/RUDP_CLIENT.md`).
+  Metis Viewer: `--monitor NAME` / `--all-monitors`, and a per-host
+  “Open each host monitor in its own window” option (`viewer.json`
+  `rudp_separate_monitor_windows`); `metis-rudp-smoke --monitor NAME`.
+- **Metis Remote software AV1 encode** — new `soft` encoder backend
+  (`rudp.json` `"encoder": "soft"`, Settings **Encoder → Software**) using FFmpeg
+  `libsvtav1` (else `libaom-av1`) on the CPU. `Auto` with preferred AV1 now tries
+  GPU AV1 → software AV1 → GPU H.264/HEVC; `Software` forces CPU AV1 only.
+  CPU-heavy; no wire-contract change (clients already decode AV1).
+- **Metis native RDP credentials** — `metis-remote set-credentials` follows the
+  selected backend (`native set-credentials`): password in
+  `$XDG_RUNTIME_DIR/metis/rdp-password` (0600, no `/tmp` fallback), username in
+  `remote.json` (`native_rdp_username`). Status reports an honest `password_set`,
+  enabling native sharing is refused without credentials (same as GRD), and
+  `metis-rdp-host` rejects logins when the configured password is empty.
+- **Metis Remote dedicated desktop** — under Metis, Viewer stamps Metis placement
+  for RUDP like FreeRDP: default ephemeral workspace + accent edge-bar dot;
+  optional window-on-current-desk. Session windows titled `Metis Remote…` (not
+  transient to the connect UI); multi-monitor windows share one remote desk.
+
 ## [2026-10-10]
 
 ### Fixed
@@ -36,6 +65,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   allowlist; Settings **Unlock session when I connect** (`unlock_session_on_auth`);
   fail-closed LAN (no bind until firewall applies); pause video/audio while the
   session is locked. See `docs/RUDP_CLIENT.md` and `SECURITY.md`.
+- **Metis Remote enable / localhost** — firewall apply must report rules active
+  before the host turns on (fixes Enabled-but-not-listening); Viewer/`localhost`
+  prefers IPv4 to match the host’s `0.0.0.0` bind. When LAN rules already exist,
+  apply still persists `firewall_applied` (no silent skip that left the host
+  enabled but unbound until disable/re-enable prompted Polkit).
+- **Metis Remote Polkit enable** — `pkexec` was writing `firewall_applied` into
+  `/root/.config/metis/` while Settings read the user file, so after password
+  entry the switch looked dead. Persist now targets the `PKEXEC_UID` user’s
+  config; post-pkexec success no longer depends on unprivileged `nft list`.
 
 ## [2026-10-08]
 

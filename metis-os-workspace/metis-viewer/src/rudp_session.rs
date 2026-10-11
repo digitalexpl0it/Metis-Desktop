@@ -1,8 +1,13 @@
-//! Metis Remote (RUDP) session window — decode + present + input.
+//! Metis Remote (RUDP) session windows — decode + present + input.
+//!
+//! One Quinn session can carry several monitor streams (protocol v3). Each
+//! stream gets its own GTK window ([`StreamWindow`]); [`SessionUi`] owns the
+//! shared bits (layout, subscription, clipboard, audio, pointer lock).
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -13,12 +18,74 @@ use gtk::glib;
 use gtk::prelude::*;
 use metis_decode::{RudpCodec, open_decoder};
 use metis_i18n::tr;
-use metis_protocol::{RudpControlMsg, truncate_clipboard_text};
+use metis_protocol::{
+    RUDP_MAX_SUBSCRIBED_OUTPUTS, RudpControlMsg, RudpMonitorInfo, truncate_clipboard_text,
+};
 use metis_rudp_client::{
     ClientError, RudpClientConfig, RudpSession, SessionEvent, TofuMode, clear_host_pin, connect,
     pin_host, resolve_host_port,
 };
 use zeroize::Zeroize;
+
+/// Which host monitors a Viewer session streams (one window per stream).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum MonitorChoice {
+    /// Primary monitor only — the host default until `SubscribeOutputs`.
+    #[default]
+    Primary,
+    /// These outputs (`--monitor NAME`, repeatable), capped at
+    /// [`RUDP_MAX_SUBSCRIBED_OUTPUTS`]. Unknown names are skipped; none left ⇒
+    /// primary.
+    Named(Vec<String>),
+    /// Every host monitor, up to [`RUDP_MAX_SUBSCRIBED_OUTPUTS`]
+    /// (`--all-monitors` / saved `rudp_separate_monitor_windows`).
+    All,
+}
+
+impl MonitorChoice {
+    /// CLI override (`--monitor` / `--all-monitors`); `None` when neither given.
+    pub fn from_cli(monitors: &[String], all: bool) -> Option<Self> {
+        if all {
+            Some(Self::All)
+        } else if monitors.is_empty() {
+            None
+        } else {
+            Some(Self::Named(monitors.to_vec()))
+        }
+    }
+
+    /// Saved-host preference (`viewer.json` `rudp_separate_monitor_windows`).
+    pub fn from_preference(separate_windows: bool) -> Self {
+        if separate_windows {
+            Self::All
+        } else {
+            Self::Primary
+        }
+    }
+
+    /// Output ids to request for `layout`; `None` ⇒ keep the host default
+    /// (primary only), i.e. send no `SubscribeOutputs` at all.
+    fn wanted(&self, layout: &[RudpMonitorInfo]) -> Option<Vec<String>> {
+        let mut ids: Vec<String> = match self {
+            Self::Primary => return None,
+            Self::Named(names) => names
+                .iter()
+                .filter(|n| layout.iter().any(|m| &m.id == *n))
+                .cloned()
+                .collect(),
+            Self::All => {
+                // Primary first so the first window is the main screen.
+                let mut ordered: Vec<&RudpMonitorInfo> = layout.iter().collect();
+                ordered.sort_by_key(|m| !m.primary);
+                ordered.into_iter().map(|m| m.id.clone()).collect()
+            }
+        };
+        let mut seen = HashSet::new();
+        ids.retain(|id| seen.insert(id.clone()));
+        ids.truncate(RUDP_MAX_SUBSCRIBED_OUTPUTS);
+        if ids.is_empty() { None } else { Some(ids) }
+    }
+}
 
 enum ConnectAttempt {
     Ok(RudpSession),
@@ -50,6 +117,7 @@ pub struct RudpConnectCancel {
 impl RudpConnectCancel {
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
+        metis_config::clear_viewer_pending_placement();
         let _ = self.worker_tx.send(ToWorker::Shutdown);
     }
 }
@@ -97,6 +165,7 @@ pub fn open_rudp_session(
     port: u16,
     username: String,
     mut password: String,
+    monitors: MonitorChoice,
     on_outcome: impl Fn(Result<(), String>) + 'static,
 ) -> Option<RudpConnectCancel> {
     let host_key = format!("{host}:{port}");
@@ -104,6 +173,7 @@ pub fn open_rudp_session(
     let addr: SocketAddr = match resolve_host_port(&host, port) {
         Ok(a) => a,
         Err(e) => {
+            metis_config::clear_viewer_pending_placement();
             on_outcome(Err(format!("{}: {e}", tr("Invalid host address"))));
             password.zeroize();
             return None;
@@ -132,6 +202,7 @@ pub fn open_rudp_session(
             );
         })
     {
+        metis_config::clear_viewer_pending_placement();
         on_outcome(Err(format!("{}: {err}", tr("Could not start connection"))));
         return None;
     }
@@ -155,7 +226,7 @@ pub fn open_rudp_session(
                 drop(rx);
                 if !session_built.get() {
                     session_built.set(true);
-                    build_session_window(&parent, worker_tx.clone(), gtk_rx.clone());
+                    SessionUi::start(worker_tx.clone(), gtk_rx.clone(), monitors.clone());
                     on_outcome(Ok(()));
                 }
                 // Session window owns further event polling.
@@ -390,7 +461,8 @@ fn friendly_connect_error(err: &ClientError) -> String {
                 || m.to_ascii_lowercase().contains("unreachable") =>
         {
             tr("Could not reach Metis Remote. Enable it on the host \
-                 (Settings → Remote) and check the address/port.")
+                 (Settings → Metis Remote), confirm the LAN firewall applied, \
+                 and check the address/port (try 127.0.0.1 if using localhost).")
         }
         ClientError::Message(m)
             if m.contains("connection lost")
@@ -405,368 +477,626 @@ fn friendly_connect_error(err: &ClientError) -> String {
     }
 }
 
-fn build_session_window(
-    parent: &gtk::Window,
-    worker_tx: Rc<Sender<ToWorker>>,
-    gtk_rx: Rc<Mutex<Receiver<ToGtk>>>,
-) {
-    let win = gtk::Window::builder()
-        .transient_for(parent)
-        .title(tr("Metis Remote"))
-        .default_width(1280)
-        .default_height(720)
-        .modal(false)
-        .build();
-    win.add_css_class("metis-viewer-window");
-
-    let picture = gtk::Picture::new();
-    picture.set_content_fit(gtk::ContentFit::Contain);
-    picture.set_hexpand(true);
-    picture.set_vexpand(true);
-    picture.set_can_focus(true);
-
-    let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&picture));
-    let status = gtk::Label::new(Some(&tr("Waiting for video…")));
-    status.set_halign(gtk::Align::Start);
-    status.set_valign(gtk::Align::Start);
-    status.set_margin_start(12);
-    status.set_margin_top(8);
-    overlay.add_overlay(&status);
-    win.set_child(Some(&overlay));
-    win.present();
-    picture.grab_focus();
-
-    let pointer_locked = Rc::new(Cell::new(false));
-    let video_size = Rc::new(Cell::new((0u32, 0u32)));
-    let last_pos = Rc::new(Cell::new((0.0f64, 0.0f64)));
-    let decoder: Rc<Mutex<Option<Box<dyn metis_decode::VideoDecoder>>>> = Rc::new(Mutex::new(None));
-    let applying_remote_clip = Rc::new(Cell::new(false));
-    let last_remote_clip_serial = Rc::new(Cell::new(0u64));
-    let outbound_clip_serial = Rc::new(Cell::new(0u64));
-    let last_outbound_clip = Rc::new(RefCell::new(String::new()));
-    let clip_handler: Rc<Cell<Option<glib::SignalHandlerId>>> = Rc::new(Cell::new(None));
-    let audio_playback: Rc<RefCell<Option<crate::rudp_audio::RudpAudioPlayback>>> =
-        Rc::new(RefCell::new(None));
-
-    {
-        let worker_tx = worker_tx.clone();
-        let clip_handler = clip_handler.clone();
-        let audio_playback = audio_playback.clone();
-        win.connect_close_request(move |_| {
-            if let Some(id) = clip_handler.take()
-                && let Some(display) = gdk::Display::default()
-            {
-                display.clipboard().disconnect(id);
-            }
-            *audio_playback.borrow_mut() = None;
-            let _ = worker_tx.send(ToWorker::Shutdown);
-            glib::Propagation::Proceed
-        });
+/// Rectangle `(x, y, w, h)` in widget pixels that a `vw`×`vh` picture occupies
+/// inside an `aw`×`ah` widget under [`gtk::ContentFit::Contain`].
+fn contain_rect(aw: f64, ah: f64, vw: f64, vh: f64) -> (f64, f64, f64, f64) {
+    if aw <= 0.0 || ah <= 0.0 || vw <= 0.0 || vh <= 0.0 {
+        return (0.0, 0.0, aw.max(1.0), ah.max(1.0));
     }
+    let scale = (aw / vw).min(ah / vh);
+    let (w, h) = (vw * scale, vh * scale);
+    ((aw - w) / 2.0, (ah - h) / 2.0, w, h)
+}
 
-    {
-        let picture = picture.clone();
-        let status = status.clone();
-        let pointer_locked = pointer_locked.clone();
-        let video_size = video_size.clone();
-        let decoder = decoder.clone();
-        let applying_remote_clip = applying_remote_clip.clone();
-        let last_remote_clip_serial = last_remote_clip_serial.clone();
-        let last_outbound_clip = last_outbound_clip.clone();
-        let audio_playback = audio_playback.clone();
-        let win = win.clone();
+/// Logical `(width, height)` of the monitor behind a stream: the layout's
+/// logical size when known, else the decoded video size.
+fn logical_size(video: (u32, u32), monitor: Option<&RudpMonitorInfo>) -> (f64, f64) {
+    match monitor {
+        Some(m) if m.width > 0 && m.height > 0 => (f64::from(m.width), f64::from(m.height)),
+        _ => (f64::from(video.0), f64::from(video.1)),
+    }
+}
+
+/// Window-local pixels → compositor logical desktop coordinates, adding the
+/// monitor's layout origin so a second monitor lands at the right place.
+fn map_absolute(
+    x: f64,
+    y: f64,
+    (aw, ah): (f64, f64),
+    video: (u32, u32),
+    monitor: Option<&RudpMonitorInfo>,
+) -> (f64, f64) {
+    let (rx, ry, rw, rh) = contain_rect(aw, ah, f64::from(video.0), f64::from(video.1));
+    let u = ((x - rx) / rw).clamp(0.0, 1.0);
+    let v = ((y - ry) / rh).clamp(0.0, 1.0);
+    let (lw, lh) = logical_size(video, monitor);
+    let (ox, oy) = monitor.map_or((0.0, 0.0), |m| (f64::from(m.x), f64::from(m.y)));
+    // `lw - 1`: the last pixel column/row, so the far edge stays on this monitor.
+    (ox + u * (lw - 1.0).max(0.0), oy + v * (lh - 1.0).max(0.0))
+}
+
+/// Relative pointer delta in window pixels → logical pixels of the monitor.
+fn map_relative(
+    dx: f64,
+    dy: f64,
+    (aw, ah): (f64, f64),
+    video: (u32, u32),
+    monitor: Option<&RudpMonitorInfo>,
+) -> (f64, f64) {
+    let (_, _, rw, rh) = contain_rect(aw, ah, f64::from(video.0), f64::from(video.1));
+    let (lw, lh) = logical_size(video, monitor);
+    (dx * lw / rw.max(1.0), dy * lh / rh.max(1.0))
+}
+
+fn decoder_codec(name: &str) -> RudpCodec {
+    match name {
+        "h264" => RudpCodec::H264,
+        "av1" => RudpCodec::Av1,
+        _ => RudpCodec::Hevc,
+    }
+}
+
+/// One host-monitor stream: its window, decoder and pointer state.
+struct StreamWindow {
+    /// `None` until the first `VideoReady` binds this (placeholder) window.
+    stream_id: Cell<Option<u8>>,
+    output_id: RefCell<String>,
+    win: gtk::Window,
+    picture: gtk::Picture,
+    status: gtk::Label,
+    video_size: Cell<(u32, u32)>,
+    last_pos: Cell<(f64, f64)>,
+    decoder: RefCell<Option<Box<dyn metis_decode::VideoDecoder>>>,
+}
+
+impl StreamWindow {
+    fn set_status(&self, text: &str) {
+        self.status.set_text(text);
+    }
+}
+
+/// Window title for a Metis Remote stream — always prefixed so the compositor
+/// can place session windows without matching the Viewer connect UI.
+pub(crate) fn rudp_session_window_title(output_id: &str, multi_monitor: bool) -> String {
+    let base = tr("Metis Remote");
+    if !multi_monitor || output_id.is_empty() {
+        base
+    } else {
+        format!("{base} — {output_id}")
+    }
+}
+
+/// Shared state for one Metis Remote session (all of its windows).
+struct SessionUi {
+    worker_tx: Rc<Sender<ToWorker>>,
+    choice: MonitorChoice,
+    layout: RefCell<Vec<RudpMonitorInfo>>,
+    /// Last `SubscribeOutputs` list sent (`None` = never sent, host default).
+    subscribed: RefCell<Option<Vec<String>>>,
+    windows: RefCell<Vec<Rc<StreamWindow>>>,
+    /// Outputs whose window the user closed — never re-subscribed this session.
+    closed_outputs: RefCell<HashSet<String>>,
+    pointer_locked: Cell<bool>,
+    audio_playback: RefCell<Option<crate::rudp_audio::RudpAudioPlayback>>,
+    applying_remote_clip: Cell<bool>,
+    last_remote_clip_serial: Cell<u64>,
+    outbound_clip_serial: Cell<u64>,
+    last_outbound_clip: RefCell<String>,
+    clip_handler: Cell<Option<glib::SignalHandlerId>>,
+    finished: Cell<bool>,
+}
+
+impl SessionUi {
+    /// Build the session UI (one placeholder window) and start the event pump.
+    fn start(
+        worker_tx: Rc<Sender<ToWorker>>,
+        gtk_rx: Rc<Mutex<Receiver<ToGtk>>>,
+        choice: MonitorChoice,
+    ) {
+        let ui = Rc::new(Self {
+            worker_tx,
+            choice,
+            layout: RefCell::new(Vec::new()),
+            subscribed: RefCell::new(None),
+            windows: RefCell::new(Vec::new()),
+            closed_outputs: RefCell::new(HashSet::new()),
+            pointer_locked: Cell::new(false),
+            audio_playback: RefCell::new(None),
+            applying_remote_clip: Cell::new(false),
+            last_remote_clip_serial: Cell::new(0),
+            outbound_clip_serial: Cell::new(0),
+            last_outbound_clip: RefCell::new(String::new()),
+            clip_handler: Cell::new(None),
+            finished: Cell::new(false),
+        });
+        let first = ui.add_window();
+        first.picture.grab_focus();
+        ui.connect_clipboard();
+
         glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
             let Ok(rx) = gtk_rx.lock() else {
                 return glib::ControlFlow::Continue;
             };
-            for _ in 0..16 {
+            for _ in 0..32 {
                 match rx.try_recv() {
                     Ok(ToGtk::Event(ev)) => {
                         if matches!(ev, SessionEvent::Disconnected) {
-                            *audio_playback.borrow_mut() = None;
-                            status.set_text(&tr("Disconnected"));
+                            ui.finish(&tr("Disconnected"));
                             return glib::ControlFlow::Break;
                         }
-                        apply_event(
-                            &ev,
-                            &picture,
-                            &status,
-                            &pointer_locked,
-                            &video_size,
-                            &decoder,
-                            &applying_remote_clip,
-                            &last_remote_clip_serial,
-                            &last_outbound_clip,
-                            &audio_playback,
-                        );
+                        ui.handle_event(&ev);
                     }
                     Ok(_) => {}
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
-                        status.set_text(&tr("Disconnected"));
+                        ui.finish(&tr("Disconnected"));
                         return glib::ControlFlow::Break;
                     }
                 }
             }
-            if !win.is_visible() {
+            if ui.finished.get() || ui.windows.borrow().is_empty() {
                 return glib::ControlFlow::Break;
             }
             glib::ControlFlow::Continue
         });
     }
 
-    if let Some(display) = gdk::Display::default() {
+    fn send_input(&self, msg: RudpControlMsg) {
+        let _ = self.worker_tx.send(ToWorker::Input(msg));
+    }
+
+    fn monitor_for(&self, output_id: &str) -> Option<RudpMonitorInfo> {
+        self.layout
+            .borrow()
+            .iter()
+            .find(|m| m.id == output_id)
+            .cloned()
+    }
+
+    fn window_title(&self, output_id: &str) -> String {
+        rudp_session_window_title(output_id, self.layout.borrow().len() >= 2)
+    }
+
+    fn refresh_titles(&self) {
+        for sw in self.windows.borrow().iter() {
+            let title = self.window_title(&sw.output_id.borrow());
+            sw.win.set_title(Some(&title));
+        }
+    }
+
+    /// Session over: leave windows open with a final status, drop shared
+    /// resources, break Rc cycles.
+    fn finish(&self, status: &str) {
+        if self.finished.replace(true) {
+            return;
+        }
+        *self.audio_playback.borrow_mut() = None;
+        self.disconnect_clipboard();
+        for sw in self.windows.borrow().iter() {
+            sw.set_status(status);
+        }
+    }
+
+    fn disconnect_clipboard(&self) {
+        if let Some(id) = self.clip_handler.take()
+            && let Some(display) = gdk::Display::default()
+        {
+            display.clipboard().disconnect(id);
+        }
+    }
+
+    fn shutdown(&self) {
+        self.finished.set(true);
+        *self.audio_playback.borrow_mut() = None;
+        self.disconnect_clipboard();
+        metis_config::clear_viewer_pending_placement();
+        let _ = self.worker_tx.send(ToWorker::Shutdown);
+    }
+
+    /// Re-send `SubscribeOutputs` for the windows that remain after a close.
+    fn resubscribe_remaining(&self) {
+        let remaining: Vec<String> = self
+            .windows
+            .borrow()
+            .iter()
+            .map(|w| w.output_id.borrow().clone())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if remaining.is_empty() {
+            return;
+        }
+        self.send_input(RudpControlMsg::SubscribeOutputs {
+            output_ids: remaining.clone(),
+        });
+        *self.subscribed.borrow_mut() = Some(remaining);
+    }
+
+    fn on_window_closed(self: &Rc<Self>, sw: &Rc<StreamWindow>) {
+        let output = sw.output_id.borrow().clone();
+        self.windows.borrow_mut().retain(|w| !Rc::ptr_eq(w, sw));
+        if self.windows.borrow().is_empty() {
+            self.shutdown();
+            return;
+        }
+        if !output.is_empty() {
+            self.closed_outputs.borrow_mut().insert(output);
+            self.resubscribe_remaining();
+        }
+    }
+
+    /// Create one monitor window with its input controllers.
+    fn add_window(self: &Rc<Self>) -> Rc<StreamWindow> {
+        // No transient_for: Metis must be able to move these onto the ephemeral
+        // remote desk; dialogs keep an explicit parent separately.
+        let win = gtk::Window::builder()
+            .title(tr("Metis Remote"))
+            .default_width(1280)
+            .default_height(720)
+            .modal(false)
+            .build();
+        win.add_css_class("metis-viewer-window");
+
+        let picture = gtk::Picture::new();
+        picture.set_content_fit(gtk::ContentFit::Contain);
+        picture.set_hexpand(true);
+        picture.set_vexpand(true);
+        picture.set_can_focus(true);
+
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&picture));
+        let status = gtk::Label::new(Some(&tr("Waiting for video…")));
+        status.set_halign(gtk::Align::Start);
+        status.set_valign(gtk::Align::Start);
+        status.set_margin_start(12);
+        status.set_margin_top(8);
+        overlay.add_overlay(&status);
+        win.set_child(Some(&overlay));
+
+        let sw = Rc::new(StreamWindow {
+            stream_id: Cell::new(None),
+            output_id: RefCell::new(String::new()),
+            win: win.clone(),
+            picture: picture.clone(),
+            status,
+            video_size: Cell::new((0, 0)),
+            last_pos: Cell::new((0.0, 0.0)),
+            decoder: RefCell::new(None),
+        });
+        self.windows.borrow_mut().push(Rc::clone(&sw));
+
+        {
+            let ui = Rc::downgrade(self);
+            let sw_weak = Rc::downgrade(&sw);
+            win.connect_close_request(move |_| {
+                if let (Some(ui), Some(sw)) = (ui.upgrade(), sw_weak.upgrade()) {
+                    ui.on_window_closed(&sw);
+                }
+                glib::Propagation::Proceed
+            });
+        }
+        self.attach_input(&sw);
+        win.present();
+        sw
+    }
+
+    fn attach_input(self: &Rc<Self>, sw: &Rc<StreamWindow>) {
+        let picture = &sw.picture;
+        {
+            let ui: Weak<SessionUi> = Rc::downgrade(self);
+            let sw_weak = Rc::downgrade(sw);
+            let motion = gtk::EventControllerMotion::new();
+            motion.connect_motion(move |_, x, y| {
+                let (Some(ui), Some(sw)) = (ui.upgrade(), sw_weak.upgrade()) else {
+                    return;
+                };
+                let video = sw.video_size.get();
+                if video.0 == 0 || video.1 == 0 {
+                    return;
+                }
+                let area = (
+                    f64::from(sw.picture.width().max(1)),
+                    f64::from(sw.picture.height().max(1)),
+                );
+                let monitor = ui.monitor_for(&sw.output_id.borrow());
+                if ui.pointer_locked.get() {
+                    let (lx, ly) = sw.last_pos.get();
+                    sw.last_pos.set((x, y));
+                    let (dx, dy) = map_relative(x - lx, y - ly, area, video, monitor.as_ref());
+                    if dx != 0.0 || dy != 0.0 {
+                        ui.send_input(RudpControlMsg::PointerRelative { dx, dy });
+                    }
+                } else {
+                    sw.last_pos.set((x, y));
+                    let (ax, ay) = map_absolute(x, y, area, video, monitor.as_ref());
+                    ui.send_input(RudpControlMsg::PointerAbsolute { x: ax, y: ay });
+                }
+            });
+            picture.add_controller(motion);
+        }
+
+        {
+            let click = gtk::GestureClick::new();
+            click.set_button(0);
+            let ui = Rc::downgrade(self);
+            click.connect_pressed(move |g, _, _, _| {
+                if let Some(ui) = ui.upgrade() {
+                    ui.send_input(RudpControlMsg::PointerButton {
+                        button: map_gdk_button(g.current_button()),
+                        pressed: true,
+                    });
+                }
+            });
+            let ui = Rc::downgrade(self);
+            click.connect_released(move |g, _, _, _| {
+                if let Some(ui) = ui.upgrade() {
+                    ui.send_input(RudpControlMsg::PointerButton {
+                        button: map_gdk_button(g.current_button()),
+                        pressed: false,
+                    });
+                }
+            });
+            picture.add_controller(click);
+        }
+
+        {
+            let ui = Rc::downgrade(self);
+            let scroll = gtk::EventControllerScroll::new(
+                gtk::EventControllerScrollFlags::BOTH_AXES
+                    | gtk::EventControllerScrollFlags::DISCRETE,
+            );
+            scroll.connect_scroll(move |_, dx, dy| {
+                if let Some(ui) = ui.upgrade() {
+                    ui.send_input(RudpControlMsg::PointerScroll { dx, dy: -dy });
+                }
+                glib::Propagation::Stop
+            });
+            picture.add_controller(scroll);
+        }
+
+        {
+            // Keyboard events reach only the focused window — that is the
+            // "active monitor" for typing.
+            let keys = gtk::EventControllerKey::new();
+            let ui = Rc::downgrade(self);
+            keys.connect_key_pressed(move |_, key, _, _| {
+                if let (Some(ui), Some(evdev)) = (ui.upgrade(), gdk_key_to_evdev(key)) {
+                    ui.send_input(RudpControlMsg::Key {
+                        keycode: evdev,
+                        pressed: true,
+                    });
+                }
+                glib::Propagation::Proceed
+            });
+            let ui = Rc::downgrade(self);
+            keys.connect_key_released(move |_, key, _, _| {
+                if let (Some(ui), Some(evdev)) = (ui.upgrade(), gdk_key_to_evdev(key)) {
+                    ui.send_input(RudpControlMsg::Key {
+                        keycode: evdev,
+                        pressed: false,
+                    });
+                }
+            });
+            picture.add_controller(keys);
+        }
+    }
+
+    /// Mirror the local clipboard to the host (one watcher for all windows).
+    fn connect_clipboard(self: &Rc<Self>) {
+        let Some(display) = gdk::Display::default() else {
+            return;
+        };
         let clipboard = display.clipboard();
-        let worker_tx = worker_tx.clone();
-        let applying_remote_clip = applying_remote_clip.clone();
-        let outbound_clip_serial = outbound_clip_serial.clone();
-        let last_outbound_clip = last_outbound_clip.clone();
+        let ui = Rc::downgrade(self);
         let id = clipboard.connect_changed(move |cb| {
-            if applying_remote_clip.get() {
+            let Some(strong) = ui.upgrade() else {
+                return;
+            };
+            if strong.applying_remote_clip.get() {
                 return;
             }
-            let worker_tx = worker_tx.clone();
-            let applying_remote_clip = applying_remote_clip.clone();
-            let outbound_clip_serial = outbound_clip_serial.clone();
-            let last_outbound_clip = last_outbound_clip.clone();
+            let ui = ui.clone();
             cb.read_text_async(gio::Cancellable::NONE, move |result| {
-                if applying_remote_clip.get() {
+                let Some(ui) = ui.upgrade() else {
+                    return;
+                };
+                if ui.applying_remote_clip.get() {
                     return;
                 }
                 let Ok(Some(text)) = result else {
                     return;
                 };
                 let text = truncate_clipboard_text(text.as_str()).to_string();
-                if text.is_empty() || *last_outbound_clip.borrow() == text {
+                if text.is_empty() || *ui.last_outbound_clip.borrow() == text {
                     return;
                 }
-                *last_outbound_clip.borrow_mut() = text.clone();
-                let serial = outbound_clip_serial.get().wrapping_add(1);
-                outbound_clip_serial.set(serial);
-                let _ = worker_tx.send(ToWorker::Input(RudpControlMsg::ClipboardSet {
+                *ui.last_outbound_clip.borrow_mut() = text.clone();
+                let serial = ui.outbound_clip_serial.get().wrapping_add(1);
+                ui.outbound_clip_serial.set(serial);
+                ui.send_input(RudpControlMsg::ClipboardSet {
                     mime: "text/plain;charset=utf-8".into(),
                     text,
                     serial,
-                }));
+                });
             });
         });
-        clip_handler.set(Some(id));
+        self.clip_handler.set(Some(id));
     }
 
-    {
-        let worker_tx = worker_tx.clone();
-        let pointer_locked = pointer_locked.clone();
-        let video_size = video_size.clone();
-        let last_pos = last_pos.clone();
-        let picture_motion = picture.clone();
-        let motion = gtk::EventControllerMotion::new();
-        motion.connect_motion(move |_, x, y| {
-            let (vw, vh) = video_size.get();
-            if vw == 0 || vh == 0 {
-                return;
-            }
-            let aw = picture_motion.width().max(1) as f64;
-            let ah = picture_motion.height().max(1) as f64;
-            if pointer_locked.get() {
-                let (lx, ly) = last_pos.get();
-                let dx = (x - lx) * (vw as f64 / aw);
-                let dy = (y - ly) * (vh as f64 / ah);
-                last_pos.set((x, y));
-                if dx != 0.0 || dy != 0.0 {
-                    let _ =
-                        worker_tx.send(ToWorker::Input(RudpControlMsg::PointerRelative { dx, dy }));
+    fn handle_event(self: &Rc<Self>, ev: &SessionEvent) {
+        match ev {
+            SessionEvent::DesktopLayout { monitors } => self.on_layout(monitors),
+            SessionEvent::VideoReady {
+                width,
+                height,
+                codec,
+                stream_id,
+                output_id,
+            } => self.on_video_ready(*width, *height, codec, *stream_id, output_id),
+            SessionEvent::AudioReady {
+                sample_rate,
+                channels,
+                codec: _,
+            } => match crate::rudp_audio::RudpAudioPlayback::start(*sample_rate, *channels) {
+                Ok(playback) => {
+                    *self.audio_playback.borrow_mut() = Some(playback);
                 }
-            } else {
-                last_pos.set((x, y));
-                let _ = worker_tx.send(ToWorker::Input(RudpControlMsg::PointerAbsolute {
-                    x: (x / aw) * vw as f64,
-                    y: (y / ah) * vh as f64,
-                }));
-            }
-        });
-        picture.add_controller(motion);
-    }
-
-    {
-        let click = gtk::GestureClick::new();
-        click.set_button(0);
-        let worker_tx_press = worker_tx.clone();
-        click.connect_pressed(move |g, _, _, _| {
-            let _ = worker_tx_press.send(ToWorker::Input(RudpControlMsg::PointerButton {
-                button: map_gdk_button(g.current_button()),
-                pressed: true,
-            }));
-        });
-        let worker_tx_rel = worker_tx.clone();
-        click.connect_released(move |g, _, _, _| {
-            let _ = worker_tx_rel.send(ToWorker::Input(RudpControlMsg::PointerButton {
-                button: map_gdk_button(g.current_button()),
-                pressed: false,
-            }));
-        });
-        picture.add_controller(click);
-    }
-
-    {
-        let worker_tx = worker_tx.clone();
-        let scroll = gtk::EventControllerScroll::new(
-            gtk::EventControllerScrollFlags::BOTH_AXES | gtk::EventControllerScrollFlags::DISCRETE,
-        );
-        scroll.connect_scroll(move |_, dx, dy| {
-            let _ = worker_tx.send(ToWorker::Input(RudpControlMsg::PointerScroll {
-                dx,
-                dy: -dy,
-            }));
-            glib::Propagation::Stop
-        });
-        picture.add_controller(scroll);
-    }
-
-    {
-        let keys = gtk::EventControllerKey::new();
-        let worker_tx_down = worker_tx.clone();
-        keys.connect_key_pressed(move |_, key, _, _| {
-            if let Some(evdev) = gdk_key_to_evdev(key) {
-                let _ = worker_tx_down.send(ToWorker::Input(RudpControlMsg::Key {
-                    keycode: evdev,
-                    pressed: true,
-                }));
-            }
-            glib::Propagation::Proceed
-        });
-        let worker_tx_up = worker_tx.clone();
-        keys.connect_key_released(move |_, key, _, _| {
-            if let Some(evdev) = gdk_key_to_evdev(key) {
-                let _ = worker_tx_up.send(ToWorker::Input(RudpControlMsg::Key {
-                    keycode: evdev,
-                    pressed: false,
-                }));
-            }
-        });
-        picture.add_controller(keys);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn apply_event(
-    ev: &SessionEvent,
-    picture: &gtk::Picture,
-    status: &gtk::Label,
-    pointer_locked: &Rc<Cell<bool>>,
-    video_size: &Rc<Cell<(u32, u32)>>,
-    decoder: &Rc<Mutex<Option<Box<dyn metis_decode::VideoDecoder>>>>,
-    applying_remote_clip: &Rc<Cell<bool>>,
-    last_remote_clip_serial: &Rc<Cell<u64>>,
-    last_outbound_clip: &Rc<RefCell<String>>,
-    audio_playback: &Rc<RefCell<Option<crate::rudp_audio::RudpAudioPlayback>>>,
-) {
-    match ev {
-        SessionEvent::VideoReady {
-            width,
-            height,
-            codec,
-        } => {
-            video_size.set((*width, *height));
-            let codec_label = codec.clone();
-            let codec = match codec.as_str() {
-                "h264" => RudpCodec::H264,
-                "av1" => RudpCodec::Av1,
-                _ => RudpCodec::Hevc,
-            };
-            if let Ok(dec) = open_decoder(codec, *width, *height)
-                && let Ok(mut g) = decoder.lock()
-            {
-                status.set_text(&format!(
-                    "{width}×{height} {codec_label} · {}",
-                    dec.info().decoder_name
-                ));
-                *g = Some(dec);
-            } else {
-                status.set_text(&format!("{width}×{height} {codec_label}"));
-            }
-        }
-        SessionEvent::AudioReady {
-            sample_rate,
-            channels,
-            codec: _,
-        } => match crate::rudp_audio::RudpAudioPlayback::start(*sample_rate, *channels) {
-            Ok(playback) => {
-                *audio_playback.borrow_mut() = Some(playback);
-            }
-            Err(err) => {
-                tracing::warn!(%err, "rudp audio: playback unavailable");
-            }
-        },
-        SessionEvent::AudioPacket {
-            seq,
-            pts_us: _,
-            data,
-        } => {
-            if let Some(playback) = audio_playback.borrow().as_ref() {
-                playback.push_packet(*seq, data);
-            }
-        }
-        SessionEvent::PointerLock { locked } => {
-            pointer_locked.set(*locked);
-            if *locked {
-                status.set_text(&tr("Pointer lock — relative mouse"));
-            }
-        }
-        SessionEvent::ClipboardSet {
-            mime: _,
-            text,
-            serial,
-        } => {
-            if *serial != 0 && last_remote_clip_serial.get() == *serial {
-                return;
-            }
-            last_remote_clip_serial.set(*serial);
-            // Seed before set_text so a delayed changed→read_text doesn't echo.
-            *last_outbound_clip.borrow_mut() = text.clone();
-            if let Some(display) = gdk::Display::default() {
-                applying_remote_clip.set(true);
-                display.clipboard().set_text(text);
-                applying_remote_clip.set(false);
-            }
-        }
-        SessionEvent::AccessUnit(au) => {
-            let Ok(mut g) = decoder.lock() else {
-                return;
-            };
-            if g.is_none() {
-                let (w, h) = video_size.get();
-                if w == 0 {
-                    return;
+                Err(err) => {
+                    tracing::warn!(%err, "rudp audio: playback unavailable");
                 }
-                let codec = match au.codec.as_str() {
-                    "h264" => RudpCodec::H264,
-                    "av1" => RudpCodec::Av1,
-                    _ => RudpCodec::Hevc,
-                };
-                if let Ok(d) = open_decoder(codec, w, h) {
-                    if !pointer_locked.get() {
-                        status.set_text(&format!(
-                            "{w}×{h} {} · {}",
-                            au.codec,
-                            d.info().decoder_name
-                        ));
+            },
+            SessionEvent::AudioPacket {
+                seq,
+                pts_us: _,
+                data,
+            } => {
+                if let Some(playback) = self.audio_playback.borrow().as_ref() {
+                    playback.push_packet(*seq, data);
+                }
+            }
+            SessionEvent::PointerLock { locked } => {
+                self.pointer_locked.set(*locked);
+                if *locked {
+                    for sw in self.windows.borrow().iter() {
+                        sw.set_status(&tr("Pointer lock — relative mouse"));
                     }
-                    *g = Some(d);
-                } else {
-                    return;
                 }
             }
-            if let Some(dec) = g.as_mut()
-                && let Ok(Some(frame)) = dec.push_au(&au.data)
-            {
-                video_size.set((frame.width, frame.height));
-                present_rgba(picture, &frame.rgba, frame.width, frame.height);
+            SessionEvent::ClipboardSet {
+                mime: _,
+                text,
+                serial,
+            } => {
+                if *serial != 0 && self.last_remote_clip_serial.get() == *serial {
+                    return;
+                }
+                self.last_remote_clip_serial.set(*serial);
+                // Seed before set_text so a delayed changed→read_text doesn't echo.
+                *self.last_outbound_clip.borrow_mut() = text.clone();
+                if let Some(display) = gdk::Display::default() {
+                    self.applying_remote_clip.set(true);
+                    display.clipboard().set_text(text);
+                    self.applying_remote_clip.set(false);
+                }
+            }
+            SessionEvent::AccessUnit(au) => self.on_access_unit(au),
+            SessionEvent::Disconnected => self.finish(&tr("Disconnected")),
+        }
+    }
+
+    /// Host topology: remember it, pick the outputs to stream, retitle windows.
+    fn on_layout(&self, monitors: &[RudpMonitorInfo]) {
+        *self.layout.borrow_mut() = monitors.to_vec();
+        self.refresh_titles();
+        for sw in self.windows.borrow().iter() {
+            let output = sw.output_id.borrow();
+            if !output.is_empty() && !monitors.iter().any(|m| m.id == *output) {
+                sw.set_status(&tr("Monitor disconnected"));
             }
         }
-        SessionEvent::Disconnected => {
-            *audio_playback.borrow_mut() = None;
-            status.set_text(&tr("Disconnected"));
+
+        let closed = self.closed_outputs.borrow();
+        let wanted = self.choice.wanted(monitors).map(|mut ids| {
+            ids.retain(|id| !closed.contains(id));
+            ids
+        });
+        drop(closed);
+        let Some(wanted) = wanted.filter(|ids| !ids.is_empty()) else {
+            return;
+        };
+        if self.subscribed.borrow().as_ref() == Some(&wanted) {
+            return;
+        }
+        tracing::info!(outputs = ?wanted, "metis-viewer: subscribing to outputs");
+        self.send_input(RudpControlMsg::SubscribeOutputs {
+            output_ids: wanted.clone(),
+        });
+        *self.subscribed.borrow_mut() = Some(wanted);
+    }
+
+    fn window_for_stream(&self, stream_id: u8) -> Option<Rc<StreamWindow>> {
+        self.windows
+            .borrow()
+            .iter()
+            .find(|w| w.stream_id.get() == Some(stream_id))
+            .cloned()
+    }
+
+    fn on_video_ready(
+        self: &Rc<Self>,
+        width: u32,
+        height: u32,
+        codec: &str,
+        stream_id: u8,
+        output_id: &str,
+    ) {
+        if self.closed_outputs.borrow().contains(output_id) {
+            return;
+        }
+        let existing = self.window_for_stream(stream_id);
+        let sw = match existing {
+            Some(sw) => sw,
+            None => {
+                // Reuse the placeholder window first, then open more.
+                let placeholder = self
+                    .windows
+                    .borrow()
+                    .iter()
+                    .find(|w| w.stream_id.get().is_none())
+                    .cloned();
+                match placeholder {
+                    Some(sw) => sw,
+                    None => self.add_window(),
+                }
+            }
+        };
+        sw.stream_id.set(Some(stream_id));
+        *sw.output_id.borrow_mut() = output_id.to_string();
+        sw.win.set_title(Some(&self.window_title(output_id)));
+        sw.video_size.set((width, height));
+
+        let codec_label = codec.to_string();
+        let opened = open_decoder(decoder_codec(codec), width, height).ok();
+        match opened {
+            Some(dec) => {
+                if !self.pointer_locked.get() {
+                    sw.set_status(&format!(
+                        "{width}×{height} {codec_label} · {}",
+                        dec.info().decoder_name
+                    ));
+                }
+                *sw.decoder.borrow_mut() = Some(dec);
+            }
+            None => {
+                *sw.decoder.borrow_mut() = None;
+                sw.set_status(&format!("{width}×{height} {codec_label}"));
+            }
+        }
+    }
+
+    fn on_access_unit(&self, au: &metis_rudp_client::AccessUnitEvent) {
+        // VideoReady for this stream hasn't arrived (or its window was closed).
+        let Some(sw) = self.window_for_stream(au.stream_id) else {
+            return;
+        };
+        let mut slot = sw.decoder.borrow_mut();
+        if slot.is_none() {
+            let (w, h) = sw.video_size.get();
+            if w == 0 {
+                return;
+            }
+            let Ok(d) = open_decoder(decoder_codec(&au.codec), w, h) else {
+                return;
+            };
+            if !self.pointer_locked.get() {
+                sw.set_status(&format!("{w}×{h} {} · {}", au.codec, d.info().decoder_name));
+            }
+            *slot = Some(d);
+        }
+        if let Some(dec) = slot.as_mut()
+            && let Ok(Some(frame)) = dec.push_au(&au.data)
+        {
+            sw.video_size.set((frame.width, frame.height));
+            present_rgba(&sw.picture, &frame.rgba, frame.width, frame.height);
         }
     }
 }
@@ -856,4 +1186,149 @@ async fn clear_pin_dialog(parent: &gtk::Window, got: &str, pinned: &str) -> bool
         .cancel_button(0)
         .build();
     matches!(dialog.choose_future(Some(parent)).await, Ok(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mon(id: &str, x: i32, y: i32, w: u32, h: u32, primary: bool) -> RudpMonitorInfo {
+        RudpMonitorInfo {
+            id: id.into(),
+            name: id.into(),
+            x,
+            y,
+            width: w,
+            height: h,
+            scale: 1.0,
+            primary,
+        }
+    }
+
+    #[test]
+    fn contain_rect_letterboxes() {
+        // 16:9 video in a square widget → bars top and bottom.
+        let (x, y, w, h) = contain_rect(1000.0, 1000.0, 1920.0, 1080.0);
+        assert!(x.abs() < 1e-9);
+        assert!((w - 1000.0).abs() < 1e-9);
+        assert!((h - 562.5).abs() < 1e-9);
+        assert!((y - 218.75).abs() < 1e-9);
+        // Degenerate input never divides by zero.
+        let (_, _, w, h) = contain_rect(0.0, 0.0, 0.0, 0.0);
+        assert!(w >= 1.0 && h >= 1.0);
+    }
+
+    #[test]
+    fn absolute_pointer_adds_monitor_origin() {
+        let left = mon("DP-1", 0, 0, 1920, 1080, true);
+        let right = mon("DP-2", 1920, 0, 2560, 1440, false);
+        let area = (1920.0, 1080.0);
+        // Centre of the left window.
+        let (x, y) = map_absolute(960.0, 540.0, area, (1920, 1080), Some(&left));
+        assert!((x - 959.5).abs() < 1.0 && (y - 539.5).abs() < 1.0);
+        // Top-left of the right monitor lands at its layout origin.
+        let (x, y) = map_absolute(0.0, 0.0, (2560.0, 1440.0), (2560, 1440), Some(&right));
+        assert_eq!((x, y), (1920.0, 0.0));
+        // Bottom-right stays on the right monitor (last pixel, not the next).
+        let (x, y) = map_absolute(2560.0, 1440.0, (2560.0, 1440.0), (2560, 1440), Some(&right));
+        assert_eq!((x, y), (1920.0 + 2559.0, 1439.0));
+    }
+
+    #[test]
+    fn absolute_pointer_uses_logical_not_physical_size() {
+        // HiDPI: 3840x2160 video, 1920x1080 logical monitor at (100, 50).
+        let hidpi = RudpMonitorInfo {
+            scale: 2.0,
+            ..mon("eDP-1", 100, 50, 1920, 1080, true)
+        };
+        let (x, y) = map_absolute(0.0, 0.0, (1920.0, 1080.0), (3840, 2160), Some(&hidpi));
+        assert_eq!((x, y), (100.0, 50.0));
+        let (x, _) = map_absolute(1920.0, 0.0, (1920.0, 1080.0), (3840, 2160), Some(&hidpi));
+        assert_eq!(x, 100.0 + 1919.0);
+    }
+
+    #[test]
+    fn absolute_pointer_without_layout_falls_back_to_video_size() {
+        let (x, y) = map_absolute(0.0, 0.0, (960.0, 540.0), (1920, 1080), None);
+        assert_eq!((x, y), (0.0, 0.0));
+        let (x, y) = map_absolute(960.0, 540.0, (960.0, 540.0), (1920, 1080), None);
+        assert_eq!((x, y), (1919.0, 1079.0));
+    }
+
+    #[test]
+    fn pointer_ignores_letterbox_bars() {
+        // Click inside the top bar clamps to the video's top edge.
+        let m = mon("DP-1", 0, 0, 1920, 1080, true);
+        let (_, y) = map_absolute(500.0, 10.0, (1000.0, 1000.0), (1920, 1080), Some(&m));
+        assert_eq!(y, 0.0);
+    }
+
+    #[test]
+    fn relative_pointer_scales_to_logical() {
+        let m = mon("DP-1", 0, 0, 1920, 1080, true);
+        let (dx, dy) = map_relative(10.0, -5.0, (960.0, 540.0), (1920, 1080), Some(&m));
+        assert!((dx - 20.0).abs() < 1e-9 && (dy + 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn monitor_choice_primary_sends_nothing() {
+        let layout = vec![mon("DP-1", 0, 0, 1920, 1080, true)];
+        assert_eq!(MonitorChoice::Primary.wanted(&layout), None);
+    }
+
+    #[test]
+    fn monitor_choice_all_is_primary_first_and_capped() {
+        let layout = vec![
+            mon("A", 0, 0, 1, 1, false),
+            mon("B", 1, 0, 1, 1, false),
+            mon("C", 2, 0, 1, 1, true),
+            mon("D", 3, 0, 1, 1, false),
+            mon("E", 4, 0, 1, 1, false),
+        ];
+        let got = MonitorChoice::All.wanted(&layout).expect("some");
+        assert_eq!(got.len(), RUDP_MAX_SUBSCRIBED_OUTPUTS);
+        assert_eq!(got[0], "C", "primary window first");
+    }
+
+    #[test]
+    fn monitor_choice_named_skips_unknown() {
+        let layout = vec![
+            mon("DP-1", 0, 0, 1, 1, true),
+            mon("DP-2", 1, 0, 1, 1, false),
+        ];
+        let named = MonitorChoice::Named(vec!["DP-2".into(), "nope".into(), "DP-2".into()]);
+        assert_eq!(named.wanted(&layout), Some(vec!["DP-2".to_string()]));
+        let none = MonitorChoice::Named(vec!["nope".into()]);
+        assert_eq!(none.wanted(&layout), None, "falls back to host primary");
+    }
+
+    #[test]
+    fn monitor_choice_cli_beats_preference() {
+        assert_eq!(MonitorChoice::from_cli(&[], false), None);
+        assert_eq!(MonitorChoice::from_cli(&[], true), Some(MonitorChoice::All));
+        assert_eq!(
+            MonitorChoice::from_cli(&["DP-1".into()], false),
+            Some(MonitorChoice::Named(vec!["DP-1".into()]))
+        );
+        assert_eq!(
+            MonitorChoice::from_preference(false),
+            MonitorChoice::Primary
+        );
+        assert_eq!(MonitorChoice::from_preference(true), MonitorChoice::All);
+    }
+
+    #[test]
+    fn session_window_title_always_prefixes_metis_remote() {
+        let base = tr("Metis Remote");
+        assert_eq!(rudp_session_window_title("", false), base);
+        assert_eq!(rudp_session_window_title("DP-1", false), base);
+        assert_eq!(
+            rudp_session_window_title("DP-2", true),
+            format!("{base} — DP-2")
+        );
+        assert!(
+            !rudp_session_window_title("DP-2", true).starts_with("DP-"),
+            "must not use bare connector name"
+        );
+    }
 }

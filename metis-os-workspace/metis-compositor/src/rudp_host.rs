@@ -12,19 +12,26 @@
 //! - [`crate::rudp_guard`] auto-disables the host after an unclean session end
 //!   while it was running, so a crash can never become a login crash loop.
 //!
-//! Frame path: wake → `take_latest` → bounded fence wait → worker encode →
-//! bounded outbound packet queue. Phase 6 fans packets to authenticated
-//! sessions (keyframes on uni-stream, deltas as FEC'd datagrams). Phase 7 maps
-//! control-stream input onto calloop → [`crate::remote_input`] and advertises
-//! Wayland pointer lock.
+//! Frame path: wake → `take_latest_all` → bounded fence wait → per-output
+//! worker encode → bounded outbound packet queue. Phase 6 fans packets to
+//! authenticated sessions (keyframes on uni-stream, deltas as FEC'd datagrams).
+//! Phase 7 maps control-stream input onto calloop → [`crate::remote_input`] and
+//! advertises Wayland pointer lock.
+//!
+//! Multi-monitor (protocol v3): the compositor publishes the desktop topology
+//! into [`RudpLayoutShared`]; every session gets `DesktopLayout` after auth and
+//! on change, and picks outputs with `SubscribeOutputs` (default: primary). The
+//! union of all sessions' subscriptions drives [`StreamExportHub`]; each output
+//! has its own encoder + `stream_id` and its packets reach only the sessions
+//! subscribed to that output.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -36,10 +43,10 @@ use metis_encode::{
     EncoderBackend, EncoderConfig, HwEncoder, NullEncoder, RudpCodec, open_isolated_encoder,
 };
 use metis_protocol::{
-    RUDP_AUDIO_CHANNELS, RUDP_AUDIO_SAMPLE_RATE, RUDP_DEFAULT_DATAGRAM_BUDGET,
-    RUDP_PROTOCOL_VERSION, ReliableAccessUnit, RudpControlMsg, RudpDamageRect, RudpRejectReason,
-    build_media_datagrams, codec_from_str, encode_rudp_frame, truncate_clipboard_text,
-    try_decode_rudp_frame,
+    MediaDatagramParams, RUDP_AUDIO_CHANNELS, RUDP_AUDIO_SAMPLE_RATE, RUDP_DEFAULT_DATAGRAM_BUDGET,
+    RUDP_MAX_SUBSCRIBED_OUTPUTS, RUDP_PROTOCOL_VERSION, ReliableAccessUnit, RudpControlMsg,
+    RudpDamageRect, RudpMonitorInfo, RudpRejectReason, build_media_datagrams, codec_from_str,
+    encode_rudp_frame, truncate_clipboard_text, try_decode_rudp_frame,
 };
 use quinn::Endpoint;
 use smithay::reexports::calloop;
@@ -73,18 +80,33 @@ const ENCODER_BACKOFF: [Duration; 3] = [
 const ENCODER_HEALTHY_RESET: Duration = Duration::from_secs(60);
 /// Keep a warm worker this long after the last client leaves.
 const ENCODER_IDLE_CLOSE: Duration = Duration::from_secs(15);
-/// Encoded AU outbox depth — absorbs keyframe write stalls without dropping
-/// every intervening delta (latest-wins would).
-const PACKET_OUTBOX_CAP: usize = 16;
+/// Encoded AU outbox depth (all streams) — absorbs keyframe write stalls
+/// without dropping every intervening delta (latest-wins would). Sized for
+/// [`RUDP_MAX_SUBSCRIBED_OUTPUTS`] streams at the old single-stream depth.
+const PACKET_OUTBOX_CAP: usize = 16 * RUDP_MAX_SUBSCRIBED_OUTPUTS;
+
+/// One encoded access unit tagged with the output stream it belongs to.
+#[derive(Debug, Clone)]
+pub struct OutboundPacket {
+    /// Demux key advertised in `VideoReady` / carried on the wire.
+    pub stream_id: u8,
+    /// Output name (also the `output_id` in `VideoReady` / `DesktopLayout`).
+    pub output_id: String,
+    /// Encode dimensions of this packet's stream.
+    pub width: u32,
+    pub height: u32,
+    pub packet: EncodedPacket,
+}
 
 /// Bounded encoded-packet queue between the frame thread and the Quinn pump.
 ///
-/// Push never blocks. Under pressure, oldest non-keyframes are dropped first;
-/// an incoming keyframe always gets a slot (dropping the oldest packet if the
-/// queue is all keyframes). An incoming delta is dropped only when the queue is
-/// full of keyframes.
+/// Push never blocks. Under pressure, oldest non-keyframes are dropped first
+/// (preferring the incoming packet's own stream so one busy monitor cannot
+/// starve another); an incoming keyframe always gets a slot (dropping the
+/// oldest packet if the queue is all keyframes). An incoming delta is dropped
+/// only when the queue is full of keyframes.
 pub struct PacketOutbox {
-    inner: Mutex<VecDeque<EncodedPacket>>,
+    inner: Mutex<VecDeque<OutboundPacket>>,
 }
 
 impl PacketOutbox {
@@ -94,7 +116,14 @@ impl PacketOutbox {
         }
     }
 
-    fn push(&self, pkt: EncodedPacket) {
+    /// Index of the oldest droppable delta, same stream first.
+    fn evict_candidate(q: &VecDeque<OutboundPacket>, stream_id: u8) -> Option<usize> {
+        q.iter()
+            .position(|p| !p.packet.is_keyframe && p.stream_id == stream_id)
+            .or_else(|| q.iter().position(|p| !p.packet.is_keyframe))
+    }
+
+    fn push(&self, pkt: OutboundPacket) {
         let Ok(mut q) = self.inner.lock() else {
             return;
         };
@@ -102,8 +131,8 @@ impl PacketOutbox {
             q.push_back(pkt);
             return;
         }
-        if pkt.is_keyframe {
-            if let Some(idx) = q.iter().position(|p| !p.is_keyframe) {
+        if pkt.packet.is_keyframe {
+            if let Some(idx) = Self::evict_candidate(&q, pkt.stream_id) {
                 q.remove(idx);
             } else {
                 let _ = q.pop_front();
@@ -111,14 +140,14 @@ impl PacketOutbox {
             q.push_back(pkt);
             return;
         }
-        if let Some(idx) = q.iter().position(|p| !p.is_keyframe) {
+        if let Some(idx) = Self::evict_candidate(&q, pkt.stream_id) {
             q.remove(idx);
             q.push_back(pkt);
         }
         // else: all keyframes — drop the incoming delta
     }
 
-    fn pop(&self) -> Option<EncodedPacket> {
+    fn pop(&self) -> Option<OutboundPacket> {
         self.inner.lock().ok()?.pop_front()
     }
 
@@ -137,7 +166,7 @@ impl PacketOutbox {
     fn seqs(&self) -> Vec<u64> {
         self.inner
             .lock()
-            .map(|q| q.iter().map(|p| p.seq).collect())
+            .map(|q| q.iter().map(|p| p.packet.seq).collect())
             .unwrap_or_default()
     }
 }
@@ -207,6 +236,53 @@ impl RudpInputEvent {
     }
 }
 
+/// Desktop topology snapshot shared between calloop (writer) and the Quinn
+/// runtime (reader). The compositor calls [`Self::publish`] whenever outputs,
+/// geometry, scale or the primary output change; the host re-sends
+/// `DesktopLayout` to every session when [`Self::generation`] moves.
+#[derive(Debug, Default)]
+pub struct RudpLayoutShared {
+    /// 0 until the first non-empty publish; bumped on every change.
+    generation: AtomicU64,
+    monitors: Mutex<Vec<RudpMonitorInfo>>,
+}
+
+impl RudpLayoutShared {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the layout. Returns `true` (and bumps the generation) only when
+    /// it differs from the current snapshot, so callers may publish freely.
+    pub fn publish(&self, monitors: Vec<RudpMonitorInfo>) -> bool {
+        let Ok(mut cur) = self.monitors.lock() else {
+            return false;
+        };
+        if *cur == monitors {
+            return false;
+        }
+        *cur = monitors;
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        true
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Consistent `(generation, monitors)` pair.
+    pub fn snapshot(&self) -> (u64, Vec<RudpMonitorInfo>) {
+        match self.monitors.lock() {
+            Ok(guard) => (self.generation.load(Ordering::SeqCst), guard.clone()),
+            Err(_) => (0, Vec::new()),
+        }
+    }
+
+    pub fn monitors(&self) -> Vec<RudpMonitorInfo> {
+        self.monitors.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+}
+
 /// Calloop inject sender + shared flags for the Quinn runtime.
 #[derive(Clone)]
 pub struct RudpCalloopBridge {
@@ -214,6 +290,8 @@ pub struct RudpCalloopBridge {
     pub pointer_locked: Arc<AtomicBool>,
     /// True while Metis PAM lock or `ext-session-lock` owns the session.
     pub session_locked: Arc<AtomicBool>,
+    /// Desktop topology for `DesktopLayout` / subscription resolution.
+    pub layout: Arc<RudpLayoutShared>,
 }
 
 /// Desired host bind + policy from `rudp.json` / `METIS_RUDP_HOST`.
@@ -366,16 +444,14 @@ impl RudpHostSystem {
         let clipboard_serial = Arc::new(AtomicU64::new(0));
         let active_sessions = Arc::new(AtomicUsize::new(0));
         let audio = Arc::new(RudpAudioShared::new());
-        let video = Arc::new(VideoShared {
-            packet_outbox: Arc::clone(&packet_outbox),
-            width: AtomicU32::new(0),
-            height: AtomicU32::new(0),
-            codec: AtomicU8::new(codec_to_u8(to_encode_codec(encode_prefs.codec))),
-            active_sessions: Arc::clone(&active_sessions),
-            session_joins: AtomicU64::new(0),
-            clipboard_out: Arc::clone(&clipboard_out),
-            audio: Arc::clone(&audio),
-        });
+        let video = Arc::new(VideoShared::new(
+            Arc::clone(&packet_outbox),
+            Arc::clone(&active_sessions),
+            Arc::clone(&clipboard_out),
+            Arc::clone(&audio),
+            Arc::clone(&bridge.layout),
+            Arc::clone(&hub),
+        ));
         let audio_join = Some(rudp_audio::spawn_audio_supervisor(
             Arc::clone(&stop),
             Arc::clone(&active_sessions),
@@ -635,21 +711,149 @@ fn codec_wire_name(raw: u8) -> &'static str {
     }
 }
 
+/// What the host advertises for one output stream in `VideoReady`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StreamInfo {
+    stream_id: u8,
+    output_id: String,
+    width: u32,
+    height: u32,
+    /// Codec of the encoder actually running (may differ from the preference
+    /// after a fallback).
+    codec: u8,
+}
+
+#[derive(Default)]
+struct StreamTableInner {
+    ids: HashMap<String, u8>,
+    infos: HashMap<String, StreamInfo>,
+}
+
+/// Host-global output → `stream_id` registry plus the live encode parameters
+/// of every running output stream. Ids are the lowest free value in `0..=255`
+/// and are recycled once no session subscribes to an output any more.
+struct StreamTable {
+    inner: Mutex<StreamTableInner>,
+    /// Bumped when an advertised [`StreamInfo`] changes (drives `VideoReady`).
+    generation: AtomicU64,
+}
+
+impl StreamTable {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(StreamTableInner::default()),
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    fn bump(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn alloc_id(inner: &mut StreamTableInner, output: &str) -> Option<u8> {
+        if let Some(id) = inner.ids.get(output) {
+            return Some(*id);
+        }
+        let used: HashSet<u8> = inner.ids.values().copied().collect();
+        let id = (0..=u8::MAX).find(|id| !used.contains(id))?;
+        inner.ids.insert(output.to_string(), id);
+        Some(id)
+    }
+
+    /// Record the live encode parameters for `output`; returns its stream id.
+    fn publish(&self, output: &str, width: u32, height: u32, codec: u8) -> Option<u8> {
+        let mut inner = self.inner.lock().ok()?;
+        let stream_id = Self::alloc_id(&mut inner, output)?;
+        let info = StreamInfo {
+            stream_id,
+            output_id: output.to_string(),
+            width,
+            height,
+            codec,
+        };
+        if inner.infos.get(output) != Some(&info) {
+            inner.infos.insert(output.to_string(), info);
+            drop(inner);
+            self.bump();
+        }
+        Some(stream_id)
+    }
+
+    /// Forget streams for outputs outside `keep` (ids become reusable).
+    fn retain(&self, keep: &[String]) {
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        let before = inner.ids.len() + inner.infos.len();
+        inner.ids.retain(|name, _| keep.iter().any(|k| k == name));
+        inner.infos.retain(|name, _| keep.iter().any(|k| k == name));
+        let changed = before != inner.ids.len() + inner.infos.len();
+        drop(inner);
+        if changed {
+            self.bump();
+        }
+    }
+
+    /// Live streams, ordered by `stream_id`.
+    fn snapshot(&self) -> Vec<StreamInfo> {
+        let Ok(inner) = self.inner.lock() else {
+            return Vec::new();
+        };
+        let mut infos: Vec<StreamInfo> = inner.infos.values().cloned().collect();
+        infos.sort_by_key(|i| i.stream_id);
+        infos
+    }
+}
+
 /// State shared by the frame pipeline thread and the Quinn runtime.
 struct VideoShared {
     packet_outbox: Arc<PacketOutbox>,
-    /// Current encode size (0 until the first frame is encoded).
-    width: AtomicU32,
-    height: AtomicU32,
-    /// Codec of the encoder actually running (may differ from the preference
-    /// after a fallback) — advertised to clients in `VideoReady`.
-    codec: AtomicU8,
+    /// Per-output stream ids + advertised encode parameters.
+    streams: StreamTable,
+    /// Desktop topology published by calloop.
+    layout: Arc<RudpLayoutShared>,
+    /// Export hub whose subscribed set follows the union of session requests.
+    hub: Arc<StreamExportHub>,
+    /// A session joined / left / changed its subscription — re-resolve.
+    subs_dirty: AtomicBool,
+    /// Layout generation the subscriptions were last resolved against.
+    subs_layout_gen: AtomicU64,
     /// Authenticated sessions; > 0 ⇒ export + encode demand.
     active_sessions: Arc<AtomicUsize>,
-    /// Monotonic join counter — a change makes the frame thread emit an IDR.
+    /// Monotonic join counter — a change makes the frame thread emit an IDR
+    /// on every stream.
     session_joins: AtomicU64,
     clipboard_out: Arc<Mutex<Option<RudpClipboardOut>>>,
     audio: Arc<RudpAudioShared>,
+}
+
+impl VideoShared {
+    fn new(
+        packet_outbox: Arc<PacketOutbox>,
+        active_sessions: Arc<AtomicUsize>,
+        clipboard_out: Arc<Mutex<Option<RudpClipboardOut>>>,
+        audio: Arc<RudpAudioShared>,
+        layout: Arc<RudpLayoutShared>,
+        hub: Arc<StreamExportHub>,
+    ) -> Self {
+        Self {
+            packet_outbox,
+            streams: StreamTable::new(),
+            layout,
+            hub,
+            subs_dirty: AtomicBool::new(true),
+            // Force the first resolve even when the layout is still empty.
+            subs_layout_gen: AtomicU64::new(u64::MAX),
+            active_sessions,
+            session_joins: AtomicU64::new(0),
+            clipboard_out,
+            audio,
+        }
+    }
 }
 
 /// Counts one authenticated session for as long as it lives (incl. task cancel).
@@ -659,6 +863,7 @@ impl SessionGuard {
     fn new(video: &Arc<VideoShared>) -> Self {
         video.active_sessions.fetch_add(1, Ordering::SeqCst);
         video.session_joins.fetch_add(1, Ordering::SeqCst);
+        video.subs_dirty.store(true, Ordering::SeqCst);
         Self(Arc::clone(video))
     }
 }
@@ -666,7 +871,73 @@ impl SessionGuard {
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         self.0.active_sessions.fetch_sub(1, Ordering::SeqCst);
+        self.0.subs_dirty.store(true, Ordering::SeqCst);
     }
+}
+
+/// Longest output id accepted from a client (connector names are short).
+const MAX_OUTPUT_ID_LEN: usize = 128;
+/// Output ids examined per `SubscribeOutputs` (bounds work for hostile input).
+const MAX_REQUESTED_OUTPUT_IDS: usize = 16;
+
+/// Normalise a client `SubscribeOutputs` list: drop empty / oversized / duplicate
+/// ids and bound its length. Empty → `None` (primary only).
+fn sanitize_subscription(output_ids: Vec<String>) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for id in output_ids {
+        if out.len() >= MAX_REQUESTED_OUTPUT_IDS {
+            break;
+        }
+        if id.is_empty() || id.len() > MAX_OUTPUT_ID_LEN || out.contains(&id) {
+            continue;
+        }
+        out.push(id);
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// Outputs a session actually receives: the requested ids that exist in the
+/// layout (capped at [`RUDP_MAX_SUBSCRIBED_OUTPUTS`]); empty / all-unknown →
+/// the primary output. Empty only while the layout itself is empty.
+fn resolve_subscription(requested: Option<&[String]>, monitors: &[RudpMonitorInfo]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(requested) = requested {
+        for id in requested {
+            if out.len() >= RUDP_MAX_SUBSCRIBED_OUTPUTS {
+                break;
+            }
+            if monitors.iter().any(|m| &m.id == id) && !out.contains(id) {
+                out.push(id.clone());
+            }
+        }
+    }
+    if out.is_empty()
+        && let Some(primary) = monitors
+            .iter()
+            .find(|m| m.primary)
+            .or_else(|| monitors.first())
+    {
+        out.push(primary.id.clone());
+    }
+    out
+}
+
+/// Union of every session's effective outputs, in layout order.
+fn union_subscriptions(per_session: &[Vec<String>], monitors: &[RudpMonitorInfo]) -> Vec<String> {
+    monitors
+        .iter()
+        .filter(|m| per_session.iter().any(|s| s.contains(&m.id)))
+        .map(|m| m.id.clone())
+        .collect()
+}
+
+#[derive(Default)]
+struct SessionSubscription {
+    /// Client request; `None` ⇒ primary only (the default until the client
+    /// sends `SubscribeOutputs`).
+    requested: Option<Vec<String>>,
+    /// Resolved against the current layout.
+    effective: Vec<String>,
 }
 
 fn run_quinn_runtime(
@@ -739,9 +1010,79 @@ struct VideoSession {
     conn: quinn::Connection,
     control_send: tokio::sync::Mutex<quinn::SendStream>,
     video_send: tokio::sync::Mutex<quinn::SendStream>,
-    video_ready_sent: AtomicBool,
     audio_ready_sent: AtomicBool,
     warned_no_dgram: AtomicBool,
+    /// Layout generation last delivered to this client (0 = none yet).
+    layout_gen_sent: AtomicU64,
+    /// [`StreamTable`] generation the `VideoReady` set was last synced at
+    /// (`u64::MAX` = never).
+    ready_epoch: AtomicU64,
+    /// `VideoReady` already delivered, keyed by output id.
+    announced: Mutex<HashMap<String, StreamInfo>>,
+    subs: Mutex<SessionSubscription>,
+}
+
+impl VideoSession {
+    fn new(
+        conn: quinn::Connection,
+        control_send: quinn::SendStream,
+        video_send: quinn::SendStream,
+        layout_gen_sent: u64,
+    ) -> Self {
+        Self {
+            conn,
+            control_send: tokio::sync::Mutex::new(control_send),
+            video_send: tokio::sync::Mutex::new(video_send),
+            audio_ready_sent: AtomicBool::new(false),
+            warned_no_dgram: AtomicBool::new(false),
+            layout_gen_sent: AtomicU64::new(layout_gen_sent),
+            ready_epoch: AtomicU64::new(u64::MAX),
+            announced: Mutex::new(HashMap::new()),
+            subs: Mutex::new(SessionSubscription::default()),
+        }
+    }
+
+    /// Record a client `SubscribeOutputs` (resolved on the next pump tick).
+    fn set_requested(&self, output_ids: Vec<String>) {
+        if let Ok(mut subs) = self.subs.lock() {
+            subs.requested = sanitize_subscription(output_ids);
+        }
+    }
+
+    /// Re-resolve against `monitors`. Returns `true` when the session gained an
+    /// output it did not receive before (needs a keyframe).
+    fn refresh_effective(&self, monitors: &[RudpMonitorInfo]) -> bool {
+        let Ok(mut subs) = self.subs.lock() else {
+            return false;
+        };
+        let next = resolve_subscription(subs.requested.as_deref(), monitors);
+        let gained = next.iter().any(|id| !subs.effective.contains(id));
+        subs.effective = next;
+        gained
+    }
+
+    fn effective(&self) -> Vec<String> {
+        self.subs
+            .lock()
+            .map(|s| s.effective.clone())
+            .unwrap_or_default()
+    }
+
+    fn is_subscribed(&self, output_id: &str) -> bool {
+        self.subs
+            .lock()
+            .is_ok_and(|s| s.effective.iter().any(|id| id == output_id))
+    }
+
+    /// Media for `output_id` may be sent: subscribed **and** `VideoReady` for
+    /// it already reached this client (so decoders exist before the first AU).
+    fn accepts_media(&self, output_id: &str) -> bool {
+        self.is_subscribed(output_id)
+            && self
+                .announced
+                .lock()
+                .is_ok_and(|a| a.contains_key(output_id))
+    }
 }
 
 type SessionRegistry = Arc<AsyncRwLock<HashMap<String, Arc<VideoSession>>>>;
@@ -864,6 +1205,22 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                                 &RudpControlMsg::PointerLock { locked },
                             )
                             .await;
+                            // Topology right after SessionOk so the client can pick
+                            // outputs before any VideoReady.
+                            let (layout_gen, layout_monitors) = video.layout.snapshot();
+                            let mut layout_gen_sent = 0;
+                            if !layout_monitors.is_empty()
+                                && write_control_msg(
+                                    &mut control_send,
+                                    &RudpControlMsg::DesktopLayout {
+                                        monitors: layout_monitors,
+                                    },
+                                )
+                                .await
+                                .is_ok()
+                            {
+                                layout_gen_sent = layout_gen;
+                            }
                             let video_send = match conn.open_uni().await {
                                 Ok(s) => s,
                                 Err(err) => {
@@ -872,14 +1229,12 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                                     return;
                                 }
                             };
-                            let session = Arc::new(VideoSession {
-                                conn: conn.clone(),
-                                control_send: tokio::sync::Mutex::new(control_send),
-                                video_send: tokio::sync::Mutex::new(video_send),
-                                video_ready_sent: AtomicBool::new(false),
-                                audio_ready_sent: AtomicBool::new(false),
-                                warned_no_dgram: AtomicBool::new(false),
-                            });
+                            let session = Arc::new(VideoSession::new(
+                                conn.clone(),
+                                control_send,
+                                video_send,
+                                layout_gen_sent,
+                            ));
                             {
                                 let mut guard = sessions.write().await;
                                 guard.insert(session_id.clone(), Arc::clone(&session));
@@ -888,7 +1243,10 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                             let _session_count = SessionGuard::new(&video);
                             let _auth_slot = session_slot;
                             let input_tx = bridge.input_tx.clone();
-                            // Control reads: keepalives + Phase 7 input → calloop.
+                            let ctrl_session = Arc::clone(&session);
+                            let ctrl_video = Arc::clone(&video);
+                            // Control reads: keepalives + Phase 7 input → calloop,
+                            // `SubscribeOutputs` → this session's subscription.
                             tokio::spawn(async move {
                                 let mut buf = Vec::new();
                                 let mut tmp = [0u8; 2048];
@@ -896,6 +1254,12 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                                     buf.extend_from_slice(&tmp[..n]);
                                     while let Ok(Some((msg, n))) = try_decode_rudp_frame(&buf) {
                                         buf.drain(..n);
+                                        if let RudpControlMsg::SubscribeOutputs { output_ids } = msg
+                                        {
+                                            ctrl_session.set_requested(output_ids);
+                                            ctrl_video.subs_dirty.store(true, Ordering::SeqCst);
+                                            continue;
+                                        }
                                         if let Some(ev) = RudpInputEvent::from_control(msg) {
                                             let _ = input_tx.send(ev);
                                         }
@@ -904,6 +1268,8 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                             });
                             conn.closed().await;
                             sessions.write().await.remove(&session_id);
+                            // After the removal so the next resolve excludes this session.
+                            video.subs_dirty.store(true, Ordering::SeqCst);
                             tracing::info!(
                                 %peer,
                                 %session_id,
@@ -931,6 +1297,116 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
     endpoint.close(0u32.into(), b"rudp host shutdown");
 }
 
+/// Re-resolve every session's outputs against the current layout and push the
+/// union into the export hub. Cheap no-op unless something changed.
+fn sync_subscriptions(snap: &[Arc<VideoSession>], video: &VideoShared) {
+    let layout_gen = video.layout.generation();
+    let dirty = video.subs_dirty.swap(false, Ordering::SeqCst);
+    if !dirty && layout_gen == video.subs_layout_gen.load(Ordering::Relaxed) {
+        return;
+    }
+    video.subs_layout_gen.store(layout_gen, Ordering::Relaxed);
+    let monitors = video.layout.monitors();
+    let mut gained = false;
+    for session in snap {
+        gained |= session.refresh_effective(&monitors);
+    }
+    let per_session: Vec<Vec<String>> = snap.iter().map(|s| s.effective()).collect();
+    let union = union_subscriptions(&per_session, &monitors);
+    if !union.is_empty() {
+        video.streams.retain(&union);
+    }
+    // Empty union (no sessions / no layout yet) ⇒ hub exports primary only.
+    video.hub.set_subscribed_outputs(union);
+    if gained {
+        // A session started receiving an output: every stream needs an IDR.
+        video.session_joins.fetch_add(1, Ordering::SeqCst);
+    }
+    // Re-evaluate which `VideoReady` each session still needs.
+    video.streams.bump();
+}
+
+/// Send `DesktopLayout` to every session whose copy is stale.
+async fn broadcast_layout(snap: &[Arc<VideoSession>], layout: &RudpLayoutShared) {
+    let generation = layout.generation();
+    if generation == 0
+        || snap
+            .iter()
+            .all(|s| s.layout_gen_sent.load(Ordering::Relaxed) == generation)
+    {
+        return;
+    }
+    let (generation, monitors) = layout.snapshot();
+    if monitors.is_empty() {
+        return;
+    }
+    let msg = RudpControlMsg::DesktopLayout { monitors };
+    for session in snap {
+        if session.layout_gen_sent.load(Ordering::Relaxed) == generation {
+            continue;
+        }
+        let mut send = session.control_send.lock().await;
+        if write_control_msg(&mut send, &msg).await.is_ok() {
+            session.layout_gen_sent.store(generation, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Deliver `VideoReady` for every subscribed stream a session has not seen (or
+/// whose size / codec changed). Late joiners and re-subscribers get the full set.
+async fn announce_streams(snap: &[Arc<VideoSession>], video: &VideoShared) {
+    let epoch = video.streams.generation();
+    if snap
+        .iter()
+        .all(|s| s.ready_epoch.load(Ordering::Relaxed) == epoch)
+    {
+        return;
+    }
+    let infos = video.streams.snapshot();
+    for session in snap {
+        if session.ready_epoch.load(Ordering::Relaxed) == epoch {
+            continue;
+        }
+        // Forget announcements for outputs this session no longer receives so a
+        // later re-subscribe re-sends `VideoReady`.
+        let wanted = session.effective();
+        if let Ok(mut announced) = session.announced.lock() {
+            announced.retain(|output, _| wanted.contains(output));
+        }
+        let mut all_ok = true;
+        for info in &infos {
+            if !wanted.contains(&info.output_id) {
+                continue;
+            }
+            let already = session
+                .announced
+                .lock()
+                .is_ok_and(|a| a.get(&info.output_id) == Some(info));
+            if already {
+                continue;
+            }
+            let msg = RudpControlMsg::VideoReady {
+                width: info.width,
+                height: info.height,
+                codec: codec_wire_name(info.codec).to_string(),
+                stream_id: info.stream_id,
+                output_id: info.output_id.clone(),
+            };
+            let mut send = session.control_send.lock().await;
+            if write_control_msg(&mut send, &msg).await.is_ok() {
+                if let Ok(mut announced) = session.announced.lock() {
+                    announced.insert(info.output_id.clone(), info.clone());
+                }
+            } else {
+                all_ok = false;
+            }
+        }
+        if all_ok {
+            session.ready_epoch.store(epoch, Ordering::Relaxed);
+        }
+    }
+}
+
 async fn video_pump_loop(
     stop: Arc<AtomicBool>,
     sessions: SessionRegistry,
@@ -940,7 +1416,6 @@ async fn video_pump_loop(
 ) {
     tracing::info!("rudp host: video pump started");
     let mut last_audio_seq: Option<u32> = None;
-    let mut last_ready = (0u32, 0u32, CODEC_H264);
     let mut last_pointer_lock: Option<bool> = None;
     let mut last_clipboard_serial: Option<u64> = None;
 
@@ -951,31 +1426,18 @@ async fn video_pump_loop(
             video.packet_outbox.clear();
         }
 
-        // Pause media while the desktop session is locked (RDP parity).
-        if session_locked.load(Ordering::Relaxed) {
-            video.packet_outbox.clear();
-            let locked = pointer_locked.load(Ordering::Relaxed);
-            if last_pointer_lock != Some(locked) {
-                let snap: Vec<Arc<VideoSession>> = {
-                    let guard = sessions.read().await;
-                    guard.values().cloned().collect()
-                };
-                let msg = RudpControlMsg::PointerLock { locked };
-                for session in &snap {
-                    let mut send = session.control_send.lock().await;
-                    let _ = write_control_msg(&mut send, &msg).await;
-                }
-                last_pointer_lock = Some(locked);
-            }
-            continue;
-        }
+        let snap: Vec<Arc<VideoSession>> = {
+            let guard = sessions.read().await;
+            guard.values().cloned().collect()
+        };
+
+        // Output subscriptions + topology (also while locked: clients learn of
+        // hot-plug immediately, media stays paused below).
+        sync_subscriptions(&snap, &video);
+        broadcast_layout(&snap, &video.layout).await;
 
         let locked = pointer_locked.load(Ordering::Relaxed);
         if last_pointer_lock != Some(locked) {
-            let snap: Vec<Arc<VideoSession>> = {
-                let guard = sessions.read().await;
-                guard.values().cloned().collect()
-            };
             let msg = RudpControlMsg::PointerLock { locked };
             for session in &snap {
                 let mut send = session.control_send.lock().await;
@@ -984,14 +1446,16 @@ async fn video_pump_loop(
             last_pointer_lock = Some(locked);
         }
 
+        // Pause media while the desktop session is locked (RDP parity).
+        if session_locked.load(Ordering::Relaxed) {
+            video.packet_outbox.clear();
+            continue;
+        }
+
         let clipboard = video.clipboard_out.lock().ok().and_then(|g| g.clone());
         if let Some(clip) = clipboard
             && last_clipboard_serial != Some(clip.serial)
         {
-            let snap: Vec<Arc<VideoSession>> = {
-                let guard = sessions.read().await;
-                guard.values().cloned().collect()
-            };
             let msg = RudpControlMsg::ClipboardSet {
                 mime: clip.mime.clone(),
                 text: clip.text.clone(),
@@ -1004,40 +1468,11 @@ async fn video_pump_loop(
             last_clipboard_serial = Some(clip.serial);
         }
 
-        let w = video.width.load(Ordering::Relaxed);
-        let h = video.height.load(Ordering::Relaxed);
-        let codec_raw = video.codec.load(Ordering::Relaxed);
-        if w > 0 && h > 0 {
-            let changed = (w, h, codec_raw) != last_ready;
-            let snap: Vec<Arc<VideoSession>> = {
-                let guard = sessions.read().await;
-                guard.values().cloned().collect()
-            };
-            let msg = RudpControlMsg::VideoReady {
-                width: w,
-                height: h,
-                codec: codec_wire_name(codec_raw).to_string(),
-            };
-            for session in &snap {
-                // Late joiners need VideoReady too, not just size/codec changes.
-                if !changed && session.video_ready_sent.load(Ordering::Relaxed) {
-                    continue;
-                }
-                let mut send = session.control_send.lock().await;
-                if write_control_msg(&mut send, &msg).await.is_ok() {
-                    session.video_ready_sent.store(true, Ordering::Relaxed);
-                }
-            }
-            last_ready = (w, h, codec_raw);
-        }
+        announce_streams(&snap, &video).await;
 
         // System audio (host → client Opus datagrams).
         let audio_streaming = video.audio.streaming.load(Ordering::Relaxed);
         if audio_streaming {
-            let snap: Vec<Arc<VideoSession>> = {
-                let guard = sessions.read().await;
-                guard.values().cloned().collect()
-            };
             let msg = RudpControlMsg::AudioReady {
                 sample_rate: RUDP_AUDIO_SAMPLE_RATE,
                 channels: RUDP_AUDIO_CHANNELS,
@@ -1085,31 +1520,37 @@ async fn video_pump_loop(
             }
         }
 
-        let snap: Vec<Arc<VideoSession>> = {
-            let guard = sessions.read().await;
-            guard.values().cloned().collect()
-        };
         if snap.is_empty() {
             continue;
         }
 
         // Drain the outbox — keyframe writes may take hundreds of ms, so the
         // frame thread must be able to queue deltas without overwriting.
-        while let Some(pkt) = video.packet_outbox.pop() {
+        while let Some(out) = video.packet_outbox.pop() {
+            let pkt = &out.packet;
             let codec = match pkt.codec {
                 RudpCodec::H264 => codec_from_str("h264"),
                 RudpCodec::Hevc => codec_from_str("hevc"),
                 RudpCodec::Av1 => codec_from_str("av1"),
             };
+            // Only sessions subscribed to this output (and told about its stream).
+            let targets: Vec<&Arc<VideoSession>> = snap
+                .iter()
+                .filter(|s| s.accepts_media(&out.output_id))
+                .collect();
+            if targets.is_empty() {
+                continue;
+            }
 
             if pkt.is_keyframe {
                 let au = ReliableAccessUnit {
                     frame_seq: pkt.seq,
                     pts_us: pkt.pts_us,
                     codec,
+                    stream_id: out.stream_id,
                     damage_full: pkt.damage_full,
-                    width: w,
-                    height: h,
+                    width: out.width,
+                    height: out.height,
                     damage: pkt
                         .damage
                         .iter()
@@ -1123,7 +1564,7 @@ async fn video_pump_loop(
                     data: pkt.data.clone(),
                 };
                 let framed = au.encode_framed();
-                for session in &snap {
+                for session in targets {
                     let mut send = session.video_send.lock().await;
                     // A client that stops reading must not stall the pump for everyone.
                     match tokio::time::timeout(PUMP_WRITE_TIMEOUT, send.write_all(&framed)).await {
@@ -1140,7 +1581,7 @@ async fn video_pump_loop(
                 continue;
             }
 
-            for session in &snap {
+            for session in targets {
                 let max_dg = session
                     .conn
                     .max_datagram_size()
@@ -1150,12 +1591,15 @@ async fn video_pump_loop(
                 let loss_ratio = stats.path.lost_packets as f64 / sent as f64;
                 let dgrams = match build_media_datagrams(
                     &pkt.data,
-                    pkt.seq,
-                    pkt.pts_us,
-                    codec,
-                    pkt.damage_full,
-                    max_dg,
-                    loss_ratio,
+                    MediaDatagramParams {
+                        frame_seq: pkt.seq,
+                        pts_us: pkt.pts_us,
+                        codec,
+                        stream_id: out.stream_id,
+                        damage_full: pkt.damage_full,
+                        max_datagram: max_dg,
+                        loss_ratio,
+                    },
                 ) {
                     Ok(d) => d,
                     Err(err) => {
@@ -1365,6 +1809,7 @@ fn to_encode_backend(b: RudpEncoderBackend) -> EncoderBackend {
         RudpEncoderBackend::Auto => EncoderBackend::Auto,
         RudpEncoderBackend::Vaapi => EncoderBackend::Vaapi,
         RudpEncoderBackend::Nvenc => EncoderBackend::Nvenc,
+        RudpEncoderBackend::Soft => EncoderBackend::Soft,
     }
 }
 
@@ -1445,7 +1890,26 @@ struct ActiveEncoder {
     enc: Box<dyn HwEncoder>,
     width: u32,
     height: u32,
+    /// Wire codec byte of the encoder actually running (see [`codec_to_u8`]).
+    codec: u8,
     opened_at: Instant,
+}
+
+/// Encode state for one subscribed output (sizes differ per monitor, and a
+/// failing worker on one output must not disable the others).
+#[derive(Default)]
+struct OutputPipe {
+    encoder: Option<ActiveEncoder>,
+    supervisor: EncoderSupervisor,
+    encode_mode: Option<EncodeMode>,
+}
+
+impl OutputPipe {
+    fn request_keyframe(&mut self) {
+        if let Some(active) = self.encoder.as_mut() {
+            active.enc.request_keyframe();
+        }
+    }
 }
 
 /// Bounded restart policy for the isolated encoder: back off between
@@ -1528,15 +1992,16 @@ impl WarnLimiter {
 }
 
 fn frame_pipeline_loop(ctx: FramePipelineCtx) {
-    tracing::info!("rudp host: frame pipeline started (encoder opens when a client connects)");
+    tracing::info!("rudp host: frame pipeline started (encoders open when a client connects)");
     ctx.set_status("idle (no client)");
     let mut last_log = Instant::now();
     let mut fps = 0u32;
     let mut last: Option<(u64, u32, u32, usize)> = None;
-    let mut encoder: Option<ActiveEncoder> = None;
-    let mut supervisor = EncoderSupervisor::default();
+    // One encoder per exported output, keyed by output name.
+    let mut pipes: HashMap<String, OutputPipe> = HashMap::new();
+    let mut subscribed: HashSet<String> = HashSet::new();
+    let mut seen_sub_gen = u64::MAX;
     let mut warn_limiter = WarnLimiter::default();
-    let mut encode_mode: Option<EncodeMode> = None;
     let mut seen_joins = 0u64;
     let mut idle_since: Option<Instant> = None;
     let mut was_session_locked = false;
@@ -1559,8 +2024,8 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
         // Idle encode/export while the desktop lock owns the session.
         ctx.hub.set_demand(sessions > 0 && !session_locked);
         if was_session_locked && !session_locked && sessions > 0 {
-            if let Some(active) = encoder.as_mut() {
-                active.enc.request_keyframe();
+            for pipe in pipes.values_mut() {
+                pipe.request_keyframe();
             }
             ctx.request_refresh();
         }
@@ -1569,69 +2034,88 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
         let joins = ctx.video.session_joins.load(Ordering::SeqCst);
         if joins != seen_joins {
             seen_joins = joins;
-            if let Some(active) = encoder.as_mut() {
-                active.enc.request_keyframe();
+            for pipe in pipes.values_mut() {
+                pipe.request_keyframe();
             }
             ctx.request_refresh();
+        }
+
+        // Follow the subscribed-output union: drop encoders for outputs nobody
+        // receives any more (an empty set means "primary only" — keep as is).
+        let sub_gen = ctx.hub.subscription_generation();
+        if sub_gen != seen_sub_gen {
+            seen_sub_gen = sub_gen;
+            subscribed = ctx.hub.subscribed_outputs().into_iter().collect();
+            if !subscribed.is_empty() {
+                pipes.retain(|name, _| subscribed.contains(name));
+            }
         }
 
         if sessions == 0 || session_locked {
             ctx.video.packet_outbox.clear();
             let since = *idle_since.get_or_insert(now);
-            if encoder.is_some() && now.duration_since(since) >= ENCODER_IDLE_CLOSE {
-                tracing::info!("rudp encode: no clients — stopping encode worker");
-                encoder = None;
-                encode_mode = None;
+            if pipes.values().any(|p| p.encoder.is_some())
+                && now.duration_since(since) >= ENCODER_IDLE_CLOSE
+            {
+                tracing::info!("rudp encode: no clients — stopping encode workers");
+                pipes.clear();
                 ctx.set_status("idle (no client)");
             }
         } else {
             idle_since = None;
-            if encoder.is_none() && supervisor.take_retry_refresh(now) {
+            let mut refresh = false;
+            for pipe in pipes.values_mut() {
+                if pipe.encoder.is_none() && pipe.supervisor.take_retry_refresh(now) {
+                    refresh = true;
+                }
+            }
+            if refresh {
                 ctx.request_refresh();
             }
         }
 
         match ctx.wake.recv_timeout(Duration::from_millis(16)) {
             Ok(()) | Err(RecvTimeoutError::Timeout) => {
-                while let Some(frame) = ctx.hub.take_latest() {
+                for frame in ctx.hub.take_latest_all() {
                     if ctx.stop.load(Ordering::Relaxed) {
                         break;
                     }
                     if ctx.session_locked.load(Ordering::Relaxed) {
                         continue;
                     }
+                    // Stale frame from an output that was just unsubscribed.
+                    if !subscribed.is_empty() && !subscribed.contains(&frame.output_name) {
+                        continue;
+                    }
                     // Bounded GPU fence wait on this thread — never on calloop / Quinn.
                     if !frame.wait_ready(FENCE_TIMEOUT) {
                         continue;
                     }
+                    let pipe = pipes.entry(frame.output_name.clone()).or_default();
                     let mode = if frame.damage_full {
                         EncodeMode::Full
                     } else {
                         EncodeMode::Sparse
                     };
-                    if encode_mode != Some(mode) {
+                    if pipe.encode_mode != Some(mode) {
                         tracing::debug!(
+                            output = %frame.output_name,
                             ?mode,
                             damage_rects = frame.damage.len(),
                             seq = frame.seq,
                             "rudp encode: mode"
                         );
-                        if encode_mode == Some(EncodeMode::Sparse)
-                            && mode == EncodeMode::Full
-                            && let Some(active) = encoder.as_mut()
+                        if pipe.encode_mode == Some(EncodeMode::Sparse) && mode == EncodeMode::Full
                         {
-                            active.enc.request_keyframe();
+                            pipe.request_keyframe();
                         }
-                        encode_mode = Some(mode);
+                        pipe.encode_mode = Some(mode);
                     }
-                    if process_frame(
-                        &ctx,
-                        &mut encoder,
-                        &mut supervisor,
-                        &mut warn_limiter,
-                        &render_node,
-                        &frame,
-                    ) {
+                    let multi = pipes.len() > 1;
+                    let Some(pipe) = pipes.get_mut(&frame.output_name) else {
+                        continue;
+                    };
+                    if process_frame(&ctx, pipe, &mut warn_limiter, &render_node, &frame, multi) {
                         fps = fps.saturating_add(1);
                         last = Some((frame.seq, frame.width, frame.height, frame.fds.len()));
                     }
@@ -1657,8 +2141,8 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                     width = w,
                     height = h,
                     planes,
+                    streams = pipes.len(),
                     encoder = %active,
-                    ?encode_mode,
                     bytes = ctx.bytes_encoded.load(Ordering::Relaxed),
                     "rudp host: encode rate"
                 );
@@ -1668,29 +2152,31 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
         }
     }
 
-    // Drop closes the worker socket and reaps the child (bounded, no flush round-trip).
-    drop(encoder);
+    // Drop closes the worker sockets and reaps the children (bounded, no flush round-trip).
+    drop(pipes);
     ctx.hub.set_demand(false);
     tracing::info!("rudp host: frame pipeline stopped");
 }
 
-/// Open (if needed) and encode one frame. Returns `true` when encoded.
+/// Open (if needed) and encode one frame for its output. Returns `true` when
+/// encoded.
 fn process_frame(
     ctx: &FramePipelineCtx,
-    encoder: &mut Option<ActiveEncoder>,
-    supervisor: &mut EncoderSupervisor,
+    pipe: &mut OutputPipe,
     warn_limiter: &mut WarnLimiter,
     render_node: &str,
     frame: &ExportedFrame,
+    multi: bool,
 ) -> bool {
     let now = Instant::now();
-    let size_matches = encoder
+    let size_matches = pipe
+        .encoder
         .as_ref()
         .is_some_and(|a| a.width == frame.width && a.height == frame.height);
     if !size_matches {
         // Size change or no encoder yet: replace the worker.
-        *encoder = None;
-        if !supervisor.may_open(now) {
+        pipe.encoder = None;
+        if !pipe.supervisor.may_open(now) {
             return false;
         }
         match open_hw_encoder(
@@ -1702,31 +2188,38 @@ fn process_frame(
         ) {
             Ok(enc) => {
                 let info = enc.info();
-                let label = format!(
+                let mut label = format!(
                     "{} / {} ({}x{})",
                     backend_label(info.backend),
                     info.codec.as_str(),
                     info.width,
                     info.height
                 );
-                tracing::info!(%label, "rudp encode: encoder ready (isolated worker)");
-                ctx.video
-                    .codec
-                    .store(codec_to_u8(info.codec), Ordering::Relaxed);
+                if multi {
+                    label = format!("{label} [{}]", frame.output_name);
+                }
+                tracing::info!(
+                    output = %frame.output_name,
+                    %label,
+                    "rudp encode: encoder ready (isolated worker)"
+                );
+                let codec = codec_to_u8(info.codec);
                 ctx.set_status(label);
                 ctx.set_error(None);
-                *encoder = Some(ActiveEncoder {
+                pipe.encoder = Some(ActiveEncoder {
                     enc,
                     width: frame.width,
                     height: frame.height,
+                    codec,
                     opened_at: now,
                 });
             }
             Err(EncodeError::Cancelled) => return false,
             Err(err) => {
                 let msg = err.to_string();
-                if supervisor.record_failure(now) {
+                if pipe.supervisor.record_failure(now) {
                     tracing::error!(
+                        output = %frame.output_name,
                         err = %msg,
                         "rudp encode: hardware encoder unavailable — giving up for this \
                          session (Remote stays reachable; re-enable in Settings to retry)"
@@ -1734,8 +2227,9 @@ fn process_frame(
                     ctx.set_status("unavailable");
                 } else {
                     tracing::warn!(
+                        output = %frame.output_name,
                         err = %msg,
-                        failures = supervisor.failures,
+                        failures = pipe.supervisor.failures,
                         "rudp encode: encoder open failed — will retry"
                     );
                     ctx.set_status("retrying");
@@ -1746,23 +2240,32 @@ fn process_frame(
         }
     }
 
-    let Some(active) = encoder.as_mut() else {
+    let Some(active) = pipe.encoder.as_mut() else {
         return false;
     };
-    match encode_frame(active.enc.as_mut(), frame, &ctx.video, &ctx.bytes_encoded) {
+    let codec = active.codec;
+    match encode_frame(
+        active.enc.as_mut(),
+        frame,
+        codec,
+        &ctx.video,
+        &ctx.bytes_encoded,
+    ) {
         Ok(()) => {
             ctx.frames_encoded.fetch_add(1, Ordering::Relaxed);
-            supervisor.record_success(now.duration_since(active.opened_at));
+            pipe.supervisor
+                .record_success(now.duration_since(active.opened_at));
             true
         }
         Err(err) if !active.enc.is_healthy() => {
             let msg = err.to_string();
-            *encoder = None;
+            pipe.encoder = None;
             if ctx.stop.load(Ordering::Relaxed) {
                 return false;
             }
-            if supervisor.record_failure(now) {
+            if pipe.supervisor.record_failure(now) {
                 tracing::error!(
+                    output = %frame.output_name,
                     err = %msg,
                     "rudp encode: encode worker failed repeatedly — hardware encode disabled \
                      for this session"
@@ -1770,8 +2273,9 @@ fn process_frame(
                 ctx.set_status("unavailable");
             } else {
                 tracing::warn!(
+                    output = %frame.output_name,
                     err = %msg,
-                    failures = supervisor.failures,
+                    failures = pipe.supervisor.failures,
                     "rudp encode: encode worker died — restarting after back-off \
                      (desktop unaffected)"
                 );
@@ -1783,7 +2287,12 @@ fn process_frame(
         Err(err) => {
             let msg = err.to_string();
             if warn_limiter.should_log(&msg) {
-                tracing::warn!(err = %msg, seq = frame.seq, "rudp encode: frame skipped");
+                tracing::warn!(
+                    output = %frame.output_name,
+                    err = %msg,
+                    seq = frame.seq,
+                    "rudp encode: frame skipped"
+                );
             }
             ctx.set_error(Some(msg));
             false
@@ -1794,6 +2303,7 @@ fn process_frame(
 fn encode_frame(
     enc: &mut dyn HwEncoder,
     frame: &ExportedFrame,
+    codec: u8,
     video: &VideoShared,
     bytes_encoded: &AtomicU64,
 ) -> Result<(), EncodeError> {
@@ -1813,11 +2323,24 @@ fn encode_frame(
     };
     enc.submit(&input)?;
     let packets = enc.drain()?;
-    video.width.store(frame.width, Ordering::Relaxed);
-    video.height.store(frame.height, Ordering::Relaxed);
-    for pkt in packets {
-        bytes_encoded.fetch_add(pkt.data.len() as u64, Ordering::Relaxed);
-        video.packet_outbox.push(pkt);
+    // Advertise (or refresh) this output's stream before its first packet.
+    let Some(stream_id) =
+        video
+            .streams
+            .publish(&frame.output_name, frame.width, frame.height, codec)
+    else {
+        tracing::warn!(output = %frame.output_name, "rudp encode: no free stream id");
+        return Ok(());
+    };
+    for packet in packets {
+        bytes_encoded.fetch_add(packet.data.len() as u64, Ordering::Relaxed);
+        video.packet_outbox.push(OutboundPacket {
+            stream_id,
+            output_id: frame.output_name.clone(),
+            width: frame.width,
+            height: frame.height,
+            packet,
+        });
     }
     Ok(())
 }
@@ -1827,6 +2350,7 @@ fn backend_label(backend: EncoderBackend) -> &'static str {
         EncoderBackend::Auto => "auto",
         EncoderBackend::Vaapi => "vaapi",
         EncoderBackend::Nvenc => "nvenc",
+        EncoderBackend::Soft => "soft",
     }
 }
 
@@ -1942,16 +2466,14 @@ mod tests {
 
     #[test]
     fn session_guard_counts_and_releases() {
-        let video = Arc::new(VideoShared {
-            packet_outbox: Arc::new(PacketOutbox::new()),
-            width: AtomicU32::new(0),
-            height: AtomicU32::new(0),
-            codec: AtomicU8::new(CODEC_H264),
-            active_sessions: Arc::new(AtomicUsize::new(0)),
-            session_joins: AtomicU64::new(0),
-            clipboard_out: Arc::new(Mutex::new(None)),
-            audio: Arc::new(RudpAudioShared::new()),
-        });
+        let video = Arc::new(VideoShared::new(
+            Arc::new(PacketOutbox::new()),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(RudpAudioShared::new()),
+            Arc::new(RudpLayoutShared::new()),
+            Arc::new(StreamExportHub::new()),
+        ));
         let a = SessionGuard::new(&video);
         let b = SessionGuard::new(&video);
         assert_eq!(video.active_sessions.load(Ordering::SeqCst), 2);
@@ -1962,15 +2484,38 @@ mod tests {
         assert_eq!(video.session_joins.load(Ordering::SeqCst), 2);
     }
 
-    fn test_pkt(seq: u64, key: bool) -> EncodedPacket {
-        EncodedPacket {
-            seq,
-            codec: RudpCodec::H264,
-            is_keyframe: key,
-            data: vec![seq as u8],
-            pts_us: seq as i64,
-            damage_full: key,
-            damage: Vec::new(),
+    fn test_pkt(seq: u64, key: bool) -> OutboundPacket {
+        test_pkt_on(0, seq, key)
+    }
+
+    fn test_pkt_on(stream_id: u8, seq: u64, key: bool) -> OutboundPacket {
+        OutboundPacket {
+            stream_id,
+            output_id: format!("OUT-{stream_id}"),
+            width: 1920,
+            height: 1080,
+            packet: EncodedPacket {
+                seq,
+                codec: RudpCodec::H264,
+                is_keyframe: key,
+                data: vec![seq as u8],
+                pts_us: seq as i64,
+                damage_full: key,
+                damage: Vec::new(),
+            },
+        }
+    }
+
+    fn monitor(id: &str, x: i32, primary: bool) -> RudpMonitorInfo {
+        RudpMonitorInfo {
+            id: id.into(),
+            name: id.into(),
+            x,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            primary,
         }
     }
 
@@ -1978,23 +2523,24 @@ mod tests {
     fn packet_outbox_preserves_deltas_under_backpressure() {
         let box_ = PacketOutbox::new();
         box_.push(test_pkt(1, true));
-        for seq in 2..=16 {
+        for seq in 2..=PACKET_OUTBOX_CAP as u64 {
             box_.push(test_pkt(seq, false));
         }
         assert_eq!(box_.len(), PACKET_OUTBOX_CAP);
         // Consumer still blocked — more deltas must not wipe the IDR.
-        box_.push(test_pkt(17, false));
+        let newest = PACKET_OUTBOX_CAP as u64 + 1;
+        box_.push(test_pkt(newest, false));
         let seqs = box_.seqs();
         assert_eq!(seqs[0], 1, "keyframe must remain at head");
-        assert!(seqs.contains(&17), "newest delta kept after drop");
+        assert!(seqs.contains(&newest), "newest delta kept after drop");
         assert_eq!(seqs.len(), PACKET_OUTBOX_CAP);
         // Pop all — IDR then remaining deltas in order.
         let first = box_.pop().expect("idr");
-        assert!(first.is_keyframe);
-        assert_eq!(first.seq, 1);
+        assert!(first.packet.is_keyframe);
+        assert_eq!(first.packet.seq, 1);
         let mut rest = Vec::new();
         while let Some(p) = box_.pop() {
-            rest.push(p.seq);
+            rest.push(p.packet.seq);
         }
         assert!(!rest.is_empty());
         assert!(rest.windows(2).all(|w| w[0] < w[1]));
@@ -2014,6 +2560,139 @@ mod tests {
             // One of the original deltas was dropped to make room.
             (1..=PACKET_OUTBOX_CAP as u64).contains(&s)
         }));
+    }
+
+    #[test]
+    fn packet_outbox_evicts_same_stream_first() {
+        let box_ = PacketOutbox::new();
+        // Stream 1 fills most of the queue, stream 0 has one old delta at the head.
+        box_.push(test_pkt_on(0, 1, false));
+        for seq in 2..=PACKET_OUTBOX_CAP as u64 {
+            box_.push(test_pkt_on(1, seq, false));
+        }
+        assert_eq!(box_.len(), PACKET_OUTBOX_CAP);
+        box_.push(test_pkt_on(1, 1000, false));
+        let seqs = box_.seqs();
+        assert!(
+            seqs.contains(&1),
+            "stream 0's delta survives stream 1 pressure"
+        );
+        assert!(!seqs.contains(&2), "oldest stream-1 delta was evicted");
+        assert!(seqs.contains(&1000));
+    }
+
+    #[test]
+    fn sanitize_subscription_filters_and_bounds() {
+        assert_eq!(sanitize_subscription(vec![]), None);
+        assert_eq!(sanitize_subscription(vec![String::new()]), None);
+        assert_eq!(
+            sanitize_subscription(vec!["DP-1".into(), "DP-1".into(), "x".repeat(500)]),
+            Some(vec!["DP-1".to_string()])
+        );
+        let many: Vec<String> = (0..100).map(|i| format!("O-{i}")).collect();
+        let got = sanitize_subscription(many).expect("some");
+        assert_eq!(got.len(), MAX_REQUESTED_OUTPUT_IDS);
+    }
+
+    #[test]
+    fn resolve_subscription_defaults_to_primary() {
+        let monitors = vec![monitor("DP-1", 0, false), monitor("DP-2", 1920, true)];
+        assert_eq!(resolve_subscription(None, &monitors), vec!["DP-2"]);
+        assert_eq!(
+            resolve_subscription(Some(&["nope".to_string()]), &monitors),
+            vec!["DP-2"],
+            "unknown ids fall back to primary"
+        );
+        assert_eq!(
+            resolve_subscription(Some(&["DP-1".to_string()]), &monitors),
+            vec!["DP-1"]
+        );
+        assert!(resolve_subscription(None, &[]).is_empty());
+        // No `primary` flag → first monitor.
+        let flat = vec![monitor("A", 0, false), monitor("B", 10, false)];
+        assert_eq!(resolve_subscription(None, &flat), vec!["A"]);
+    }
+
+    #[test]
+    fn resolve_subscription_caps_at_max() {
+        let monitors: Vec<RudpMonitorInfo> = (0..6)
+            .map(|i| monitor(&format!("M-{i}"), i * 100, i == 0))
+            .collect();
+        let req: Vec<String> = (0..6).map(|i| format!("M-{i}")).collect();
+        let got = resolve_subscription(Some(&req), &monitors);
+        assert_eq!(got.len(), RUDP_MAX_SUBSCRIBED_OUTPUTS);
+        assert_eq!(got[0], "M-0");
+    }
+
+    #[test]
+    fn union_follows_layout_order_and_dedups() {
+        let monitors = vec![
+            monitor("DP-1", 0, true),
+            monitor("DP-2", 1920, false),
+            monitor("DP-3", 3840, false),
+        ];
+        let per_session = vec![
+            vec!["DP-3".to_string(), "DP-1".to_string()],
+            vec!["DP-1".to_string()],
+        ];
+        assert_eq!(
+            union_subscriptions(&per_session, &monitors),
+            vec!["DP-1", "DP-3"]
+        );
+        assert!(union_subscriptions(&[], &monitors).is_empty());
+    }
+
+    #[test]
+    fn layout_publish_bumps_generation_only_on_change() {
+        let layout = RudpLayoutShared::new();
+        assert_eq!(layout.generation(), 0);
+        assert!(layout.publish(vec![monitor("DP-1", 0, true)]));
+        assert_eq!(layout.generation(), 1);
+        assert!(!layout.publish(vec![monitor("DP-1", 0, true)]));
+        assert_eq!(layout.generation(), 1);
+        assert!(layout.publish(vec![monitor("DP-1", 0, true), monitor("DP-2", 1920, false)]));
+        let (generation, monitors) = layout.snapshot();
+        assert_eq!(generation, 2);
+        assert_eq!(monitors.len(), 2);
+    }
+
+    #[test]
+    fn stream_table_assigns_stable_recyclable_ids() {
+        let table = StreamTable::new();
+        assert_eq!(table.publish("DP-1", 1920, 1080, CODEC_H264), Some(0));
+        assert_eq!(table.publish("DP-2", 2560, 1440, CODEC_H264), Some(1));
+        let generation = table.generation();
+        assert_eq!(
+            table.publish("DP-1", 1920, 1080, CODEC_H264),
+            Some(0),
+            "id is stable"
+        );
+        assert_eq!(table.generation(), generation, "unchanged info: no bump");
+        assert_eq!(table.publish("DP-1", 1280, 720, CODEC_H264), Some(0));
+        assert!(table.generation() > generation, "resize re-advertises");
+        let snap = table.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert_eq!(snap[1].output_id, "DP-2");
+        assert_eq!((snap[1].width, snap[1].height), (2560, 1440));
+        // Dropping DP-1 frees id 0 for the next output.
+        table.retain(&["DP-2".to_string()]);
+        assert_eq!(table.publish("HDMI-A-1", 800, 600, CODEC_AV1), Some(0));
+    }
+
+    #[test]
+    fn session_subscription_accepts_media_needs_announce() {
+        // `VideoSession` needs a live Quinn connection, so exercise the
+        // subscription state machine directly.
+        let mut subs = SessionSubscription::default();
+        let monitors = vec![monitor("DP-1", 0, true), monitor("DP-2", 1920, false)];
+        subs.effective = resolve_subscription(subs.requested.as_deref(), &monitors);
+        assert_eq!(subs.effective, vec!["DP-1"]);
+        subs.requested = sanitize_subscription(vec!["DP-2".into(), "DP-1".into()]);
+        let next = resolve_subscription(subs.requested.as_deref(), &monitors);
+        assert!(
+            next.iter().any(|id| !subs.effective.contains(id)),
+            "gained DP-2"
+        );
     }
 
     #[test]
@@ -2065,6 +2744,7 @@ mod tests {
                 },
                 pointer_locked: Arc::new(AtomicBool::new(false)),
                 session_locked: Arc::new(AtomicBool::new(false)),
+                layout: Arc::new(RudpLayoutShared::new()),
             },
         )
         .expect("spawn host");

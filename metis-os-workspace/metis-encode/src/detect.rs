@@ -3,15 +3,19 @@
 //! Frames reach the encoder as CPU-readable LINEAR buffers, so the encode GPU
 //! does not have to be the compositor's render GPU. `Auto` therefore tries the
 //! render GPU's native encoder first and falls back to the other vendor.
+//! [`encode_ladder`] flattens that into the ordered `(backend, codec)` attempts
+//! the worker probes, including the software AV1 rung.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::types::EncoderBackend;
+use crate::probe::codec_ladder;
+use crate::types::{EncoderBackend, RudpCodec};
 
 const PCI_NVIDIA: &str = "0x10de";
 
-/// Resolve `Auto` from the render node vendor; explicit backends pass through.
+/// Resolve `Auto` from the render node vendor; explicit backends (including
+/// `Soft`) pass through.
 pub fn resolve_backend(requested: EncoderBackend, drm_render_node: &str) -> EncoderBackend {
     match requested {
         EncoderBackend::Auto => detect_preferred_backend(drm_render_node),
@@ -33,6 +37,8 @@ pub fn detect_preferred_backend(drm_render_node: &str) -> EncoderBackend {
 pub fn preferred_render_node(drm_render_node: &str, backend: EncoderBackend) -> PathBuf {
     let nodes = render_nodes();
     let pick = match backend {
+        // CPU encode has no device; keep the caller's node for logging only.
+        EncoderBackend::Soft => return PathBuf::from(drm_render_node),
         EncoderBackend::Nvenc => {
             if render_node_is_nvidia(drm_render_node) {
                 return PathBuf::from(drm_render_node);
@@ -71,12 +77,91 @@ pub fn encode_candidates(
             }
             v
         }
+        // `Soft` yields a single CPU attempt (device is unused).
         other => vec![other],
     };
     order
         .into_iter()
         .map(|b| (b, preferred_render_node(drm_render_node, b)))
         .collect()
+}
+
+/// One rung of the encode ladder: try `codec` on `backend` using `device`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncodeAttempt {
+    pub backend: EncoderBackend,
+    pub codec: RudpCodec,
+    /// DRM render node (VAAPI / NVENC); unused by `Soft`.
+    pub device: PathBuf,
+}
+
+/// Ordered encode attempts for `requested` / `preferred`.
+///
+/// - `Soft`: software AV1 only (never falls back to hardware).
+/// - `Vaapi` / `Nvenc`: that backend's [`codec_ladder`].
+/// - `Auto` + preferred AV1: hardware AV1 on every candidate backend, then
+///   software AV1, then the remaining hardware H.264/HEVC ladder.
+/// - `Auto` otherwise: hardware ladders only (software AV1 is CPU-heavy and
+///   never chosen unless AV1 was asked for or `Soft` was selected explicitly).
+pub fn encode_ladder(
+    requested: EncoderBackend,
+    preferred: RudpCodec,
+    drm_render_node: &str,
+) -> Vec<EncodeAttempt> {
+    build_ladder(
+        requested,
+        preferred,
+        &encode_candidates(requested, drm_render_node),
+        drm_render_node,
+    )
+}
+
+/// Pure ladder construction over pre-resolved `candidates` (unit-testable).
+fn build_ladder(
+    requested: EncoderBackend,
+    preferred: RudpCodec,
+    candidates: &[(EncoderBackend, PathBuf)],
+    drm_render_node: &str,
+) -> Vec<EncodeAttempt> {
+    let soft = EncodeAttempt {
+        backend: EncoderBackend::Soft,
+        codec: RudpCodec::Av1,
+        device: PathBuf::from(drm_render_node),
+    };
+    if requested == EncoderBackend::Soft {
+        return vec![soft];
+    }
+
+    let hw: Vec<&(EncoderBackend, PathBuf)> = candidates
+        .iter()
+        .filter(|(b, _)| *b != EncoderBackend::Soft)
+        .collect();
+    let av1_first = requested == EncoderBackend::Auto && preferred == RudpCodec::Av1;
+
+    let mut out = Vec::new();
+    if av1_first {
+        for (backend, device) in &hw {
+            out.push(EncodeAttempt {
+                backend: *backend,
+                codec: RudpCodec::Av1,
+                device: device.clone(),
+            });
+        }
+        out.push(soft);
+    }
+    for (backend, device) in &hw {
+        for codec in codec_ladder(preferred, *backend) {
+            if av1_first && codec == RudpCodec::Av1 {
+                continue; // already tried above
+            }
+            out.push(EncodeAttempt {
+                backend: *backend,
+                codec,
+                device: device.clone(),
+            });
+        }
+    }
+    out
 }
 
 fn render_nodes() -> Vec<PathBuf> {
@@ -131,6 +216,124 @@ mod tests {
         assert_eq!(
             resolve_backend(EncoderBackend::Nvenc, "/dev/dri/renderD128"),
             EncoderBackend::Nvenc
+        );
+    }
+
+    fn node(p: &str) -> PathBuf {
+        PathBuf::from(p)
+    }
+
+    fn pairs(l: &[EncodeAttempt]) -> Vec<(EncoderBackend, RudpCodec)> {
+        l.iter().map(|a| (a.backend, a.codec)).collect()
+    }
+
+    #[test]
+    fn explicit_soft_is_soft_av1_only() {
+        let cands = [(EncoderBackend::Vaapi, node("/dev/dri/renderD128"))];
+        for preferred in [RudpCodec::H264, RudpCodec::Hevc, RudpCodec::Av1] {
+            let l = build_ladder(
+                EncoderBackend::Soft,
+                preferred,
+                &cands,
+                "/dev/dri/renderD128",
+            );
+            assert_eq!(pairs(&l), vec![(EncoderBackend::Soft, RudpCodec::Av1)]);
+        }
+        let l = encode_ladder(
+            EncoderBackend::Soft,
+            RudpCodec::H264,
+            "/dev/dri/renderD-missing",
+        );
+        assert_eq!(pairs(&l), vec![(EncoderBackend::Soft, RudpCodec::Av1)]);
+    }
+
+    #[test]
+    fn auto_av1_tries_hw_av1_then_soft_then_hw_h264() {
+        let cands = [(EncoderBackend::Vaapi, node("/dev/dri/renderD128"))];
+        let l = build_ladder(
+            EncoderBackend::Auto,
+            RudpCodec::Av1,
+            &cands,
+            "/dev/dri/renderD128",
+        );
+        assert_eq!(
+            pairs(&l),
+            vec![
+                (EncoderBackend::Vaapi, RudpCodec::Av1),
+                (EncoderBackend::Soft, RudpCodec::Av1),
+                (EncoderBackend::Vaapi, RudpCodec::H264),
+                (EncoderBackend::Vaapi, RudpCodec::Hevc),
+            ]
+        );
+    }
+
+    #[test]
+    fn auto_av1_dual_gpu_tries_all_hw_av1_before_soft() {
+        let cands = [
+            (EncoderBackend::Nvenc, node("/dev/dri/renderD129")),
+            (EncoderBackend::Vaapi, node("/dev/dri/renderD128")),
+        ];
+        let l = build_ladder(
+            EncoderBackend::Auto,
+            RudpCodec::Av1,
+            &cands,
+            "/dev/dri/renderD129",
+        );
+        let p = pairs(&l);
+        assert_eq!(p[0], (EncoderBackend::Nvenc, RudpCodec::Av1));
+        assert_eq!(p[1], (EncoderBackend::Vaapi, RudpCodec::Av1));
+        assert_eq!(p[2], (EncoderBackend::Soft, RudpCodec::Av1));
+        assert!(
+            p[3..]
+                .iter()
+                .all(|(b, c)| *b != EncoderBackend::Soft && *c != RudpCodec::Av1)
+        );
+        assert_eq!(p.len(), 3 + 4);
+    }
+
+    #[test]
+    fn auto_non_av1_never_uses_soft() {
+        let cands = [(EncoderBackend::Vaapi, node("/dev/dri/renderD128"))];
+        for preferred in [RudpCodec::H264, RudpCodec::Hevc] {
+            let l = build_ladder(
+                EncoderBackend::Auto,
+                preferred,
+                &cands,
+                "/dev/dri/renderD128",
+            );
+            assert!(l.iter().all(|a| a.backend != EncoderBackend::Soft));
+            assert_eq!(l[0].codec, RudpCodec::H264);
+        }
+    }
+
+    #[test]
+    fn explicit_hw_never_uses_soft_even_for_av1() {
+        let cands = [(EncoderBackend::Nvenc, node("/dev/dri/renderD129"))];
+        let l = build_ladder(
+            EncoderBackend::Nvenc,
+            RudpCodec::Av1,
+            &cands,
+            "/dev/dri/renderD129",
+        );
+        assert_eq!(
+            pairs(&l),
+            vec![
+                (EncoderBackend::Nvenc, RudpCodec::Av1),
+                (EncoderBackend::Nvenc, RudpCodec::H264),
+                (EncoderBackend::Nvenc, RudpCodec::Hevc),
+            ]
+        );
+    }
+
+    #[test]
+    fn soft_resolves_and_keeps_node() {
+        assert_eq!(
+            resolve_backend(EncoderBackend::Soft, "/dev/dri/renderD128"),
+            EncoderBackend::Soft
+        );
+        assert_eq!(
+            preferred_render_node("/dev/dri/renderD128", EncoderBackend::Soft),
+            PathBuf::from("/dev/dri/renderD128")
         );
     }
 

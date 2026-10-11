@@ -14,8 +14,9 @@ use std::time::Instant;
 
 use gtk::prelude::*;
 use metis_config::{
-    ViewerHost, ViewerHostsView, ViewerProtocol, load_viewer_config, remember_host, remove_recent,
-    save_hosts_view, set_viewer_pending_placement,
+    ViewerHost, ViewerHostsView, ViewerProtocol, clear_viewer_pending_placement,
+    load_viewer_config, remember_host, remove_recent, save_hosts_view,
+    set_viewer_pending_placement,
 };
 use metis_i18n::tr;
 use options::OptionsUi;
@@ -26,6 +27,10 @@ struct CliPrefill {
     port: Option<u16>,
     user: Option<String>,
     rudp: bool,
+    /// `--monitor NAME` (repeatable): Metis Remote outputs to stream.
+    monitors: Vec<String>,
+    /// `--all-monitors`: stream every host monitor, one window each.
+    all_monitors: bool,
 }
 
 fn main() {
@@ -97,10 +102,29 @@ fn parse_cli() -> CliPrefill {
             }
             "--user" | "--username" => out.user = args.next(),
             "--rudp" => out.rudp = true,
+            "--monitor" => match args.next() {
+                Some(name) if !name.trim().is_empty() => {
+                    out.rudp = true;
+                    out.monitors.push(name.trim().to_string());
+                }
+                _ => {
+                    eprintln!("metis-viewer: --monitor needs an output name (e.g. DP-1)");
+                    std::process::exit(2);
+                }
+            },
+            "--all-monitors" => {
+                out.rudp = true;
+                out.all_monitors = true;
+            }
             "-h" | "--help" => {
                 eprintln!(
                     "Usage: metis-viewer [--rudp] [--host HOST] [--port PORT] [--user USER]\n\
-                     RDP via FreeRDP (default) or Metis Remote with --rudp (UDP, default port 7843)."
+                     \x20                   [--monitor NAME].. [--all-monitors]\n\
+                     RDP via FreeRDP (default) or Metis Remote with --rudp (UDP, default port 7843).\n\
+                     Metis Remote multi-monitor (both imply --rudp):\n\
+                     \x20 --monitor NAME   stream this host output (repeatable, max 4)\n\
+                     \x20 --all-monitors   stream every host output, one window each\n\
+                     Default: primary monitor only (or the saved per-host preference)."
                 );
                 std::process::exit(0);
             }
@@ -427,13 +451,27 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
     panel.append(&rdp_options);
 
     let rudp_hint = gtk::Label::new(Some(&tr(
-        "Metis Remote uses your local PAM password. Video is hardware-encoded \
-         on the host; no FreeRDP options apply.",
+        "Metis Remote uses your local PAM password. Video is encoded on the host. \
+         On Metis, placement opens a dedicated workspace (accent edge-bar dot) \
+         unless you choose window mode.",
     )));
     rudp_hint.set_xalign(0.0);
     rudp_hint.set_wrap(true);
     rudp_hint.add_css_class("metis-viewer-hint");
     panel.append(&rudp_hint);
+    let rudp_placement_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    rudp_placement_row.add_css_class("metis-viewer-rudp-placement");
+    let rudp_placement_lbl = gtk::Label::new(Some(&tr("Metis placement")));
+    rudp_placement_lbl.set_xalign(0.0);
+    rudp_placement_lbl.set_hexpand(true);
+    let rudp_placement_dd = options_ui.rudp_placement.clone();
+    rudp_placement_dd.set_hexpand(true);
+    rudp_placement_row.append(&rudp_placement_lbl);
+    rudp_placement_row.append(&rudp_placement_dd);
+    panel.append(&rudp_placement_row);
+    let rudp_multi_check = options_ui.rudp_separate_windows.clone();
+    rudp_multi_check.add_css_class("metis-viewer-rudp-multi");
+    panel.append(&rudp_multi_check);
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.add_css_class("metis-viewer-actions");
@@ -458,6 +496,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let pass_hint = pass_hint.clone();
         let rdp_options = rdp_options.clone();
         let rudp_hint = rudp_hint.clone();
+        let rudp_placement_row = rudp_placement_row.clone();
+        let rudp_multi_check = rudp_multi_check.clone();
         let connect_btn = connect_btn.clone();
         let freerdp_banner = freerdp_banner.clone();
         Rc::new(move |proto: ViewerProtocol| {
@@ -473,6 +513,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     ));
                     rdp_options.set_visible(true);
                     rudp_hint.set_visible(false);
+                    rudp_placement_row.set_visible(false);
+                    rudp_multi_check.set_visible(false);
                     freerdp_banner.set_visible(!freerdp_ok);
                     connect_btn.set_sensitive(freerdp_ok);
                 }
@@ -483,6 +525,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                     ));
                     rdp_options.set_visible(false);
                     rudp_hint.set_visible(true);
+                    rudp_placement_row.set_visible(true);
+                    rudp_multi_check.set_visible(true);
                     freerdp_banner.set_visible(false);
                     connect_btn.set_sensitive(true);
                 }
@@ -672,6 +716,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         cancel_btn.connect_clicked(move |_| close_panel());
     }
 
+    let cli_monitors =
+        rudp_session::MonitorChoice::from_cli(&prefill.monitors, prefill.all_monitors);
     let connect_busy = Rc::new(RefCell::new(false));
     let watched_child: Rc<RefCell<Option<Child>>> = Rc::new(RefCell::new(None));
     let connect_slot: Rc<RefCell<Option<ConnectFn>>> = Rc::new(RefCell::new(None));
@@ -785,6 +831,7 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
         let connecting_key = connecting_key.clone();
         let cancel_action = cancel_action.clone();
         let rudp_cancel = rudp_cancel.clone();
+        let cli_monitors = cli_monitors.clone();
 
         move || {
             if *connect_busy.borrow() {
@@ -858,6 +905,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 username: username.trim().to_string(),
                 label: label.trim().to_string(),
                 protocol,
+                rudp_separate_monitor_windows: protocol == ViewerProtocol::Rudp
+                    && options_ui.collect_rudp_separate_windows(),
                 options: options.clone(),
             };
             let account = credentials::secret_account(&entry);
@@ -964,12 +1013,20 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 let refresh_cb = refresh_hosts.clone();
                 let cancel_action_cb = cancel_action.clone();
                 let rudp_cancel_cb = rudp_cancel.clone();
+                // CLI `--monitor` / `--all-monitors` override the saved preference.
+                let monitors = cli_monitors.clone().unwrap_or_else(|| {
+                    rudp_session::MonitorChoice::from_preference(
+                        entry.rudp_separate_monitor_windows,
+                    )
+                });
+                set_viewer_pending_placement(options.placement);
                 let handle = rudp_session::open_rudp_session(
                     &parent,
                     host.trim().to_string(),
                     port,
                     username.trim().to_string(),
                     password,
+                    monitors,
                     move |outcome| {
                         *rudp_cancel_cb.borrow_mut() = None;
                         *cancel_action_cb.borrow_mut() = None;
@@ -983,9 +1040,11 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                                 close();
                             }
                             Err(msg) if rudp_session::is_cancelled_message(&msg) => {
+                                clear_viewer_pending_placement();
                                 clear_status(&status_row_cb, &spinner_cb);
                             }
                             Err(msg) => {
+                                clear_viewer_pending_placement();
                                 set_status(
                                     &status_row_cb,
                                     &status_banner_cb,
@@ -1227,6 +1286,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
                 } else {
                     ViewerProtocol::Rdp
                 },
+                rudp_separate_monitor_windows: protocol_dropdown.selected() == 1
+                    && options_ui.collect_rudp_separate_windows(),
                 options: options_ui.collect(),
             };
             let account = credentials::secret_account(&entry);

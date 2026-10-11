@@ -1992,7 +1992,7 @@ impl MetisState {
         }
     }
 
-    /// Dedicated FreeRDP sessions always own an ephemeral desk at
+    /// Dedicated remote-viewer sessions always own an ephemeral desk at
     /// `workspace_count() + 1` so permanent desks 1..=N stay untouched.
     pub(crate) fn pick_remote_viewer_workspace(&self, key: &str, window_id: u32) -> u32 {
         let ephemeral = self.workspace_count().saturating_add(1);
@@ -2040,10 +2040,27 @@ impl MetisState {
             };
             rec.output == key
                 && rec.workspace == ws
-                && rec
-                    .app_id
-                    .as_deref()
-                    .is_some_and(crate::decoration_policy::id_looks_freerdp_client)
+                && crate::decoration_policy::looks_like_remote_viewer_session(
+                    rec.app_id.as_deref(),
+                    &rec.title,
+                )
+        })
+    }
+
+    /// Any FreeRDP / Metis Remote session window on this output (any workspace).
+    pub(crate) fn any_remote_viewer_on_output(&self, key: &str, exclude: Option<u32>) -> bool {
+        self.windows.ids().into_iter().any(|id| {
+            if exclude == Some(id) {
+                return false;
+            }
+            let Some(rec) = self.windows.get(id) else {
+                return false;
+            };
+            rec.output == key
+                && crate::decoration_policy::looks_like_remote_viewer_session(
+                    rec.app_id.as_deref(),
+                    &rec.title,
+                )
         })
     }
 }

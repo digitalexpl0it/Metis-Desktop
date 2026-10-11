@@ -4,9 +4,11 @@
 //!   metis-rudp-smoke <host:port> --user <name>
 //!   metis-rudp-smoke <host:port> --user <name> --video-secs 5
 //!   metis-rudp-smoke <host:port> --user <name> --input-smoke
+//!   metis-rudp-smoke <host:port> --user <name> --monitor DP-2 --video-secs 5
 //!   Password on stdin (or METIS_RUDP_PASSWORD).
 //!   --tofu-reset clears the known_hosts pin for this host.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 use std::net::SocketAddr;
 use std::os::fd::AsRawFd;
@@ -42,6 +44,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut tofu_reset = false;
     let mut video_secs: Option<u64> = None;
     let mut input_smoke = false;
+    let mut monitors: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -59,6 +62,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     .map_err(|_| format!("invalid --video-secs '{raw}'"))?;
                 video_secs = Some(n.max(1));
             }
+            "--monitor" | "-m" => {
+                i += 1;
+                let name = args
+                    .get(i)
+                    .ok_or_else(|| "--monitor needs an output name".to_string())?;
+                if !monitors.contains(name) {
+                    monitors.push(name.clone());
+                }
+            }
             "--input-smoke" => input_smoke = true,
             "--tofu-reset" => tofu_reset = true,
             "--help" | "-h" => {
@@ -74,7 +86,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
 
     let host_port = host_port.ok_or_else(|| {
-        "usage: metis-rudp-smoke <host:port> --user <name> [--video-secs N] [--input-smoke] [--tofu-reset]"
+        "usage: metis-rudp-smoke <host:port> --user <name> [--video-secs N] [--monitor NAME].. [--input-smoke] [--tofu-reset]"
             .to_string()
     })?;
     let user = user.ok_or_else(|| "--user <name> required".to_string())?;
@@ -106,7 +118,16 @@ fn run(args: Vec<String>) -> Result<(), String> {
         .map_err(|e| format!("tokio: {e}"))?;
 
     let result = rt.block_on(async {
-        smoke_session(addr, &host_port, &user, &password, video_secs, input_smoke).await
+        smoke_session(
+            addr,
+            &host_port,
+            &user,
+            &password,
+            video_secs,
+            input_smoke,
+            &monitors,
+        )
+        .await
     });
     password.zeroize();
     result.map_err(|e| e.to_string())
@@ -119,6 +140,7 @@ async fn smoke_session(
     password: &str,
     video_secs: Option<u64>,
     input_smoke: bool,
+    monitors: &[String],
 ) -> Result<(), ClientError> {
     let mut session = connect(RudpClientConfig {
         addr,
@@ -130,15 +152,54 @@ async fn smoke_session(
     .await?;
     println!("SessionOk {}", session.session_id());
 
-    // Drain any immediate PointerLock.
-    while let Ok(ev) = tokio::time::timeout(Duration::from_millis(80), session.recv_event()).await {
+    // Drain the post-auth burst: PointerLock + DesktopLayout (host sends both
+    // immediately after SessionOk).
+    let mut layout_seen = false;
+    let mut video_ready = false;
+    let mut streams: BTreeMap<u8, String> = BTreeMap::new();
+    while let Ok(ev) = tokio::time::timeout(Duration::from_millis(250), session.recv_event()).await
+    {
         match ev {
             Some(SessionEvent::PointerLock { locked }) => {
                 println!("PointerLock locked={locked}");
             }
+            Some(SessionEvent::DesktopLayout { monitors: layout }) => {
+                layout_seen = true;
+                print_layout(&layout);
+                if !monitors.is_empty() {
+                    if let Some(missing) = monitors
+                        .iter()
+                        .find(|want| !layout.iter().any(|m| &m.id == *want))
+                    {
+                        return Err(ClientError::msg(format!(
+                            "--monitor {missing}: not in host desktop layout"
+                        )));
+                    }
+                    session.subscribe_outputs(monitors.to_vec()).await?;
+                    println!("SubscribeOutputs {}", monitors.join(","));
+                }
+            }
+            Some(SessionEvent::VideoReady {
+                width,
+                height,
+                codec,
+                stream_id,
+                output_id,
+            }) => {
+                println!(
+                    "VideoReady stream={stream_id} output={output_id} {width}x{height} codec={codec}"
+                );
+                streams.insert(stream_id, output_id);
+                video_ready = true;
+            }
             Some(SessionEvent::Disconnected) | None => break,
             Some(_) => break,
         }
+    }
+    if !layout_seen && !monitors.is_empty() {
+        return Err(ClientError::msg(
+            "--monitor given but host sent no DesktopLayout (protocol < 3?)",
+        ));
     }
 
     if input_smoke {
@@ -180,10 +241,10 @@ async fn smoke_session(
     };
 
     let deadline = Instant::now() + Duration::from_secs(secs);
-    let mut video_ready = false;
     let mut aus = 0u64;
     let mut bytes = 0u64;
     let mut keyframes = 0u64;
+    let mut per_stream: BTreeMap<u8, u64> = BTreeMap::new();
 
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -193,12 +254,20 @@ async fn smoke_session(
         )
         .await
         {
+            Ok(Some(SessionEvent::DesktopLayout { monitors: layout })) => {
+                print_layout(&layout);
+            }
             Ok(Some(SessionEvent::VideoReady {
                 width,
                 height,
                 codec,
+                stream_id,
+                output_id,
             })) => {
-                println!("VideoReady {width}x{height} codec={codec}");
+                println!(
+                    "VideoReady stream={stream_id} output={output_id} {width}x{height} codec={codec}"
+                );
+                streams.insert(stream_id, output_id);
                 video_ready = true;
             }
             Ok(Some(SessionEvent::PointerLock { locked })) => {
@@ -207,6 +276,7 @@ async fn smoke_session(
             Ok(Some(SessionEvent::AccessUnit(au))) => {
                 aus += 1;
                 bytes += au.data.len() as u64;
+                *per_stream.entry(au.stream_id).or_default() += 1;
                 if au.keyframe {
                     keyframes += 1;
                 }
@@ -222,12 +292,31 @@ async fn smoke_session(
     }
 
     println!("video: aus={aus} keyframes={keyframes} bytes={bytes} video_ready={video_ready}");
+    for (stream_id, n) in &per_stream {
+        let output = streams.get(stream_id).map_or("?", String::as_str);
+        println!("  stream {stream_id} ({output}): aus={n}");
+    }
     if aus == 0 {
         return Err(ClientError::msg(
             "no video access units received (is Metis Remote enabled with an active DRM session?)",
         ));
     }
     Ok(())
+}
+
+fn print_layout(monitors: &[metis_protocol::RudpMonitorInfo]) {
+    for m in monitors {
+        println!(
+            "Monitor {}{} {}x{}+{}+{} scale={}",
+            m.id,
+            if m.primary { " (primary)" } else { "" },
+            m.width,
+            m.height,
+            m.x,
+            m.y,
+            m.scale
+        );
+    }
 }
 
 /// Prompt on stderr, read one line from stdin with echo disabled (TTY only).
@@ -273,9 +362,10 @@ fn print_help() {
     println!(
         "metis-rudp-smoke — Metis Remote auth + video + input smoke test\n\n\
          Usage:\n  \
-         metis-rudp-smoke <host:port> --user <name> [--video-secs N] [--input-smoke] [--tofu-reset]\n\n\
+         metis-rudp-smoke <host:port> --user <name> [--video-secs N] [--monitor NAME].. [--input-smoke] [--tofu-reset]\n\n\
          Password: TTY prompt (no echo) or METIS_RUDP_PASSWORD.\n\
          --video-secs N  receive/reassemble video for N seconds (requires host encode).\n\
+         --monitor NAME  subscribe to this output (repeatable, max 4; default: primary).\n\
          --input-smoke   send a short pointer/keyboard sequence after SessionOk.\n\
          TOFU pins live in ~/.config/metis/rudp/known_hosts."
     );

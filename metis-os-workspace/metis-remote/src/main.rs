@@ -9,12 +9,12 @@ use metis_remote::{
     firewall_rudp_apply_as_root, firewall_rudp_clear, firewall_rudp_clear_as_root,
     firewall_rudp_status, firewall_rustdesk_apply, firewall_rustdesk_apply_as_root,
     firewall_rustdesk_clear, firewall_rustdesk_clear_as_root, firewall_rustdesk_status,
-    firewall_status, native_disable, native_enable, native_status, pause, privileged_exe,
-    remove_user_as_root, resume, rustdesk_disable, rustdesk_enable, rustdesk_status,
-    set_account_password_as_root, set_admin_as_root, set_display_name_as_root, set_lan_only,
-    set_ntp_as_root, set_password, set_time_as_root, set_timezone_as_root, set_user_icon_as_root,
-    status, ubuntu_drivers_install, updates_apply_as_root, updates_configure_pending_as_root,
-    updates_refresh_as_root,
+    firewall_status, native_disable, native_enable, native_set_password, native_status, pause,
+    privileged_exe, remove_user_as_root, resume, rustdesk_disable, rustdesk_enable,
+    rustdesk_status, set_account_password_as_root, set_admin_as_root, set_display_name_as_root,
+    set_lan_only, set_ntp_as_root, set_password, set_time_as_root, set_timezone_as_root,
+    set_user_icon_as_root, status, ubuntu_drivers_install, updates_apply_as_root,
+    updates_configure_pending_as_root, updates_refresh_as_root,
 };
 use zeroize::Zeroize;
 
@@ -77,21 +77,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     "usage: metis-remote set-credentials <username>  (password on stdin)"
                         .to_string()
                 })?;
-            let mut password = String::new();
-            std::io::stdin()
-                .read_to_string(&mut password)
-                .map_err(|e| format!("read password from stdin: {e}"))?;
-            // Accept a single line; ignore trailing newline / CR.
-            let trimmed = password.trim_end_matches(['\r', '\n']);
-            if trimmed.is_empty() {
-                password.zeroize();
-                return Err(String::from("password on stdin must not be empty"));
-            }
-            let mut owned = trimmed.to_string();
-            password.zeroize();
-            let result = set_password(&username, &owned);
-            owned.zeroize();
-            result
+            read_password_stdin().and_then(|mut pw| {
+                let result = set_password(&username, &pw);
+                pw.zeroize();
+                result
+            })
         }
         Some("firewall") => match args.get(1).map(String::as_str) {
             Some("apply") => {
@@ -187,8 +177,23 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let kill = args.get(2).map(String::as_str) != Some("--keep-process");
                 native_disable(kill)
             }
+            Some("set-credentials") => {
+                let username = args
+                    .get(2)
+                    .cloned()
+                    .or_else(|| std::env::var("USER").ok())
+                    .ok_or_else(|| {
+                        "usage: metis-remote native set-credentials <username>  (password on stdin)"
+                            .to_string()
+                    })?;
+                read_password_stdin().and_then(|mut pw| {
+                    let result = native_set_password(&username, &pw);
+                    pw.zeroize();
+                    result
+                })
+            }
             _ => Err(String::from(
-                "usage: metis-remote native {status|enable|disable [--keep-process]}",
+                "usage: metis-remote native {status|enable|disable [--keep-process]|set-credentials U}",
             )),
         },
         Some("pk-apt-install") => {
@@ -348,6 +353,23 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
 }
 
+/// Read one password line from stdin (trailing CR/LF stripped); must be non-empty.
+fn read_password_stdin() -> Result<String, String> {
+    let mut password = String::new();
+    std::io::stdin()
+        .read_to_string(&mut password)
+        .map_err(|e| format!("read password from stdin: {e}"))?;
+    // Accept a single line; ignore trailing newline / CR.
+    let trimmed = password.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() {
+        password.zeroize();
+        return Err(String::from("password on stdin must not be empty"));
+    }
+    let owned = trimmed.to_string();
+    password.zeroize();
+    Ok(owned)
+}
+
 fn print_firewall(snap: &metis_remote::FirewallStatus) -> Result<(), String> {
     let json = serde_json::to_string_pretty(snap).map_err(|e| e.to_string())?;
     println!("{json}");
@@ -383,7 +405,7 @@ fn print_help() {
   pause               Stop RDP listen (keep remote.json enabled) — used on lock
   resume              Re-enable RDP if remote.json still enabled — used on unlock
   autostart           Enable sharing when remote.json enabled + auto_start
-  set-credentials U   Set RDP login; password is read from stdin (one line)
+  set-credentials U   Set RDP login for the active backend (GRD or Metis native); password on stdin
   set-lan-only BOOL   Persist lan_only and apply/clear firewall when sharing is on
   firewall apply      Apply LAN-only rules for TCP 3389 (pkexec if needed)
   firewall clear      Remove Metis LAN-only rules
@@ -394,6 +416,7 @@ fn print_help() {
   native status       Print Metis-native RDP host (metis-rdp-host) status JSON
   native enable       Start metis-rdp-host (portal capture; GRD remains default)
   native disable      Stop metis-rdp-host + restore GNOME RDP backend ([--keep-process])
+  native set-credentials U  Set Metis-native RDP login (password on stdin → runtime 0600 file)
   pk-apt-install …    Polkit: install allowlisted apt packages
   pk-ubuntu-drivers-install  Polkit: ubuntu-drivers install (NVIDIA consent path)
   pk-updates-refresh / apply / configure  Polkit: refresh / upgrade / finish conffile prompts

@@ -170,6 +170,32 @@ fn nvenc_hevc_encode_produces_keyframe() {
     encode_roundtrip(EncoderBackend::Nvenc, RudpCodec::Hevc, &node);
 }
 
+/// Software AV1 needs no GPU; skipped when FFmpeg lacks libsvtav1 / libaom-av1.
+#[test]
+fn soft_av1_encode_produces_keyframe() {
+    let Some(name) = metis_encode::soft_av1_encoder_name() else {
+        eprintln!("skipped: no software AV1 encoder (libsvtav1 / libaom-av1) in FFmpeg");
+        return;
+    };
+    eprintln!("soft AV1 encoder: {name}");
+    encode_roundtrip(EncoderBackend::Soft, RudpCodec::Av1, "/dev/null");
+}
+
+/// Explicit `Soft` forces AV1 on the CPU even when H.264 is the preferred codec.
+#[test]
+fn soft_backend_forces_av1_over_preferred_codec() {
+    if metis_encode::soft_av1_encoder_name().is_none() {
+        eprintln!("skipped: no software AV1 encoder in FFmpeg");
+        return;
+    }
+    let _g = serial();
+    use_built_probe();
+    let config = cfg(320, 240, EncoderBackend::Soft); // codec = H264
+    let enc = ProcessEncoder::spawn(&config, "/dev/null", None).expect("soft worker init");
+    assert_eq!(enc.info().backend, EncoderBackend::Soft);
+    assert_eq!(enc.info().codec, RudpCodec::Av1);
+}
+
 /// Spawn a worker for exactly `backend`/`codec`, encode 10 frames (padded
 /// stride, moving pattern), and require an IDR first with no silent fallback.
 fn encode_roundtrip(backend: EncoderBackend, codec: RudpCodec, node: &str) {

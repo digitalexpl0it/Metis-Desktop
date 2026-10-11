@@ -371,6 +371,8 @@ pub struct MetisState {
     pub(crate) rudp_pointer_locked: Arc<AtomicBool>,
     /// Shared with RUDP host: PAM or ext-session-lock owns the session.
     pub(crate) rudp_session_locked: Arc<AtomicBool>,
+    /// Desktop topology advertised to RUDP clients (`DesktopLayout`).
+    pub(crate) rudp_layout: Arc<crate::rudp_host::RudpLayoutShared>,
     pub(crate) color_mgmt: crate::color_management::ColorManagementRuntime,
     /// Idle detection + screen-blank (DPMS) + inhibitor bookkeeping.
     pub(crate) idle: crate::idle::IdleManager,
@@ -388,8 +390,11 @@ pub struct MetisState {
     /// Windows a game rule asked to fullscreen, awaiting readiness (fullscreen is
     /// applied once the client has committed a buffer and been placed).
     pub(crate) pending_game_fullscreen: std::collections::HashSet<u32>,
-    /// Output name → workspace reserved for FreeRDP client sessions.
+    /// Output name → workspace reserved for remote-viewer sessions (dedicated desk).
     pub(crate) remote_viewer_workspace: std::collections::HashMap<String, u32>,
+    /// Outputs where the user chose “window on current desktop” for this session
+    /// (extra Metis Remote monitor windows must not invent a dedicated desk).
+    pub(crate) remote_viewer_window_mode: std::collections::HashSet<String>,
     /// Window ids already auto-placed onto a remote-viewer workspace.
     pub(crate) remote_viewer_placed: std::collections::HashSet<u32>,
     /// `linux-drm-syncobj-v1` explicit-sync state. `Some` only when the primary
@@ -1051,6 +1056,7 @@ impl MetisState {
             rudp_input_rx: Some(rudp_input_rx),
             rudp_pointer_locked: Arc::new(AtomicBool::new(false)),
             rudp_session_locked: Arc::new(AtomicBool::new(false)),
+            rudp_layout: Arc::new(crate::rudp_host::RudpLayoutShared::new()),
             color_mgmt: crate::color_management::ColorManagementRuntime::new(&dh),
             idle,
             lock: crate::lock::LockState::new(),
@@ -1060,6 +1066,7 @@ impl MetisState {
             gaming_config: metis_config::load_gaming_config(),
             pending_game_fullscreen: std::collections::HashSet::new(),
             remote_viewer_workspace: std::collections::HashMap::new(),
+            remote_viewer_window_mode: std::collections::HashSet::new(),
             remote_viewer_placed: std::collections::HashSet::new(),
             drm_syncobj_state: None,
             idle_inhibit_state,
@@ -3144,15 +3151,89 @@ impl MetisState {
                         input_tx: self.rudp_input_tx.clone(),
                         pointer_locked: Arc::clone(&self.rudp_pointer_locked),
                         session_locked: Arc::clone(&self.rudp_session_locked),
+                        layout: Arc::clone(&self.rudp_layout),
                     },
                 ) {
                     Ok(host) => {
                         tracing::info!(bind = %host.bind, "rudp host (re)started");
                         self.rudp_host = Some(host);
+                        self.refresh_rudp_layout();
                     }
                     Err(err) => tracing::error!(%err, "rudp host reload failed"),
                 }
             }
+        }
+    }
+
+    /// Desktop topology for Metis Remote clients: enabled outputs in layout
+    /// order (x, then y, then name) with logical geometry. Duplicate (mirror)
+    /// mode advertises only the mirror source — it is the one picture on every
+    /// screen.
+    fn rudp_layout_monitors(&self) -> Vec<metis_protocol::RudpMonitorInfo> {
+        let mirror_source = if self.mirror_mode_active() {
+            self.resolve_mirror_source()
+        } else {
+            None
+        };
+        let primary = self.primary_key();
+        let mut outputs: Vec<(
+            smithay::output::Output,
+            smithay::utils::Rectangle<i32, Logical>,
+        )> = match mirror_source {
+            Some(source) => self
+                .space
+                .output_geometry(&source)
+                .map(|g| (source, g))
+                .into_iter()
+                .collect(),
+            None => self
+                .space
+                .outputs()
+                .filter(|o| o.name() != "metis-render")
+                .filter_map(|o| self.space.output_geometry(o).map(|g| (o.clone(), g)))
+                .collect(),
+        };
+        outputs.sort_by(|(a, ag), (b, bg)| {
+            ag.loc
+                .x
+                .cmp(&bg.loc.x)
+                .then(ag.loc.y.cmp(&bg.loc.y))
+                .then_with(|| a.name().cmp(&b.name()))
+        });
+        let single = outputs.len() == 1;
+        let mut monitors: Vec<metis_protocol::RudpMonitorInfo> = outputs
+            .into_iter()
+            .map(|(o, g)| {
+                let id = o.name();
+                metis_protocol::RudpMonitorInfo {
+                    primary: single || id == primary,
+                    name: id.clone(),
+                    id,
+                    x: g.loc.x,
+                    y: g.loc.y,
+                    width: g.size.w.max(0) as u32,
+                    height: g.size.h.max(0) as u32,
+                    scale: o.current_scale().fractional_scale(),
+                }
+            })
+            .collect();
+        // Exactly one primary, even when `primary_key()` names a disabled output.
+        if !monitors.is_empty() && !monitors.iter().any(|m| m.primary) {
+            monitors[0].primary = true;
+        }
+        monitors
+    }
+
+    /// Re-publish the desktop topology to the RUDP host. Cheap: a no-op (no
+    /// generation bump, no client traffic) unless something actually changed.
+    /// Call after outputs appear / disappear / move / rescale or the primary
+    /// output changes.
+    pub(crate) fn refresh_rudp_layout(&self) {
+        if self.rudp_host.is_none() {
+            return;
+        }
+        if self.rudp_layout.publish(self.rudp_layout_monitors()) {
+            tracing::info!("rudp: desktop layout changed — advertising to clients");
         }
     }
 
@@ -4982,11 +5063,12 @@ impl MetisState {
         self.maybe_place_remote_viewer_window(id);
     }
 
-    /// Place FreeRDP client windows per Metis Viewer preference.
+    /// Place FreeRDP / Metis Remote session windows per Metis Viewer preference.
     ///
     /// Viewer stamps `$XDG_RUNTIME_DIR/metis/viewer-pending-placement` before
-    /// spawn. **Dedicated desktop** (default) moves the client onto its own
-    /// workspace; **window** mode leaves it on the current desk.
+    /// connect. **Dedicated desktop** (default) moves the session onto its own
+    /// workspace; **window** mode leaves it on the current desk. Extra Metis
+    /// Remote monitor windows join an existing ephemeral desk without a new stamp.
     pub(crate) fn maybe_place_remote_viewer_window(&mut self, id: u32) {
         if self.remote_viewer_placed.contains(&id) {
             return;
@@ -4994,41 +5076,56 @@ impl MetisState {
         let Some(record) = self.windows.get(id) else {
             return;
         };
-        let Some(app_id) = record.app_id.as_deref() else {
-            return;
-        };
-        if !crate::decoration_policy::id_looks_freerdp_client(app_id) {
-            return;
-        }
-        // Consume even for Window so a preference cannot leak to the next session.
-        let placement = metis_config::take_viewer_pending_placement();
-        self.remote_viewer_placed.insert(id);
-        if placement == metis_config::ViewerPlacement::Window {
-            tracing::info!(
-                id,
-                app_id,
-                "remote viewer: window mode — leaving FreeRDP on current desktop"
-            );
+        let app_id = record.app_id.clone();
+        let title = record.title.clone();
+        if !crate::decoration_policy::looks_like_remote_viewer_session(app_id.as_deref(), &title) {
             return;
         }
         let key = self.desk_key_for_window(id);
+        let join_existing = self.remote_viewer_workspace.contains_key(&key);
+        let window_mode_session = self.remote_viewer_window_mode.contains(&key);
+        let placement = if join_existing {
+            // Multi-monitor / late windows: stay on the remote desk already open.
+            metis_config::ViewerPlacement::Workspace
+        } else if window_mode_session {
+            metis_config::ViewerPlacement::Window
+        } else {
+            // Consume even for Window so a preference cannot leak to the next session.
+            metis_config::take_viewer_pending_placement()
+        };
+        self.remote_viewer_placed.insert(id);
+        if placement == metis_config::ViewerPlacement::Window {
+            self.remote_viewer_window_mode.insert(key);
+            tracing::info!(
+                id,
+                app_id = app_id.as_deref().unwrap_or(""),
+                title = %title,
+                "remote viewer: window mode — leaving session on current desktop"
+            );
+            return;
+        }
         let target = self.pick_remote_viewer_workspace(&key, id);
         self.remote_viewer_workspace.insert(key.clone(), target);
+        let already_on_desk = self.active_workspace_for(&key) == target;
         tracing::info!(
             id,
             %key,
             workspace = target,
-            app_id,
-            "remote viewer: placing FreeRDP session on dedicated workspace"
+            app_id = app_id.as_deref().unwrap_or(""),
+            title = %title,
+            join_existing,
+            "remote viewer: placing session on dedicated workspace"
         );
         self.move_window_to_workspace(id, target);
-        self.switch_workspace(&key, target);
+        if !already_on_desk {
+            self.switch_workspace(&key, target);
+        }
         self.focus_window_id(id);
     }
 
     pub(crate) fn clear_remote_viewer_placement(&mut self, id: u32) {
         self.remote_viewer_placed.remove(&id);
-        // Drop the ephemeral desk when no FreeRDP clients remain on that output.
+        // Drop the ephemeral desk when no remote-viewer sessions remain on that output.
         let keys: Vec<String> = self.remote_viewer_workspace.keys().cloned().collect();
         for key in keys {
             let Some(&ws) = self.remote_viewer_workspace.get(&key) else {
@@ -5045,6 +5142,14 @@ impl MetisState {
                 // Still advertise that the accent dot should disappear.
                 self.emit_workspace_changed(&key);
             }
+        }
+        // Clear window-mode latch when no remote-viewer windows remain on that output.
+        let window_keys: Vec<String> = self.remote_viewer_window_mode.iter().cloned().collect();
+        for key in window_keys {
+            if self.any_remote_viewer_on_output(&key, Some(id)) {
+                continue;
+            }
+            self.remote_viewer_window_mode.remove(&key);
         }
     }
 

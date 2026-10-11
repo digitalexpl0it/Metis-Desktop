@@ -1,5 +1,10 @@
-//! Phase 1–5 RUDP host capture: export the primary output's composited frame as
-//! dmabuf plane FDs for the encode worker — **no PipeWire / portal**.
+//! Phase 1–5 RUDP host capture: export each **subscribed** output's composited
+//! frame as dmabuf plane FDs for the encode worker — **no PipeWire / portal**.
+//!
+//! Multi-monitor (protocol v3): the RUDP host publishes the union of all
+//! sessions' output subscriptions via [`StreamExportHub::set_subscribed_outputs`]
+//! (empty ⇒ primary only). Every subscribed output has its own latest-wins
+//! slot, GBM pool and damage tracker (outputs differ in size).
 //!
 //! Scanout still owns the KMS buffer. When armed, we run a second
 //! `OutputStack` compose into a dedicated GBM dmabuf pool (same pattern as
@@ -23,6 +28,7 @@
 //! - Pool slots use [`SlotReleaseGuard`] so dropped / superseded frames free
 //!   their BO immediately under latest-wins backpressure.
 
+use std::collections::{HashMap, HashSet};
 use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
@@ -55,7 +61,7 @@ pub const DAMAGE_FULL_THRESHOLD: f64 = 0.35;
 /// More than this many rects → treat as full-frame (metadata cap).
 pub const DAMAGE_RECT_CAP: usize = 32;
 
-/// One composited primary-output frame for the RUDP encode worker.
+/// One composited output frame for the RUDP encode worker (one per output).
 ///
 /// Plane FDs are owned duplicates — safe to send across threads. Dropping the
 /// frame closes the FDs and releases the pool slot via [`SlotReleaseGuard`].
@@ -326,14 +332,26 @@ pub struct StreamExportHub {
     /// A consumer actually wants frames (e.g. an authenticated RUDP client).
     /// Armed-but-idle costs nothing: no second compose, no pool BOs touched.
     demand: AtomicBool,
-    /// Next export ignores scene damage and publishes a full frame (client
-    /// join / encoder restart — the decoder needs a complete picture).
-    force_full: AtomicBool,
+    /// Monotonic "export a complete picture" request counter. An output is
+    /// forced while `force_epoch` exceeds both [`Self::force_floor`] and the
+    /// epoch it last satisfied ([`Self::forced_done`]) — client join / encoder
+    /// restart / subscription change, applied to **every** subscribed output.
+    force_epoch: AtomicU64,
+    /// Requests at or below this epoch are already satisfied (arm / disarm).
+    force_floor: AtomicU64,
+    forced_done: Mutex<HashMap<String, u64>>,
     seq: AtomicU64,
-    latest: Mutex<Option<ExportedFrame>>,
+    /// Output names to export. Empty ⇒ primary output only.
+    subscribed: Mutex<HashSet<String>>,
+    /// Bumped whenever [`Self::subscribed`] changes (consumers re-sync).
+    subscription_gen: AtomicU64,
+    /// Newest unread frame per output name (latest-wins per output).
+    latest: Mutex<HashMap<String, ExportedFrame>>,
     wake_tx: Mutex<Option<SyncSender<()>>>,
-    pool: Arc<Mutex<PoolState>>,
-    damage: Mutex<Option<ExportDamageState>>,
+    /// Per-output GBM pool (sizes differ between monitors).
+    pools: Mutex<HashMap<String, Arc<Mutex<PoolState>>>>,
+    /// Per-output persistent scene-damage tracker.
+    damage: Mutex<HashMap<String, ExportDamageState>>,
     debug_join: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
@@ -348,12 +366,16 @@ impl StreamExportHub {
         Self {
             enabled: AtomicBool::new(false),
             demand: AtomicBool::new(false),
-            force_full: AtomicBool::new(false),
+            force_epoch: AtomicU64::new(0),
+            force_floor: AtomicU64::new(0),
+            forced_done: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(0),
-            latest: Mutex::new(None),
+            subscribed: Mutex::new(HashSet::new()),
+            subscription_gen: AtomicU64::new(0),
+            latest: Mutex::new(HashMap::new()),
             wake_tx: Mutex::new(None),
-            pool: Arc::new(Mutex::new(PoolState::new())),
-            damage: Mutex::new(None),
+            pools: Mutex::new(HashMap::new()),
+            damage: Mutex::new(HashMap::new()),
             debug_join: Mutex::new(None),
         }
     }
@@ -371,45 +393,158 @@ impl StreamExportHub {
     pub fn set_demand(&self, wanted: bool) {
         let was = self.demand.swap(wanted, Ordering::SeqCst);
         if wanted && !was {
-            self.reset_damage_tracker();
-            self.force_full.store(true, Ordering::SeqCst);
+            self.reset_damage_trackers();
+            self.request_full_frame();
             tracing::info!("stream export: consumer attached — producing frames");
         } else if !wanted && was {
             if let Ok(mut latest) = self.latest.lock() {
-                *latest = None;
+                latest.clear();
             }
             tracing::info!("stream export: no consumer — export idle");
         }
     }
 
-    /// Ask for the next export to be a full frame even without scene damage.
-    pub fn request_full_frame(&self) {
-        self.force_full.store(true, Ordering::SeqCst);
+    /// Replace the set of outputs to export (empty ⇒ primary output only).
+    ///
+    /// A changed set forces a full frame on every subscribed output (a newly
+    /// added monitor needs a complete picture) and drops per-output resources
+    /// (pool / damage tracker / queued frame) of outputs no longer exported.
+    pub fn set_subscribed_outputs<I, S>(&self, names: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let next: HashSet<String> = names.into_iter().map(Into::into).collect();
+        {
+            let Ok(mut cur) = self.subscribed.lock() else {
+                return;
+            };
+            if *cur == next {
+                return;
+            }
+            *cur = next.clone();
+        }
+        self.subscription_gen.fetch_add(1, Ordering::SeqCst);
+        if !next.is_empty() {
+            if let Ok(mut latest) = self.latest.lock() {
+                latest.retain(|name, _| next.contains(name));
+            }
+            if let Ok(mut pools) = self.pools.lock() {
+                pools.retain(|name, _| next.contains(name));
+            }
+            if let Ok(mut damage) = self.damage.lock() {
+                damage.retain(|name, _| next.contains(name));
+            }
+            if let Ok(mut done) = self.forced_done.lock() {
+                done.retain(|name, _| next.contains(name));
+            }
+        }
+        self.request_full_frame();
+        tracing::info!(outputs = ?next, "stream export: subscribed outputs updated");
     }
 
-    /// True when the render loop should export even if the local frame was empty.
-    pub fn forced_frame_pending(&self) -> bool {
-        self.wants_frames() && self.force_full.load(Ordering::Relaxed)
+    /// Currently subscribed output names (empty ⇒ primary only), sorted.
+    pub fn subscribed_outputs(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .subscribed
+            .lock()
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+        names.sort();
+        names
     }
 
-    fn reset_damage_tracker(&self) {
-        if let Ok(mut slot) = self.damage.lock() {
-            *slot = None;
+    /// Changes whenever [`Self::set_subscribed_outputs`] alters the set.
+    pub fn subscription_generation(&self) -> u64 {
+        self.subscription_gen.load(Ordering::Relaxed)
+    }
+
+    /// True when `output_name` should be exported (`primary_key` is used while
+    /// the subscription set is empty).
+    pub fn is_output_exported(&self, output_name: &str, primary_key: &str) -> bool {
+        let Ok(subs) = self.subscribed.lock() else {
+            return false;
+        };
+        if subs.is_empty() {
+            output_name == primary_key
+        } else {
+            subs.contains(output_name)
         }
     }
 
-    /// Arm export and return a wake receiver. Read frames via [`Self::take_latest`].
+    /// Ask for the next export of **every** subscribed output to be a full
+    /// frame, even without scene damage.
+    pub fn request_full_frame(&self) {
+        self.force_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn forced_for(&self, output_name: &str) -> bool {
+        let epoch = self.force_epoch.load(Ordering::SeqCst);
+        let floor = self.force_floor.load(Ordering::SeqCst);
+        if epoch <= floor {
+            return false;
+        }
+        let done = self
+            .forced_done
+            .lock()
+            .ok()
+            .and_then(|m| m.get(output_name).copied())
+            .unwrap_or(0);
+        epoch > done
+    }
+
+    fn mark_forced_done(&self, output_name: &str, epoch: u64) {
+        if let Ok(mut done) = self.forced_done.lock() {
+            let slot = done.entry(output_name.to_string()).or_insert(0);
+            *slot = (*slot).max(epoch);
+        }
+    }
+
+    /// True when the render loop should export `output_name` even if the local
+    /// frame was empty (a full frame is pending for that output).
+    pub fn forced_frame_pending_for(&self, output_name: &str, primary_key: &str) -> bool {
+        self.wants_frames()
+            && self.is_output_exported(output_name, primary_key)
+            && self.forced_for(output_name)
+    }
+
+    fn reset_damage_trackers(&self) {
+        if let Ok(mut map) = self.damage.lock() {
+            map.clear();
+        }
+    }
+
+    fn clear_forced(&self) {
+        let epoch = self.force_epoch.load(Ordering::SeqCst);
+        self.force_floor.store(epoch, Ordering::SeqCst);
+        if let Ok(mut done) = self.forced_done.lock() {
+            done.clear();
+        }
+    }
+
+    /// Pool for `output_name`, created on first use.
+    fn pool_for(&self, output_name: &str) -> Option<Arc<Mutex<PoolState>>> {
+        let mut pools = self.pools.lock().ok()?;
+        Some(Arc::clone(
+            pools
+                .entry(output_name.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(PoolState::new()))),
+        ))
+    }
+
+    /// Arm export and return a wake receiver. Read frames via
+    /// [`Self::take_latest_all`] / [`Self::take_latest_output`].
     pub fn arm(&self) -> Receiver<()> {
         let (tx, rx) = mpsc::sync_channel(WAKE_CAP);
         if let Ok(mut slot) = self.wake_tx.lock() {
             *slot = Some(tx);
         }
         if let Ok(mut latest) = self.latest.lock() {
-            *latest = None;
+            latest.clear();
         }
-        self.reset_damage_tracker();
+        self.reset_damage_trackers();
         self.demand.store(false, Ordering::SeqCst);
-        self.force_full.store(false, Ordering::SeqCst);
+        self.clear_forced();
         self.enabled.store(true, Ordering::SeqCst);
         tracing::info!("stream export: armed (latest-wins + slot RAII, wake cap {WAKE_CAP})");
         rx
@@ -418,20 +553,37 @@ impl StreamExportHub {
     pub fn disarm(&self) {
         self.enabled.store(false, Ordering::SeqCst);
         self.demand.store(false, Ordering::SeqCst);
-        self.force_full.store(false, Ordering::SeqCst);
+        self.clear_forced();
         if let Ok(mut slot) = self.wake_tx.lock() {
             *slot = None;
         }
         if let Ok(mut latest) = self.latest.lock() {
-            *latest = None;
+            latest.clear();
         }
-        self.reset_damage_tracker();
+        self.reset_damage_trackers();
+        if let Ok(mut subs) = self.subscribed.lock() {
+            subs.clear();
+        }
+        if let Ok(mut pools) = self.pools.lock() {
+            pools.clear();
+        }
         tracing::info!("stream export: disarmed");
     }
 
-    /// Take the newest unread frame, if any.
-    pub fn take_latest(&self) -> Option<ExportedFrame> {
-        self.latest.lock().ok()?.take()
+    /// Take the newest unread frame of every output (oldest `seq` first).
+    pub fn take_latest_all(&self) -> Vec<ExportedFrame> {
+        let Ok(mut latest) = self.latest.lock() else {
+            return Vec::new();
+        };
+        let mut frames: Vec<ExportedFrame> = latest.drain().map(|(_, f)| f).collect();
+        drop(latest);
+        frames.sort_by_key(|f| f.seq);
+        frames
+    }
+
+    /// Take the newest unread frame for one output, if any.
+    pub fn take_latest_output(&self, output_name: &str) -> Option<ExportedFrame> {
+        self.latest.lock().ok()?.remove(output_name)
     }
 
     /// Start a background consumer that logs capture FPS and applies synthetic
@@ -458,7 +610,7 @@ impl StreamExportHub {
                 return;
             };
             // Replacing drops the stale frame → SlotReleaseGuard frees its BO.
-            *latest = Some(frame);
+            latest.insert(frame.output_name.clone(), frame);
         }
         let tx = {
             let Ok(guard) = self.wake_tx.lock() else {
@@ -484,7 +636,7 @@ fn debug_consumer_loop(hub: Arc<StreamExportHub>, wake: Receiver<()>) {
     let mut frame_count = 0u32;
     let mut last_meta: Option<(u32, u32, u64, u64, usize)> = None;
     while let Ok(()) | Err(RecvTimeoutError::Timeout) = wake.recv_timeout(Duration::from_secs(2)) {
-        while let Some(frame) = hub.take_latest() {
+        for frame in hub.take_latest_all() {
             if !frame.wait_ready(Duration::from_millis(500)) {
                 continue;
             }
@@ -542,10 +694,11 @@ fn preferred_modifiers_for_export(_state: &MetisState) -> Vec<Modifier> {
     vec![Modifier::Linear]
 }
 
-/// Second-pass compose of `output` into the export pool; publish if armed.
+/// Second-pass compose of `output` into its export pool; publish if armed.
 ///
 /// Call only after a successful local DRM `render_frame` for this output.
-/// No-ops when disarmed, on non-primary outputs, or when GBM is unavailable.
+/// No-ops when disarmed, on outputs outside the subscribed set (primary only
+/// while the set is empty), or when GBM is unavailable.
 /// Never blocks on GPU sync — fence / [`SyncPoint`] travel with the frame.
 ///
 /// Skips publish when the persistent damage tracker reports no scene change,
@@ -560,10 +713,18 @@ pub fn maybe_export_frame(
     if !state.stream_export.wants_frames() {
         return;
     }
-    let forced = state.stream_export.force_full.load(Ordering::Relaxed);
-    if output.name().as_str() != state.primary_key() {
+    let output_name = output.name();
+    if !state
+        .stream_export
+        .is_output_exported(output_name.as_str(), &state.primary_key())
+    {
         return;
     }
+    let forced_epoch = state.stream_export.force_epoch.load(Ordering::SeqCst);
+    let forced = state.stream_export.forced_for(output_name.as_str());
+    let Some(pool_arc) = state.stream_export.pool_for(output_name.as_str()) else {
+        return;
+    };
 
     let Some(gbm) = state
         .udev
@@ -587,7 +748,7 @@ pub fn maybe_export_frame(
 
     let mods = preferred_modifiers_for_export(state);
     {
-        let Ok(mut pool) = state.stream_export.pool.lock() else {
+        let Ok(mut pool) = pool_arc.lock() else {
             return;
         };
         if let Err(err) = pool.ensure(&gbm, width, height, &mods) {
@@ -623,25 +784,29 @@ pub fn maybe_export_frame(
         elements = cursor;
     }
 
-    // Scene damage (persistent tracker) — skip before pool acquire when idle.
+    // Scene damage (persistent per-output tracker) — skip before pool acquire
+    // when idle.
     let (damage_full, damage) = {
-        let Ok(mut slot) = state.stream_export.damage.lock() else {
+        let Ok(mut map) = state.stream_export.damage.lock() else {
             return;
         };
-        let need_new = match slot.as_ref() {
+        let need_new = match map.get(output_name.as_str()) {
             None => true,
             Some(s) => s.size != size_phys || s.scale != output_scale || s.transform != transform,
         };
         if need_new {
-            *slot = Some(ExportDamageState {
-                size: size_phys,
-                scale: output_scale,
-                transform,
-                tracker: OutputDamageTracker::new(size_phys, output_scale, transform),
-                first: true,
-            });
+            map.insert(
+                output_name.to_string(),
+                ExportDamageState {
+                    size: size_phys,
+                    scale: output_scale,
+                    transform,
+                    tracker: OutputDamageTracker::new(size_phys, output_scale, transform),
+                    first: true,
+                },
+            );
         }
-        let Some(dmg) = slot.as_mut() else {
+        let Some(dmg) = map.get_mut(output_name.as_str()) else {
             return;
         };
         let age = if dmg.first { 0 } else { 1 };
@@ -675,7 +840,7 @@ pub fn maybe_export_frame(
         }
     };
 
-    let Some((mut dmabuf, slot_guard)) = PoolState::acquire(&state.stream_export.pool) else {
+    let Some((mut dmabuf, slot_guard)) = PoolState::acquire(&pool_arc) else {
         tracing::debug!("stream export: pool exhausted — skip frame");
         return;
     };
@@ -714,7 +879,7 @@ pub fn maybe_export_frame(
     let seq = state.stream_export.seq.fetch_add(1, Ordering::Relaxed) + 1;
     let frame = ExportedFrame {
         seq,
-        output_name: output.name().to_string(),
+        output_name: output_name.to_string(),
         width,
         height,
         stride,
@@ -732,8 +897,7 @@ pub fn maybe_export_frame(
     if forced {
         state
             .stream_export
-            .force_full
-            .store(false, Ordering::SeqCst);
+            .mark_forced_done(output_name.as_str(), forced_epoch);
     }
     state.stream_export.try_publish(frame);
 }
@@ -754,9 +918,13 @@ mod tests {
     use super::*;
 
     fn test_frame(seq: u64) -> ExportedFrame {
+        test_frame_on(seq, "eDP-1")
+    }
+
+    fn test_frame_on(seq: u64, output: &str) -> ExportedFrame {
         ExportedFrame {
             seq,
-            output_name: "eDP-1".into(),
+            output_name: output.into(),
             width: 100,
             height: 100,
             stride: 400,
@@ -836,9 +1004,73 @@ mod tests {
         for seq in 1..=5u64 {
             hub.try_publish(test_frame(seq));
         }
-        let got = hub.take_latest().expect("one frame queued");
-        assert_eq!(got.seq, 5);
-        assert!(hub.take_latest().is_none());
+        let mut got = hub.take_latest_all();
+        assert_eq!(got.len(), 1, "one frame queued per output");
+        assert_eq!(got.remove(0).seq, 5);
+        assert!(hub.take_latest_all().is_empty());
+        hub.disarm();
+    }
+
+    #[test]
+    fn try_publish_is_latest_wins_per_output() {
+        let hub = StreamExportHub::new();
+        let _wake = hub.arm();
+        hub.try_publish(test_frame_on(1, "DP-1"));
+        hub.try_publish(test_frame_on(2, "DP-2"));
+        hub.try_publish(test_frame_on(3, "DP-1"));
+        let got = hub.take_latest_all();
+        let seqs: Vec<(String, u64)> = got.iter().map(|f| (f.output_name.clone(), f.seq)).collect();
+        assert_eq!(
+            seqs,
+            vec![("DP-2".to_string(), 2), ("DP-1".to_string(), 3)],
+            "each output keeps its newest frame, oldest seq first"
+        );
+        hub.try_publish(test_frame_on(4, "DP-2"));
+        assert!(hub.take_latest_output("DP-1").is_none());
+        assert_eq!(hub.take_latest_output("DP-2").map(|f| f.seq), Some(4));
+        hub.disarm();
+    }
+
+    #[test]
+    fn subscription_empty_means_primary_only() {
+        let hub = StreamExportHub::new();
+        assert!(hub.is_output_exported("DP-1", "DP-1"));
+        assert!(!hub.is_output_exported("DP-2", "DP-1"));
+        hub.set_subscribed_outputs(["DP-2", "HDMI-A-1"]);
+        assert!(!hub.is_output_exported("DP-1", "DP-1"));
+        assert!(hub.is_output_exported("DP-2", "DP-1"));
+        assert!(hub.is_output_exported("HDMI-A-1", "DP-1"));
+        assert_eq!(hub.subscribed_outputs(), vec!["DP-2", "HDMI-A-1"]);
+        let gen_before = hub.subscription_generation();
+        hub.set_subscribed_outputs(["HDMI-A-1", "DP-2"]);
+        assert_eq!(
+            hub.subscription_generation(),
+            gen_before,
+            "same set is a no-op"
+        );
+        hub.set_subscribed_outputs(Vec::<String>::new());
+        assert!(hub.is_output_exported("DP-1", "DP-1"));
+    }
+
+    #[test]
+    fn request_full_frame_forces_every_subscribed_output() {
+        let hub = StreamExportHub::new();
+        let _wake = hub.arm();
+        hub.set_subscribed_outputs(["DP-1", "DP-2"]);
+        hub.set_demand(true);
+        assert!(hub.forced_frame_pending_for("DP-1", "DP-1"));
+        assert!(hub.forced_frame_pending_for("DP-2", "DP-1"));
+        assert!(
+            !hub.forced_frame_pending_for("DP-3", "DP-1"),
+            "unsubscribed"
+        );
+        // Satisfying one output must not clear the other.
+        let epoch = hub.force_epoch.load(Ordering::SeqCst);
+        hub.mark_forced_done("DP-1", epoch);
+        assert!(!hub.forced_frame_pending_for("DP-1", "DP-1"));
+        assert!(hub.forced_frame_pending_for("DP-2", "DP-1"));
+        hub.request_full_frame();
+        assert!(hub.forced_frame_pending_for("DP-1", "DP-1"));
         hub.disarm();
     }
 
@@ -848,19 +1080,22 @@ mod tests {
         let _wake = hub.arm();
         assert!(hub.is_armed());
         assert!(!hub.wants_frames(), "armed alone must not compose");
-        assert!(!hub.forced_frame_pending());
+        assert!(!hub.forced_frame_pending_for("eDP-1", "eDP-1"));
         hub.set_demand(true);
         assert!(hub.wants_frames());
         assert!(
-            hub.forced_frame_pending(),
+            hub.forced_frame_pending_for("eDP-1", "eDP-1"),
             "consumer attach forces a full frame"
         );
         hub.try_publish(test_frame(1));
         hub.set_demand(false);
         assert!(!hub.wants_frames());
-        assert!(hub.take_latest().is_none(), "demand off drops queued frame");
+        assert!(
+            hub.take_latest_all().is_empty(),
+            "demand off drops queued frame"
+        );
         hub.disarm();
-        assert!(!hub.forced_frame_pending());
+        assert!(!hub.forced_frame_pending_for("eDP-1", "eDP-1"));
     }
 
     #[test]
@@ -884,7 +1119,7 @@ mod tests {
         let hub = StreamExportHub::new();
         assert!(!hub.is_armed());
         hub.try_publish(test_frame(1));
-        assert!(hub.take_latest().is_none());
+        assert!(hub.take_latest_all().is_empty());
     }
 
     #[test]
@@ -933,7 +1168,9 @@ mod tests {
         assert!(!pool.lock().unwrap().busy[0]);
         assert!(pool.lock().unwrap().busy[1]);
 
-        let got = hub.take_latest().expect("latest frame");
+        let mut frames = hub.take_latest_all();
+        assert_eq!(frames.len(), 1);
+        let got = frames.remove(0);
         assert_eq!(got.seq, 2);
         drop(got);
         assert!(!pool.lock().unwrap().busy[1]);

@@ -9,9 +9,9 @@ use metis_config::{
     fingerprint_cert_der, known_hosts_lookup, known_hosts_pin, normalize_fingerprint,
 };
 use metis_protocol::{
-    DatagramHeader, RUDP_DATAGRAM_HEADER_LEN, RUDP_PROTOCOL_VERSION, ReliableAccessUnit,
-    RudpControlMsg, encode_rudp_frame, is_audio_datagram, try_decode_audio_datagram,
-    try_decode_rudp_frame, try_reassemble_media,
+    DatagramHeader, RUDP_DATAGRAM_HEADER_LEN, RUDP_PROTOCOL_VERSION, ReassembleParams,
+    ReliableAccessUnit, RudpControlMsg, RudpMonitorInfo, encode_rudp_frame, is_audio_datagram,
+    try_decode_audio_datagram, try_decode_rudp_frame, try_reassemble_media,
 };
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -42,6 +42,8 @@ pub struct RudpClientConfig {
 
 #[derive(Debug, Clone)]
 pub struct AccessUnitEvent {
+    /// Demux key from [`SessionEvent::VideoReady::stream_id`].
+    pub stream_id: u8,
     pub data: Vec<u8>,
     pub codec: String,
     pub keyframe: bool,
@@ -51,10 +53,21 @@ pub struct AccessUnitEvent {
 
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
+    /// Host virtual-desktop topology (after auth and whenever it changes).
+    /// Callers may answer with [`RudpControlMsg::SubscribeOutputs`] via
+    /// [`RudpSession::send_input`] (see also [`RudpSession::subscribe_outputs`]).
+    DesktopLayout {
+        monitors: Vec<RudpMonitorInfo>,
+    },
+    /// One encode stream is ready (one per subscribed output).
     VideoReady {
         width: u32,
         height: u32,
         codec: String,
+        /// Demux key carried by video datagrams / reliable AUs.
+        stream_id: u8,
+        /// Output id from [`RudpMonitorInfo::id`].
+        output_id: String,
     },
     AudioReady {
         sample_rate: u32,
@@ -105,6 +118,16 @@ impl RudpSession {
             .send(msg)
             .await
             .map_err(|_| ClientError::msg("input channel closed"))
+    }
+
+    /// Ask the host to encode `output_ids` (empty → primary only). The host caps
+    /// the list at [`metis_protocol::RUDP_MAX_SUBSCRIBED_OUTPUTS`]; the list is
+    /// trimmed here too so an over-long request still gets the leading outputs.
+    pub async fn subscribe_outputs(&self, output_ids: Vec<String>) -> Result<(), ClientError> {
+        let mut output_ids = output_ids;
+        output_ids.truncate(metis_protocol::RUDP_MAX_SUBSCRIBED_OUTPUTS);
+        self.send_input(RudpControlMsg::SubscribeOutputs { output_ids })
+            .await
     }
 }
 
@@ -238,7 +261,8 @@ async fn session_pump(
     event_tx: mpsc::Sender<SessionEvent>,
     mut input_rx: mpsc::Receiver<RudpControlMsg>,
 ) {
-    let mut pending: HashMap<u64, FrameAssembly> = HashMap::new();
+    // Shard maps are per stream: `frame_seq` is only unique within one output.
+    let mut pending: HashMap<u8, HashMap<u64, FrameAssembly>> = HashMap::new();
     let mut uni_buf = Vec::new();
     let mut video_recv: Option<RecvStream> = None;
     let mut control_buf = Vec::new();
@@ -262,11 +286,26 @@ async fn session_pump(
                         while let Ok(Some((msg, consumed))) = try_decode_rudp_frame(&control_buf) {
                             control_buf.drain(..consumed);
                             match msg {
-                                RudpControlMsg::VideoReady { width, height, codec } => {
+                                RudpControlMsg::DesktopLayout { monitors } => {
+                                    let _ = event_tx
+                                        .send(SessionEvent::DesktopLayout { monitors })
+                                        .await;
+                                }
+                                RudpControlMsg::VideoReady {
+                                    width,
+                                    height,
+                                    codec,
+                                    stream_id,
+                                    output_id,
+                                } => {
+                                    // A (re)announced stream restarts its sequence space.
+                                    pending.remove(&stream_id);
                                     let _ = event_tx.send(SessionEvent::VideoReady {
                                         width,
                                         height,
                                         codec,
+                                        stream_id,
+                                        output_id,
                                     }).await;
                                 }
                                 RudpControlMsg::AudioReady {
@@ -315,7 +354,8 @@ async fn session_pump(
                             }
                         } else if let Ok((hdr, total)) = DatagramHeader::decode(&bytes_buf) {
                             let payload = bytes_buf[RUDP_DATAGRAM_HEADER_LEN..total].to_vec();
-                            let entry = pending.entry(hdr.frame_seq).or_insert_with(|| FrameAssembly {
+                            let stream_pending = pending.entry(hdr.stream_id).or_default();
+                            let entry = stream_pending.entry(hdr.frame_seq).or_insert_with(|| FrameAssembly {
                                 pts_us: hdr.pts_us,
                                 codec: hdr.codec,
                                 damage_full: (hdr.flags & metis_protocol::FLAG_DAMAGE_FULL) != 0,
@@ -327,18 +367,23 @@ async fn session_pump(
                             if idx < entry.slots.len() {
                                 entry.slots[idx] = Some(payload);
                             }
-                            if let Ok(Some(frame)) = try_reassemble_media(
-                                hdr.frame_seq,
-                                entry.pts_us,
-                                entry.codec,
-                                entry.damage_full,
-                                entry.shard_n,
-                                entry.fec_m,
+                            let reassembled = try_reassemble_media(
+                                ReassembleParams {
+                                    frame_seq: hdr.frame_seq,
+                                    pts_us: entry.pts_us,
+                                    codec: entry.codec,
+                                    stream_id: hdr.stream_id,
+                                    damage_full: entry.damage_full,
+                                    shard_n: entry.shard_n,
+                                    fec_m: entry.fec_m,
+                                },
                                 &entry.slots,
-                            ) {
-                                pending.remove(&hdr.frame_seq);
+                            );
+                            if let Ok(Some(frame)) = reassembled {
+                                stream_pending.remove(&hdr.frame_seq);
                                 let codec = metis_protocol::codec_to_str(frame.codec).to_string();
                                 let _ = event_tx.send(SessionEvent::AccessUnit(AccessUnitEvent {
+                                    stream_id: frame.stream_id,
                                     data: frame.data,
                                     codec,
                                     keyframe: false,
@@ -346,6 +391,7 @@ async fn session_pump(
                                     pts_us: frame.pts_us,
                                 })).await;
                             }
+                            prune_pending(stream_pending);
                         }
                     }
                     Err(_) => break,
@@ -378,6 +424,7 @@ async fn session_pump(
                             uni_buf.drain(..consumed);
                             let codec = metis_protocol::codec_to_str(au.codec).to_string();
                             let _ = event_tx.send(SessionEvent::AccessUnit(AccessUnitEvent {
+                                stream_id: au.stream_id,
                                 data: au.data,
                                 codec,
                                 keyframe: true,
@@ -397,6 +444,19 @@ async fn session_pump(
         }
     }
     let _ = event_tx.send(SessionEvent::Disconnected).await;
+}
+
+/// Max incomplete frames kept per stream (lost shards never complete).
+const MAX_PENDING_FRAMES: usize = 64;
+
+/// Drop the oldest incomplete frames so lossy links can't grow the map forever.
+fn prune_pending(pending: &mut HashMap<u64, FrameAssembly>) {
+    while pending.len() > MAX_PENDING_FRAMES {
+        let Some(oldest) = pending.keys().min().copied() else {
+            break;
+        };
+        pending.remove(&oldest);
+    }
 }
 
 struct FrameAssembly {

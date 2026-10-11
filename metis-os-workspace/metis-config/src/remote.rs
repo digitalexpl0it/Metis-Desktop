@@ -48,6 +48,11 @@ pub struct RemoteConfig {
     pub rustdesk_firewall_backend: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rustdesk_firewall_last_error: Option<String>,
+    /// RDP login name for the Metis-native host (`metis-rdp-host`). The matching
+    /// password lives only in `$XDG_RUNTIME_DIR/metis/rdp-password` (mode 0600) —
+    /// never in this JSON file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_rdp_username: Option<String>,
 }
 
 fn default_auto_start() -> bool {
@@ -71,6 +76,7 @@ impl Default for RemoteConfig {
             rustdesk_firewall_applied: false,
             rustdesk_firewall_backend: String::new(),
             rustdesk_firewall_last_error: None,
+            native_rdp_username: None,
         }
     }
 }

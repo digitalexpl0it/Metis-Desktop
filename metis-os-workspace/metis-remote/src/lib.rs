@@ -91,8 +91,9 @@ pub fn status() -> RemoteStatus {
             running: n.running,
             rdp_enabled: n.running && cfg.enabled,
             port: n.port,
-            password_set: true, // metis-rdp-host manages its own auth
-            username: None,
+            // Honest: username in remote.json + non-empty runtime password file.
+            password_set: n.password_set,
+            username: n.username.clone(),
             hostname: n.hostname,
             addresses: n.addresses,
             backend: "metis_native".into(),
@@ -388,7 +389,12 @@ pub fn firewall_rudp_clear_as_root() -> Result<FirewallStatus, String> {
     firewall::clear_rudp_as_root()
 }
 
-/// Set RDP username/password via grdctl (headless store).
+/// Set RDP username/password for the active backend.
+///
+/// * `MetisNative` — password → `$XDG_RUNTIME_DIR/metis/rdp-password` (0600),
+///   username → `remote.json`.
+/// * GNOME RDP — grdctl headless store; on success the same login is mirrored to
+///   the native host (best effort) so switching to Metis native needs no re-entry.
 pub fn set_password(username: &str, password: &str) -> Result<(), String> {
     if username.trim().is_empty() {
         return Err("Username must not be empty".into());
@@ -397,7 +403,25 @@ pub fn set_password(username: &str, password: &str) -> Result<(), String> {
         return Err("Password must not be empty".into());
     }
     let mut owned = password.to_string();
-    let result = set_credentials(username.trim(), &owned);
+    let result = if matches!(load_remote_config().backend, RemoteBackend::MetisNative) {
+        native_rdp::set_credentials(username, &owned)
+    } else {
+        let grd = set_credentials(username.trim(), &owned);
+        if grd.is_ok()
+            && let Err(err) = native_rdp::set_credentials(username, &owned)
+        {
+            tracing::debug!(%err, "native RDP credential mirror skipped");
+        }
+        grd
+    };
+    owned.zeroize();
+    result
+}
+
+/// Set Metis-native RDP credentials only (regardless of the selected backend).
+pub fn native_set_password(username: &str, password: &str) -> Result<(), String> {
+    let mut owned = password.to_string();
+    let result = native_rdp::set_credentials(username, &owned);
     owned.zeroize();
     result
 }

@@ -202,7 +202,7 @@ pub fn id_skips_maximize_wobble(app_id: &str) -> bool {
 /// FreeRDP client session windows (not Metis Viewer’s connect UI).
 pub fn id_looks_freerdp_client(app_id: &str) -> bool {
     let id = norm_app_id(app_id);
-    if id.contains("metis.viewer") || id == "com.metis.viewer" {
+    if id_looks_metis_viewer(app_id) {
         return false;
     }
     id.contains("wlfreerdp")
@@ -212,9 +212,31 @@ pub fn id_looks_freerdp_client(app_id: &str) -> bool {
         || id.ends_with(".freerdp")
 }
 
+/// Metis Viewer application id (`com.metis.Viewer` / similar).
+pub fn id_looks_metis_viewer(app_id: &str) -> bool {
+    let id = norm_app_id(app_id);
+    id.contains("metis.viewer") || id == "com.metis.viewer"
+}
+
+/// Metis Remote (RUDP) session window title prefix (not the connect UI
+/// “Metis Viewer”).
+pub fn title_looks_metis_remote_session(title: &str) -> bool {
+    title.trim().starts_with("Metis Remote")
+}
+
+/// FreeRDP client **or** Viewer window hosting a Metis Remote session.
+pub fn looks_like_remote_viewer_session(app_id: Option<&str>, title: &str) -> bool {
+    if app_id.is_some_and(id_looks_freerdp_client) {
+        return true;
+    }
+    app_id.is_some_and(id_looks_metis_viewer) && title_looks_metis_remote_session(title)
+}
+
 #[cfg(test)]
 mod freerdp_detect_tests {
-    use super::id_looks_freerdp_client;
+    use super::{
+        id_looks_freerdp_client, looks_like_remote_viewer_session, title_looks_metis_remote_session,
+    };
 
     #[test]
     fn detects_freerdp_not_viewer() {
@@ -223,6 +245,26 @@ mod freerdp_detect_tests {
         assert!(id_looks_freerdp_client("xfreerdp3"));
         assert!(!id_looks_freerdp_client("com.metis.Viewer"));
         assert!(!id_looks_freerdp_client("firefox"));
+    }
+
+    #[test]
+    fn detects_metis_remote_session_not_connect_ui() {
+        assert!(title_looks_metis_remote_session("Metis Remote"));
+        assert!(title_looks_metis_remote_session("Metis Remote — DP-1"));
+        assert!(!title_looks_metis_remote_session("Metis Viewer"));
+        assert!(!title_looks_metis_remote_session("DP-1"));
+        assert!(looks_like_remote_viewer_session(
+            Some("com.metis.Viewer"),
+            "Metis Remote — HDMI-A-1"
+        ));
+        assert!(!looks_like_remote_viewer_session(
+            Some("com.metis.Viewer"),
+            "Metis Viewer"
+        ));
+        assert!(looks_like_remote_viewer_session(
+            Some("wlfreerdp"),
+            "anything"
+        ));
     }
 }
 

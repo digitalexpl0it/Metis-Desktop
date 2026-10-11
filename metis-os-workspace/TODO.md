@@ -67,13 +67,19 @@ Security items from the **2026-09-27 code review** sit above product stretch.
       keep `METIS_COLOR_MGMT=1` opt-in) — see Wave **3b**.
       → Phase 5 §B residual. *(decode 2026-09-27; crop+decode + tone-map + float
       scene-linear + BT.2390/chrome 2026-10-03; ICC + layer/night-light 2026-10-10)*
-- [x] **3. Metis-native remote host** — **Partial→landed core (2026-10-03):**
+- [x] **3. Metis-native remote host** — **Landed (2026-10-03…2026-10-11):**
       **RUDP** Phases 1–8 + clipboard/audio/HW decode/AV1/packet queue;
       **Metis native RDP** via `metis-rdp-host` (portal ScreenCast + FreeRDP;
       GRD remains default on **Remote access**). **2026-10-10:** RUDP auth
       rate-limit/lockout, unlock-on-connect policy, LAN fail-closed, pause
-      stream while locked. Residual: multi-monitor / credential parity before
-      flipping default away from GRD; AV1 soft encode.
+      stream while locked. **2026-10-11:** RUDP protocol **v3** multi-monitor
+      (`DesktopLayout` / `SubscribeOutputs` / per-output streams; Viewer
+      multi-window + `--monitor` / `--all-monitors`); native RDP credential
+      parity (stdin → runtime password file); software AV1 encode
+      (`libsvtav1`/`libaom-av1`; Settings Encoder → Software; Auto+AV1 ladder
+      HW AV1 → soft AV1 → HW H.264/HEVC). Residual before GRD default-flip:
+      packaging/QA + MetisNative multi-monitor parity (RDP host still single
+      surface).
       → Wave 4c, Phase 7 §B RUDP-Stream, Phase 15 §F,
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 - [x] **4. Per-Steam-appid Gamescope profile UI** — Settings → Gaming editor for
@@ -1016,6 +1022,10 @@ latency and clear setup docs.
       current desk. Dedicated mode uses ephemeral desk `count+1` with an
       accent edge-bar dot while FreeRDP is active. Defaults stay LAN-safe
       (clipboard off, `/cert:ignore`).
+- [x] **Viewer RUDP dedicated desktop** (2026-10-11) — same Metis placement stamp
+      for Metis Remote session windows (`Metis Remote…` titles; not connect UI);
+      multi-monitor windows share one ephemeral desk; Window mode latch per
+      output; accent edge-bar dot parity with FreeRDP.
 - [x] **RustDesk Settings preset** (2026-07-26) — Settings → Remote access card:
       detect system/Flatpak, Open RustDesk, copy install instructions + ports/
       portal notes. Optional `metis-remote` RustDesk backend still TBD.
@@ -1117,6 +1127,15 @@ latency and clear setup docs.
 - [x] **Metis native portal RDP host** (2026-10-03) — `metis-rdp-host` ScreenCast
       client → PipeWire → FreeRDP shadow subsystem; `metis-remote native` spawn;
       Settings **Metis native RDP** (GRD stays default).
+- [x] **RUDP multi-monitor (protocol v3)** (2026-10-11) — host `DesktopLayout`
+      + `SubscribeOutputs` (default primary, max 4); per-output export frames /
+      pools / damage trackers in `stream_export.rs`, one encoder + `stream_id` per
+      output in `rudp_host.rs`; `metis-rudp-client` per-stream reassembly;
+      Viewer `--monitor` / `--all-monitors` + `viewer.json`
+      `rudp_separate_monitor_windows`; smoke `--monitor`.
+- [x] **Native RDP credential parity** (2026-10-11) — stdin `set-credentials` →
+      runtime `rdp-password` 0600 + `remote.json` username; honest `password_set`;
+      enable gate; host rejects empty-password auth.
 
 ### C. Security & session policy
 

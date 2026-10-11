@@ -148,6 +148,8 @@ pub fn apply_outputs(state: &mut MetisState, cfg: &OutputsConfig) -> bool {
     sync_night_light_schedule_state(state, cfg);
     state.night_light_commit.increment();
     state.schedule_redraw();
+    // Mode / scale / layout / enable / primary changes all land here.
+    state.refresh_rudp_layout();
     changed
 }
 

@@ -49,11 +49,17 @@ pub fn resolve_host_port(host: &str, port: u16) -> Result<SocketAddr, ClientErro
     }
 
     // Hostname (e.g. localhost) — system resolver via ToSocketAddrs.
-    format!("{host}:{port}")
+    // Prefer IPv4: the Metis Remote host binds `0.0.0.0` (IPv4) today, so
+    // `localhost` → `::1` would fail with "could not reach" even when listening.
+    let mut addrs: Vec<SocketAddr> = format!("{host}:{port}")
         .to_socket_addrs()
         .map_err(|e| ClientError::msg(format!("could not resolve {host}:{port}: {e}")))?
-        .next()
-        .ok_or_else(|| ClientError::msg(format!("no addresses for {host}:{port}")))
+        .collect();
+    if addrs.is_empty() {
+        return Err(ClientError::msg(format!("no addresses for {host}:{port}")));
+    }
+    addrs.sort_by_key(|a| !a.is_ipv4());
+    Ok(addrs[0])
 }
 
 fn split_host_port(endpoint: &str) -> Result<(String, u16), ClientError> {
@@ -97,6 +103,10 @@ mod tests {
         let b = resolve_host_port("localhost", 7843).expect("localhost");
         assert_eq!(b.port(), 7843);
         assert!(b.ip().is_loopback());
+        assert!(
+            b.is_ipv4(),
+            "localhost should prefer IPv4 (host binds 0.0.0.0)"
+        );
     }
 
     #[test]

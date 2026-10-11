@@ -15,6 +15,8 @@ pub enum EncoderBackend {
     Auto,
     Vaapi,
     Nvenc,
+    /// CPU software encode (FFmpeg libsvtav1 / libaom-av1). AV1 only; CPU-heavy.
+    Soft,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

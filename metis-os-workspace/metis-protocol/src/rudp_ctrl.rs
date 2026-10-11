@@ -4,11 +4,41 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const RUDP_PROTOCOL_VERSION: u32 = 2;
+/// Protocol version 3: multi-monitor layout + per-output video streams.
+pub const RUDP_PROTOCOL_VERSION: u32 = 3;
 pub const RUDP_MAX_FRAME: usize = 64 * 1024;
 /// Max UTF-8 bytes in a [`RudpControlMsg::ClipboardSet`] text payload so the
 /// JSON frame stays under [`RUDP_MAX_FRAME`].
 pub const RUDP_CLIPBOARD_MAX_BYTES: usize = 48 * 1024;
+/// Cap concurrent subscribed outputs per session (encode cost bound).
+pub const RUDP_MAX_SUBSCRIBED_OUTPUTS: usize = 4;
+
+/// One monitor in a [`RudpControlMsg::DesktopLayout`] advertisement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RudpMonitorInfo {
+    /// Stable id (output name / connector), also used in [`RudpControlMsg::SubscribeOutputs`].
+    pub id: String,
+    /// Human-readable name (may equal `id`).
+    pub name: String,
+    /// Logical desktop origin X.
+    pub x: i32,
+    /// Logical desktop origin Y.
+    pub y: i32,
+    /// Logical width in pixels.
+    pub width: u32,
+    /// Logical height in pixels.
+    pub height: u32,
+    /// Output scale factor.
+    #[serde(default = "default_scale")]
+    pub scale: f64,
+    /// Whether this is the primary output.
+    #[serde(default)]
+    pub primary: bool,
+}
+
+fn default_scale() -> f64 {
+    1.0
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -32,12 +62,25 @@ pub enum RudpControlMsg {
         detail: Option<String>,
     },
     Keepalive,
-    /// Host advertises encode dimensions + codec after SessionOk (Phase 6).
+    /// Host advertises the virtual desktop topology after SessionOk (and on change).
+    DesktopLayout {
+        monitors: Vec<RudpMonitorInfo>,
+    },
+    /// Host advertises encode dimensions + codec for one output stream.
     VideoReady {
         width: u32,
         height: u32,
         /// `"h264"`, `"hevc"`, or `"av1"`.
         codec: String,
+        /// Demux key for datagrams / reliable AUs (0..=255).
+        stream_id: u8,
+        /// Output id from [`DesktopLayout`] / [`RudpMonitorInfo::id`].
+        output_id: String,
+    },
+    /// Client → host: which outputs to encode (empty → primary only). Cap
+    /// [`RUDP_MAX_SUBSCRIBED_OUTPUTS`].
+    SubscribeOutputs {
+        output_ids: Vec<String>,
     },
     /// Host advertises system-audio stream parameters (host → client Opus).
     AudioReady {
@@ -187,10 +230,27 @@ mod tests {
             pressed: false,
         });
         roundtrip(RudpControlMsg::PointerLock { locked: true });
+        roundtrip(RudpControlMsg::DesktopLayout {
+            monitors: vec![RudpMonitorInfo {
+                id: "DP-1".into(),
+                name: "DP-1".into(),
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                scale: 1.0,
+                primary: true,
+            }],
+        });
         roundtrip(RudpControlMsg::VideoReady {
             width: 1920,
             height: 1080,
             codec: "hevc".into(),
+            stream_id: 0,
+            output_id: "DP-1".into(),
+        });
+        roundtrip(RudpControlMsg::SubscribeOutputs {
+            output_ids: vec!["DP-1".into(), "HDMI-A-1".into()],
         });
         roundtrip(RudpControlMsg::AudioReady {
             sample_rate: 48_000,

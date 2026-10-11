@@ -71,6 +71,11 @@ isolated encode worker (`metis-encode-probe worker 3`). The compositor never
 loads FFmpeg / libva / CUDA in-process, so a driver abort or segfault only
 restarts the worker. There is no silent software x264/x265 encode fallback —
 if the chosen backend cannot open, the host logs the full attempt ladder.
+The only CPU path is **software AV1** (`libsvtav1`, else `libaom-av1`; install
+an FFmpeg built with one of them): `Auto` + preferred AV1 tries GPU AV1 →
+software AV1 → GPU H.264/HEVC, and Settings **Encoder → Software** forces
+software AV1 only. It is CPU-heavy; frames are converted to YUV420P instead of
+NV12. Its tests skip when FFmpeg lacks a software AV1 encoder.
 
 Hardware smoke test (real VAAPI encode through the worker, plus a deliberate
 worker `abort()` that must come back as a clean error):

@@ -14,7 +14,7 @@ pub const DEFAULT_RUDP_PORT: u16 = 7843;
 /// Default target bitrate for hardware encode (kbps).
 pub const DEFAULT_RUDP_BITRATE_KBPS: u32 = 25_000;
 
-/// Hardware encode backend preference.
+/// Encode backend preference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RudpEncoderBackend {
@@ -22,6 +22,8 @@ pub enum RudpEncoderBackend {
     Auto,
     Vaapi,
     Nvenc,
+    /// CPU software AV1 (`libsvtav1` / `libaom-av1`). CPU-heavy; forces AV1.
+    Soft,
 }
 
 impl RudpEncoderBackend {
@@ -30,6 +32,7 @@ impl RudpEncoderBackend {
             Self::Auto => "auto",
             Self::Vaapi => "vaapi",
             Self::Nvenc => "nvenc",
+            Self::Soft => "soft",
         }
     }
 }
@@ -43,8 +46,9 @@ pub enum RudpVideoCodec {
     #[default]
     H264,
     Hevc,
-    /// Requires FFmpeg `av1_vaapi` / `av1_nvenc` and a capable GPU; ladder
-    /// falls back to H.264/HEVC when open fails.
+    /// Requires FFmpeg `av1_vaapi` / `av1_nvenc` and a capable GPU, or software
+    /// `libsvtav1` / `libaom-av1` (Auto falls through to CPU AV1 before H.264/HEVC
+    /// when HW AV1 is missing); ladder falls back to H.264/HEVC when open fails.
     Av1,
 }
 
@@ -78,7 +82,8 @@ pub struct RudpConfig {
     /// fine; on first enable Settings seeds `$USER`.
     #[serde(default)]
     pub allowed_users: Vec<String>,
-    /// Hardware encode backend: Auto (NVIDIA→NVENC else VAAPI), VAAPI, or NVENC.
+    /// Encode backend: Auto (NVIDIA→NVENC else VAAPI; with an AV1 preference
+    /// HW AV1 → software AV1 → HW H.264/HEVC), VAAPI, NVENC, or Soft (CPU AV1).
     #[serde(default)]
     pub encoder: RudpEncoderBackend,
     /// Preferred codec hint; VAAPI always probes H.264 before HEVC.
@@ -463,6 +468,15 @@ mod tests {
         assert_eq!(cfg.bitrate_kbps, DEFAULT_RUDP_BITRATE_KBPS);
         assert!(cfg.unlock_session_on_auth);
         assert!(cfg.lan_only);
+    }
+
+    #[test]
+    fn encoder_backend_soft_serde_snake_case() {
+        let json = serde_json::to_string(&RudpEncoderBackend::Soft).expect("ser");
+        assert_eq!(json, "\"soft\"");
+        let cfg: RudpConfig = serde_json::from_str(r#"{"encoder":"soft"}"#).expect("de");
+        assert_eq!(cfg.encoder, RudpEncoderBackend::Soft);
+        assert_eq!(cfg.encoder.as_str(), "soft");
     }
 
     #[test]

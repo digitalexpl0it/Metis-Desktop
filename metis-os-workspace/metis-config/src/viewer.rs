@@ -23,6 +23,11 @@ pub struct ViewerHost {
     /// Wire protocol: classic RDP (FreeRDP) or Metis Remote (RUDP).
     #[serde(default)]
     pub protocol: ViewerProtocol,
+    /// Metis Remote only: subscribe to every host monitor (up to 4) on one
+    /// Quinn session and open one Viewer window per output. Off ⇒ primary
+    /// monitor in a single window.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub rudp_separate_monitor_windows: bool,
     /// Remmina-style session options (Display / Local / Experience / Advanced).
     #[serde(default, skip_serializing_if = "ViewerRdpOptions::is_default")]
     pub options: ViewerRdpOptions,
@@ -78,7 +83,7 @@ fn default_true() -> bool {
     true
 }
 
-/// How Metis places the FreeRDP client window after connect.
+/// How Metis places FreeRDP / Metis Remote session windows after connect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewerPlacement {
@@ -307,6 +312,10 @@ pub struct ViewerRdpOptions {
 
 fn is_zero_u32(v: &u32) -> bool {
     *v == 0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Default for ViewerRdpOptions {
@@ -556,7 +565,7 @@ fn runtime_metis_dir() -> PathBuf {
     base.join("metis")
 }
 
-/// Stamp the placement preference for the next FreeRDP client window.
+/// Stamp the placement preference for the next FreeRDP / Metis Remote session window.
 pub fn set_viewer_pending_placement(placement: ViewerPlacement) {
     let dir = runtime_metis_dir();
     let _ = std::fs::create_dir_all(&dir);
@@ -568,7 +577,13 @@ pub fn set_viewer_pending_placement(placement: ViewerPlacement) {
     let _ = crate::persist::write_bytes_atomic(&path, body.as_bytes());
 }
 
-/// Consume the pending FreeRDP placement stamp (defaults to dedicated workspace).
+/// Drop a leftover placement stamp (cancelled RUDP connect, session end).
+pub fn clear_viewer_pending_placement() {
+    let path = viewer_pending_placement_path();
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Consume the pending placement stamp (defaults to dedicated workspace).
 pub fn take_viewer_pending_placement() -> ViewerPlacement {
     let path = viewer_pending_placement_path();
     let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -606,6 +621,7 @@ mod tests {
             username: "alice".into(),
             label: "Home PC".into(),
             protocol: ViewerProtocol::Rdp,
+            rudp_separate_monitor_windows: false,
             options: options.clone(),
         };
         remember_host(entry.clone(), None).unwrap();
@@ -621,6 +637,7 @@ mod tests {
                 username: "alice".into(),
                 label: String::new(),
                 protocol: ViewerProtocol::Rdp,
+                rudp_separate_monitor_windows: false,
                 options: ViewerRdpOptions::default(),
             },
             Some(&entry),
@@ -639,6 +656,7 @@ mod tests {
             username: "alice".into(),
             label: "Office".into(),
             protocol: ViewerProtocol::Rdp,
+            rudp_separate_monitor_windows: false,
             options: ViewerRdpOptions::default(),
         };
         remember_host(office.clone(), None).unwrap();
@@ -653,6 +671,7 @@ mod tests {
             username: "alice".into(),
             label: "Home PC".into(),
             protocol: ViewerProtocol::Rudp,
+            rudp_separate_monitor_windows: false,
             options: ViewerRdpOptions::default(),
         };
         remember_host(rudp.clone(), None).unwrap();
@@ -732,10 +751,33 @@ mod tests {
         // Consumed — next take defaults to dedicated workspace.
         assert_eq!(take_viewer_pending_placement(), ViewerPlacement::Workspace);
 
+        set_viewer_pending_placement(ViewerPlacement::Window);
+        clear_viewer_pending_placement();
+        assert_eq!(take_viewer_pending_placement(), ViewerPlacement::Workspace);
+
         set_viewer_pending_placement(ViewerPlacement::Workspace);
         assert_eq!(take_viewer_pending_placement(), ViewerPlacement::Workspace);
 
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rudp_separate_monitor_windows_defaults_off_and_round_trips() {
+        let legacy = r#"{"host":"h","port":7843,"protocol":"rudp"}"#;
+        let host: ViewerHost = serde_json::from_str(legacy).expect("legacy host parses");
+        assert!(!host.rudp_separate_monitor_windows);
+        // Off is omitted from the file (no churn for existing viewer.json).
+        let json = serde_json::to_string(&host).expect("serialize");
+        assert!(!json.contains("rudp_separate_monitor_windows"));
+
+        let multi = ViewerHost {
+            rudp_separate_monitor_windows: true,
+            ..host
+        };
+        let json = serde_json::to_string(&multi).expect("serialize");
+        assert!(json.contains("\"rudp_separate_monitor_windows\":true"));
+        let back: ViewerHost = serde_json::from_str(&json).expect("parse");
+        assert!(back.rudp_separate_monitor_windows);
     }
 }

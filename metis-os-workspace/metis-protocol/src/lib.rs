@@ -19,15 +19,16 @@ pub use rudp_audio::{
     RUDP_AUDIO_SAMPLE_RATE, encode_audio_datagram, is_audio_datagram, try_decode_audio_datagram,
 };
 pub use rudp_ctrl::{
-    RUDP_CLIPBOARD_MAX_BYTES, RUDP_MAX_FRAME, RUDP_PROTOCOL_VERSION, RudpControlMsg,
-    RudpRejectReason, encode_rudp_frame, truncate_clipboard_text, try_decode_rudp_frame,
+    RUDP_CLIPBOARD_MAX_BYTES, RUDP_MAX_FRAME, RUDP_MAX_SUBSCRIBED_OUTPUTS, RUDP_PROTOCOL_VERSION,
+    RudpControlMsg, RudpMonitorInfo, RudpRejectReason, encode_rudp_frame, truncate_clipboard_text,
+    try_decode_rudp_frame,
 };
 pub use rudp_video::{
     CODEC_AV1, CODEC_H264, CODEC_HEVC, DatagramHeader, FLAG_DAMAGE_FULL, FLAG_FEC, FLAG_KEY,
-    RUDP_DATAGRAM_HEADER_LEN, RUDP_DEFAULT_DATAGRAM_BUDGET, RUDP_VIDEO_MAGIC, ReassembledFrame,
-    ReliableAccessUnit, RudpDamageRect, apply_fec, build_media_datagrams, codec_from_str,
-    codec_to_str, datagram_payload_budget, fec_parity_count, shard_payload, try_reassemble_media,
-    unwrap_au_payload, wrap_au_payload,
+    MediaDatagramParams, RUDP_DATAGRAM_HEADER_LEN, RUDP_DEFAULT_DATAGRAM_BUDGET, RUDP_VIDEO_MAGIC,
+    ReassembleParams, ReassembledFrame, ReliableAccessUnit, RudpDamageRect, apply_fec,
+    build_media_datagrams, codec_from_str, codec_to_str, datagram_payload_budget, fec_parity_count,
+    shard_payload, try_reassemble_media, unwrap_au_payload, wrap_au_payload,
 };
 
 /// Commands sent from the Metis shell to the compositor.

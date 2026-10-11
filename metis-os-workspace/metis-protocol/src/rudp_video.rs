@@ -8,8 +8,10 @@ use reed_solomon_erasure::galois_8::ReedSolomon;
 
 /// Magic bytes `MRUV` (Metis RUDP Video).
 pub const RUDP_VIDEO_MAGIC: [u8; 4] = *b"MRUV";
-pub const RUDP_VIDEO_DATAGRAM_VERSION: u8 = 1;
-pub const RUDP_VIDEO_AU_VERSION: u8 = 1;
+/// Datagram header v2: byte 7 carries `stream_id` (was reserved pad in v1).
+pub const RUDP_VIDEO_DATAGRAM_VERSION: u8 = 2;
+/// Reliable AU body v2: byte 3 carries `stream_id` (was reserved pad in v1).
+pub const RUDP_VIDEO_AU_VERSION: u8 = 2;
 
 /// Fixed datagram header size (payload follows).
 pub const RUDP_DATAGRAM_HEADER_LEN: usize = 32;
@@ -39,6 +41,8 @@ pub struct DatagramHeader {
     pub version: u8,
     pub flags: u8,
     pub codec: u8,
+    /// Output stream demux key (matches `VideoReady.stream_id`).
+    pub stream_id: u8,
     pub frame_seq: u64,
     pub pts_us: i64,
     pub shard_i: u16,
@@ -53,7 +57,7 @@ impl DatagramHeader {
         out.push(self.version);
         out.push(self.flags);
         out.push(self.codec);
-        out.push(0);
+        out.push(self.stream_id);
         out.extend_from_slice(&self.frame_seq.to_le_bytes());
         out.extend_from_slice(&self.pts_us.to_le_bytes());
         out.extend_from_slice(&self.shard_i.to_le_bytes());
@@ -82,6 +86,7 @@ impl DatagramHeader {
                 version,
                 flags: buf[5],
                 codec: buf[6],
+                stream_id: buf[7],
                 frame_seq: u64::from_le_bytes(buf[8..16].try_into().unwrap_or([0; 8])),
                 pts_us: i64::from_le_bytes(buf[16..24].try_into().unwrap_or([0; 8])),
                 shard_i: u16::from_le_bytes([buf[24], buf[25]]),
@@ -165,25 +170,32 @@ pub fn apply_fec(data_shards: &[Vec<u8>], m: usize) -> Result<Vec<Vec<u8>>, Stri
     Ok(shards)
 }
 
+/// Parameters for [`build_frame_datagrams`] / [`build_media_datagrams`].
+#[derive(Debug, Clone, Copy)]
+pub struct MediaDatagramParams {
+    pub frame_seq: u64,
+    pub pts_us: i64,
+    pub codec: u8,
+    pub stream_id: u8,
+    pub damage_full: bool,
+    pub max_datagram: usize,
+    pub loss_ratio: f64,
+}
+
 /// Build wire datagrams for one encoded AU (data + FEC).
 pub fn build_frame_datagrams(
     data: &[u8],
-    frame_seq: u64,
-    pts_us: i64,
-    codec: u8,
-    damage_full: bool,
-    max_datagram: usize,
-    loss_ratio: f64,
+    params: MediaDatagramParams,
 ) -> Result<Vec<Vec<u8>>, String> {
-    let budget = datagram_payload_budget(max_datagram);
+    let budget = datagram_payload_budget(params.max_datagram);
     let data_shards = shard_payload(data, budget);
     let k = data_shards.len();
-    let m = fec_parity_count(k, loss_ratio);
+    let m = fec_parity_count(k, params.loss_ratio);
     let all = apply_fec(&data_shards, m)?;
     let mut out = Vec::with_capacity(all.len());
     for (i, shard) in all.iter().enumerate() {
         let mut flags = 0u8;
-        if damage_full {
+        if params.damage_full {
             flags |= FLAG_DAMAGE_FULL;
         }
         if i >= k {
@@ -192,9 +204,10 @@ pub fn build_frame_datagrams(
         let header = DatagramHeader {
             version: RUDP_VIDEO_DATAGRAM_VERSION,
             flags,
-            codec,
-            frame_seq,
-            pts_us,
+            codec: params.codec,
+            stream_id: params.stream_id,
+            frame_seq: params.frame_seq,
+            pts_us: params.pts_us,
             shard_i: i as u16,
             shard_n: k as u16,
             fec_m: m as u16,
@@ -214,6 +227,7 @@ pub struct ReassembledFrame {
     pub frame_seq: u64,
     pub pts_us: i64,
     pub codec: u8,
+    pub stream_id: u8,
     pub damage_full: bool,
     pub data: Vec<u8>,
 }
@@ -223,20 +237,15 @@ pub struct ReassembledFrame {
 /// `slots[i]` is `Some(payload)` when shard `i` (0..k+m) arrived.
 /// Payloads are expected to be the wrapped form from [`wrap_au_payload`].
 pub fn try_reassemble(
-    frame_seq: u64,
-    pts_us: i64,
-    codec: u8,
-    damage_full: bool,
-    shard_n: usize,
-    fec_m: usize,
+    params: ReassembleParams,
     slots: &[Option<Vec<u8>>],
 ) -> Result<Option<ReassembledFrame>, String> {
-    let total = shard_n.saturating_add(fec_m);
-    if shard_n == 0 || slots.len() < total {
+    let total = params.shard_n.saturating_add(params.fec_m);
+    if params.shard_n == 0 || slots.len() < total {
         return Ok(None);
     }
     let present: usize = slots.iter().take(total).filter(|s| s.is_some()).count();
-    if present < shard_n {
+    if present < params.shard_n {
         return Ok(None);
     }
 
@@ -262,14 +271,15 @@ pub fn try_reassemble(
         })
         .collect();
 
-    if fec_m > 0 && working.iter().take(shard_n).any(Option::is_none) {
-        let rs = ReedSolomon::new(shard_n, fec_m).map_err(|e| format!("reed-solomon init: {e}"))?;
+    if params.fec_m > 0 && working.iter().take(params.shard_n).any(Option::is_none) {
+        let rs = ReedSolomon::new(params.shard_n, params.fec_m)
+            .map_err(|e| format!("reed-solomon init: {e}"))?;
         rs.reconstruct(&mut working)
             .map_err(|e| format!("reed-solomon reconstruct: {e}"))?;
     }
 
-    let mut data = Vec::with_capacity(shard_n * shard_len);
-    for (i, slot) in working.iter().enumerate().take(shard_n) {
+    let mut data = Vec::with_capacity(params.shard_n * shard_len);
+    for (i, slot) in working.iter().enumerate().take(params.shard_n) {
         let shard = slot
             .as_ref()
             .ok_or_else(|| format!("missing data shard {i} after recover"))?;
@@ -277,10 +287,11 @@ pub fn try_reassemble(
     }
 
     Ok(Some(ReassembledFrame {
-        frame_seq,
-        pts_us,
-        codec,
-        damage_full,
+        frame_seq: params.frame_seq,
+        pts_us: params.pts_us,
+        codec: params.codec,
+        stream_id: params.stream_id,
+        damage_full: params.damage_full,
         data,
     }))
 }
@@ -310,6 +321,7 @@ pub struct ReliableAccessUnit {
     pub frame_seq: u64,
     pub pts_us: i64,
     pub codec: u8,
+    pub stream_id: u8,
     pub damage_full: bool,
     pub width: u32,
     pub height: u32,
@@ -327,7 +339,7 @@ impl ReliableAccessUnit {
         }
         body.push(flags);
         body.push(self.codec);
-        body.push(0);
+        body.push(self.stream_id);
         body.extend_from_slice(&self.frame_seq.to_le_bytes());
         body.extend_from_slice(&self.pts_us.to_le_bytes());
         body.extend_from_slice(&self.width.to_le_bytes());
@@ -363,6 +375,7 @@ impl ReliableAccessUnit {
         }
         let flags = body[1];
         let codec = body[2];
+        let stream_id = body[3];
         let frame_seq = u64::from_le_bytes(body[4..12].try_into().unwrap_or([0; 8]));
         let pts_us = i64::from_le_bytes(body[12..20].try_into().unwrap_or([0; 8]));
         let width = u32::from_le_bytes(body[20..24].try_into().unwrap_or([0; 4]));
@@ -395,6 +408,7 @@ impl ReliableAccessUnit {
             frame_seq,
             pts_us,
             codec,
+            stream_id,
             damage_full: (flags & FLAG_DAMAGE_FULL) != 0,
             width,
             height,
@@ -441,38 +455,30 @@ pub fn codec_to_str(c: u8) -> &'static str {
 /// Build datagrams with length-prefixed AU so reassembly can trim pad.
 pub fn build_media_datagrams(
     au_data: &[u8],
-    frame_seq: u64,
-    pts_us: i64,
-    codec: u8,
-    damage_full: bool,
-    max_datagram: usize,
-    loss_ratio: f64,
+    params: MediaDatagramParams,
 ) -> Result<Vec<Vec<u8>>, String> {
     let wrapped = wrap_au_payload(au_data);
-    build_frame_datagrams(
-        &wrapped,
-        frame_seq,
-        pts_us,
-        codec,
-        damage_full,
-        max_datagram,
-        loss_ratio,
-    )
+    build_frame_datagrams(&wrapped, params)
+}
+
+/// Shard reassembly inputs shared by [`try_reassemble`] / [`try_reassemble_media`].
+#[derive(Debug, Clone, Copy)]
+pub struct ReassembleParams {
+    pub frame_seq: u64,
+    pub pts_us: i64,
+    pub codec: u8,
+    pub stream_id: u8,
+    pub damage_full: bool,
+    pub shard_n: usize,
+    pub fec_m: usize,
 }
 
 /// Reassemble and unwrap length-prefixed AU payload.
 pub fn try_reassemble_media(
-    frame_seq: u64,
-    pts_us: i64,
-    codec: u8,
-    damage_full: bool,
-    shard_n: usize,
-    fec_m: usize,
+    params: ReassembleParams,
     slots: &[Option<Vec<u8>>],
 ) -> Result<Option<ReassembledFrame>, String> {
-    let Some(mut frame) =
-        try_reassemble(frame_seq, pts_us, codec, damage_full, shard_n, fec_m, slots)?
-    else {
+    let Some(mut frame) = try_reassemble(params, slots)? else {
         return Ok(None);
     };
     frame.data = unwrap_au_payload(&frame.data)?;
@@ -486,11 +492,23 @@ mod tests {
     #[test]
     fn shard_and_fec_roundtrip_with_loss() {
         let data: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
-        let dgrams =
-            build_media_datagrams(&data, 42, 1000, CODEC_HEVC, false, 1200, 0.0).expect("build");
+        let dgrams = build_media_datagrams(
+            &data,
+            MediaDatagramParams {
+                frame_seq: 42,
+                pts_us: 1000,
+                codec: CODEC_HEVC,
+                stream_id: 3,
+                damage_full: false,
+                max_datagram: 1200,
+                loss_ratio: 0.0,
+            },
+        )
+        .expect("build");
         assert!(dgrams.len() > 1);
 
         let (hdr0, _) = DatagramHeader::decode(&dgrams[0]).expect("hdr");
+        assert_eq!(hdr0.stream_id, 3);
         let k = hdr0.shard_n as usize;
         let m = hdr0.fec_m as usize;
         let mut slots: Vec<Option<Vec<u8>>> = vec![None; k + m];
@@ -498,15 +516,28 @@ mod tests {
         for (i, d) in dgrams.iter().enumerate() {
             let (h, total) = DatagramHeader::decode(d).expect("d");
             assert_eq!(h.frame_seq, 42);
+            assert_eq!(h.stream_id, 3);
             if i == 0 {
                 continue; // lose first data shard
             }
             slots[h.shard_i as usize] = Some(d[RUDP_DATAGRAM_HEADER_LEN..total].to_vec());
         }
-        let got = try_reassemble_media(42, 1000, CODEC_HEVC, false, k, m, &slots)
-            .expect("re")
-            .expect("complete");
+        let got = try_reassemble_media(
+            ReassembleParams {
+                frame_seq: 42,
+                pts_us: 1000,
+                codec: CODEC_HEVC,
+                stream_id: 3,
+                damage_full: false,
+                shard_n: k,
+                fec_m: m,
+            },
+            &slots,
+        )
+        .expect("re")
+        .expect("complete");
         assert_eq!(got.data, data);
+        assert_eq!(got.stream_id, 3);
     }
 
     #[test]
@@ -515,6 +546,7 @@ mod tests {
             frame_seq: 7,
             pts_us: 12345,
             codec: CODEC_H264,
+            stream_id: 2,
             damage_full: true,
             width: 1920,
             height: 1080,

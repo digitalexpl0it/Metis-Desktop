@@ -120,8 +120,26 @@ fn ufw_rules_present() -> bool {
     text.contains(UFW_COMMENT)
 }
 
+fn load_remote_at(path: &std::path::Path) -> metis_config::RemoteConfig {
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(path)
+        && let Ok(cfg) = serde_json::from_str::<metis_config::RemoteConfig>(&text)
+    {
+        return cfg;
+    }
+    load_remote_config()
+}
+
+fn save_remote_at(path: &std::path::Path, cfg: &metis_config::RemoteConfig) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    metis_config::persist::write_json_atomic(path, cfg)
+}
+
 fn persist(applied: bool, backend: &str) {
-    let mut cfg = load_remote_config();
+    let path = remote_json_path_for_persist();
+    let mut cfg = load_remote_at(&path);
     cfg.firewall_applied = applied;
     cfg.firewall_backend = if applied {
         backend.to_string()
@@ -131,18 +149,19 @@ fn persist(applied: bool, backend: &str) {
     if applied {
         cfg.firewall_last_error = None;
     }
-    if let Err(err) = save_remote_config(&cfg) {
-        tracing::warn!(%err, "failed to persist firewall_applied in remote.json");
+    if let Err(err) = save_remote_at(&path, &cfg) {
+        tracing::warn!(%err, path = %path.display(), "failed to persist firewall_applied in remote.json");
     }
 }
 
 fn persist_error(err: &str) {
-    let mut cfg = load_remote_config();
+    let path = remote_json_path_for_persist();
+    let mut cfg = load_remote_at(&path);
     cfg.firewall_applied = false;
     cfg.firewall_backend.clear();
     cfg.firewall_last_error = Some(err.to_string());
-    if let Err(e) = save_remote_config(&cfg) {
-        tracing::warn!(%e, "failed to persist firewall_last_error");
+    if let Err(e) = save_remote_at(&path, &cfg) {
+        tracing::warn!(%e, path = %path.display(), "failed to persist firewall_last_error");
     }
 }
 
@@ -876,8 +895,73 @@ fn clear_ufw_rustdesk() -> Result<(), String> {
 const NFT_TABLE_RUDP: &str = "metis_rudp";
 const UFW_COMMENT_RUDP: &str = "metis-rudp-lan-only";
 
+/// Under `pkexec`, `HOME` is root's — write firewall flags into the *invoking*
+/// user's `~/.config/metis/` (via `PKEXEC_UID`), not `/root/.config/metis/`.
+fn pkexec_caller_metis_config_dir() -> Option<std::path::PathBuf> {
+    if !is_root() {
+        return None;
+    }
+    let uid: u32 = std::env::var("PKEXEC_UID").ok()?.parse().ok()?;
+    if uid == 0 {
+        return None;
+    }
+    let home = passwd_home_for_uid(uid)?;
+    Some(home.join(".config/metis"))
+}
+
+fn passwd_home_for_uid(uid: u32) -> Option<std::path::PathBuf> {
+    let text = std::fs::read_to_string("/etc/passwd").ok()?;
+    for line in text.lines() {
+        let mut parts = line.split(':');
+        let _name = parts.next()?;
+        let _passwd = parts.next()?;
+        let parsed: u32 = parts.next()?.parse().ok()?;
+        if parsed != uid {
+            continue;
+        }
+        let _gid = parts.next()?;
+        let _gecos = parts.next()?;
+        let home = parts.next()?;
+        if home.is_empty() {
+            return None;
+        }
+        return Some(std::path::PathBuf::from(home));
+    }
+    None
+}
+
+fn rudp_json_path_for_persist() -> std::path::PathBuf {
+    pkexec_caller_metis_config_dir()
+        .map(|d| d.join("rudp.json"))
+        .unwrap_or_else(metis_config::rudp_config_path)
+}
+
+fn remote_json_path_for_persist() -> std::path::PathBuf {
+    pkexec_caller_metis_config_dir()
+        .map(|d| d.join("remote.json"))
+        .unwrap_or_else(metis_config::remote_config_path)
+}
+
+fn load_rudp_at(path: &std::path::Path) -> metis_config::RudpConfig {
+    if path.exists()
+        && let Ok(text) = std::fs::read_to_string(path)
+        && let Ok(cfg) = serde_json::from_str::<metis_config::RudpConfig>(&text)
+    {
+        return cfg.sanitize();
+    }
+    metis_config::RudpConfig::default()
+}
+
+fn save_rudp_at(path: &std::path::Path, cfg: &metis_config::RudpConfig) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    metis_config::persist::write_json_atomic(path, &cfg.clone().sanitize())
+}
+
 fn persist_rudp(applied: bool, backend: &str) {
-    let mut cfg = metis_config::load_rudp_config();
+    let path = rudp_json_path_for_persist();
+    let mut cfg = load_rudp_at(&path);
     cfg.firewall_applied = applied;
     cfg.firewall_backend = if applied {
         backend.to_string()
@@ -887,18 +971,19 @@ fn persist_rudp(applied: bool, backend: &str) {
     if applied {
         cfg.firewall_last_error = None;
     }
-    if let Err(err) = metis_config::save_rudp_config(&cfg) {
-        tracing::warn!(%err, "failed to persist rudp firewall_applied");
+    if let Err(err) = save_rudp_at(&path, &cfg) {
+        tracing::warn!(%err, path = %path.display(), "failed to persist rudp firewall_applied");
     }
 }
 
 fn persist_rudp_error(err: &str) {
-    let mut cfg = metis_config::load_rudp_config();
+    let path = rudp_json_path_for_persist();
+    let mut cfg = load_rudp_at(&path);
     cfg.firewall_applied = false;
     cfg.firewall_backend.clear();
     cfg.firewall_last_error = Some(err.to_string());
-    if let Err(e) = metis_config::save_rudp_config(&cfg) {
-        tracing::warn!(%e, "failed to persist rudp firewall_last_error");
+    if let Err(e) = save_rudp_at(&path, &cfg) {
+        tracing::warn!(%e, path = %path.display(), "failed to persist rudp firewall_last_error");
     }
 }
 
@@ -959,13 +1044,14 @@ pub fn status_rudp() -> FirewallStatus {
 pub fn apply_rudp() -> Result<FirewallStatus, String> {
     let current = status_rudp();
     if current.applied {
-        let mut cfg = metis_config::load_rudp_config();
-        if cfg.firewall_last_error.take().is_some() {
-            let _ = metis_config::save_rudp_config(&cfg);
-        }
+        // Rules already on the system (e.g. leftover table) — no pkexec needed,
+        // but always sync `rudp.json` so the compositor's fail-closed bind gate
+        // sees `firewall_applied: true`. Skipping persist left the host "Enabled"
+        // in Settings while the compositor refused to listen.
+        persist_rudp(true, &current.backend);
         return Ok(current);
     }
-    let _backend = enforceable_backend().inspect_err(|e| persist_rudp_error(e))?;
+    let backend = enforceable_backend().inspect_err(|e| persist_rudp_error(e))?;
     let result = if is_root() {
         apply_rudp_as_root()?
     } else {
@@ -974,12 +1060,26 @@ pub fn apply_rudp() -> Result<FirewallStatus, String> {
             persist_rudp_error(&msg);
             msg
         })?;
-        status_rudp()
+        // pkexec succeeds ⇒ system rules are in place. Unprivileged `nft list`
+        // often returns EPERM, so do not rely on status_rudp() alone. Persist
+        // into *this* user's rudp.json (as-root also writes via PKEXEC_UID).
+        persist_rudp(true, backend);
+        FirewallStatus {
+            applied: true,
+            backend: backend.into(),
+            detail: None,
+        }
     };
     if result.applied {
         persist_rudp(true, &result.backend);
+        return Ok(result);
     }
-    Ok(result)
+    let msg = result
+        .detail
+        .clone()
+        .unwrap_or_else(|| "firewall apply finished but LAN rules are not active (nft/ufw)".into());
+    persist_rudp_error(&msg);
+    Err(msg)
 }
 
 pub fn clear_rudp() -> Result<FirewallStatus, String> {

@@ -1,4 +1,4 @@
-//! Subprocess probe + isolated encode worker for VAAPI/NVENC.
+//! Subprocess probe + isolated encode worker for VAAPI/NVENC/software AV1.
 //!
 //! libva / CUDA / FFmpeg can abort or segfault the calling process (missing
 //! encode entrypoints, driver bugs). The compositor never runs that code
@@ -10,7 +10,9 @@
 //! - `metis-encode-probe worker <fd>` — serve encode requests on socket `fd`
 //!   (spawned by `metis_encode::open_isolated_encoder`).
 
-use metis_encode::{EncoderBackend, EncoderConfig, FfmpegHwEncoder, RudpCodec};
+use metis_encode::{
+    EncodeError, EncoderBackend, EncoderConfig, FfmpegHwEncoder, FfmpegSoftEncoder, RudpCodec,
+};
 
 /// Exit without running C `atexit` handlers. NVIDIA's `libnvcuvid` registers
 /// one that joins an internal thread and deadlocks when a CUDA context was
@@ -26,7 +28,7 @@ fn hard_exit(code: i32) -> ! {
 fn usage_exit(msg: &str) -> ! {
     eprintln!("metis-encode-probe: {msg}");
     eprintln!(
-        "usage: metis-encode-probe <vaapi|nvenc> <h264|hevc> <width> <height> <render_node>\n       \
+        "usage: metis-encode-probe <vaapi|nvenc|soft> <h264|hevc|av1> <width> <height> <render_node>\n       \
          metis-encode-probe worker <fd>"
     );
     std::process::exit(2);
@@ -61,6 +63,7 @@ fn probe_main(args: &[String]) -> ! {
     let backend = match args.next() {
         Some("vaapi") | Some("auto") => EncoderBackend::Vaapi,
         Some("nvenc") => EncoderBackend::Nvenc,
+        Some("soft") => EncoderBackend::Soft,
         other => usage_exit(&format!("unknown backend {other:?}")),
     };
     let codec = match args.next() {
@@ -90,12 +93,13 @@ fn probe_main(args: &[String]) -> ! {
         bitrate_kbps: 2_000,
     };
 
-    let code = match FfmpegHwEncoder::open(&cfg, render_node) {
-        // Drop (closes the codec + hw contexts) before exit, not after.
-        Ok(enc) => {
-            drop(enc);
-            0
-        }
+    // Drop (closes the codec + hw contexts) before exit, not after.
+    let opened: Result<(), EncodeError> = match backend {
+        EncoderBackend::Soft => FfmpegSoftEncoder::open(&cfg).map(drop),
+        _ => FfmpegHwEncoder::open(&cfg, render_node).map(drop),
+    };
+    let code = match opened {
+        Ok(()) => 0,
         Err(err) => {
             eprintln!("metis-encode-probe: {err}");
             1

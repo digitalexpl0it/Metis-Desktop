@@ -35,7 +35,7 @@ contract and verify against `metis-rudp-smoke` / Metis Viewer.
 | Default port | **7843** (configurable in `~/.config/metis/rudp.json` on the host) |
 | TLS | Host self-signed cert; client **TOFU**-pins SHA-256 fingerprint |
 | Auth | Local **PAM** username + password (allowlisted on host) |
-| Protocol version | `RUDP_PROTOCOL_VERSION` = **2** (`metis-protocol`) |
+| Protocol version | `RUDP_PROTOCOL_VERSION` = **3** (`metis-protocol`) — **breaking** vs v2 |
 | First-party Linux client | Metis Viewer → protocol **Metis Remote** |
 
 Host enablement and firewall: [User Guide — Metis Remote](USER_GUIDE.md#metis-remote-rudp).
@@ -78,15 +78,20 @@ client.
      (`~/.config/metis/rudp/known_hosts` on Linux; use the same relative layout
      under the platform config dir on Windows/macOS via `directories`).
 3. Open a **bidirectional control stream**.
-4. Client → host: `Hello { protocol: 2, username }`.
+4. Client → host: `Hello { protocol: 3, username }`. Host rejects other versions
+   with `Reject { reason: protocol }`.
 5. Host → client: `AuthChallenge { nonce }` (nonce may be unused by simple
    password clients today; still wait for the message).
 6. Client → host: `AuthResponse { password }` (never log or persist).
 7. Host → client: `SessionOk { session_id }` **or** `Reject { reason, detail? }`.
-8. After `SessionOk`, host sends `VideoReady` / optionally `AudioReady`, then
-   media. Host may also send `PointerLock` and `ClipboardSet`.
+8. After `SessionOk`, host sends `DesktopLayout { monitors }`, then client should
+   send `SubscribeOutputs { output_ids }` (empty / omit → **primary only**; max
+   **4** ids). Host replies with one `VideoReady` per subscribed stream
+   (`stream_id`, `output_id`, size, codec), optionally `AudioReady`, then media.
+   Host may also send `PointerLock` and `ClipboardSet`. Layout is re-sent on
+   hotplug / primary change.
 9. Client sends input / clipboard on the control stream; reads media from
-   uni-stream + datagrams.
+   uni-stream + datagrams demuxed by `stream_id`.
 
 Reject reasons (`snake_case`): `not_allowed`, `auth_failed`, `protocol`,
 `rate_limited`.
@@ -129,9 +134,11 @@ JSON uses a `type` tag in `snake_case` (serde adjacently tagged). Helpers:
 | H→C | `session_ok` | `session_id` |
 | H→C | `reject` | `reason`, optional `detail` |
 | either | `keepalive` | |
-| H→C | `video_ready` | `width`, `height`, `codec` (`h264` / `hevc` / `av1`) |
+| H→C | `desktop_layout` | `monitors[]` with `id`, `name`, `x`, `y`, `width`, `height`, `scale`, `primary` |
+| C→H | `subscribe_outputs` | `output_ids` (empty → primary; max 4) |
+| H→C | `video_ready` | `width`, `height`, `codec`, `stream_id`, `output_id` |
 | H→C | `audio_ready` | `sample_rate`, `channels`, `codec` (`opus`) |
-| C→H | `pointer_absolute` | compositor **logical** desktop `x`,`y` |
+| C→H | `pointer_absolute` | compositor **logical** desktop `x`,`y` (add monitor origin from layout) |
 | C→H | `pointer_relative` | `dx`,`dy` logical pixels |
 | C→H | `pointer_button` | Linux **evdev** button code (e.g. `BTN_LEFT` = `0x110`) |
 | C→H | `pointer_scroll` | logical pixel deltas |
@@ -159,18 +166,24 @@ Host advertises the active name in `VideoReady.codec`. Minimum viable client:
 **software H.264** decode. HEVC/AV1 are optional with fallback messaging if
 unsupported.
 
+**Multi-monitor:** each subscribed output has its own `stream_id`. Open one
+decoder (or window) per `VideoReady`. Map pointer from window-local pixels into
+global logical space using that monitor’s `x`/`y` from `DesktopLayout`.
+
 ### Keyframes (reliable)
 
 Host opens a **unidirectional** stream and sends length-prefixed
 `ReliableAccessUnit` bodies (same `u32` BE length prefix as control). These are
-keyframes (IDR). Parse with `ReliableAccessUnit` helpers in `metis-protocol`.
+keyframes (IDR). AU body version **2**: byte 3 is `stream_id`. Parse with
+`ReliableAccessUnit` helpers in `metis-protocol`.
 
 ### Deltas (+ FEC) — datagrams
 
 Quinn **unreliable datagrams**, magic **`MRUV`**, little-endian header
-(`RUDP_DATAGRAM_HEADER_LEN` = 32), then payload. Flags include key / FEC /
-damage-full. Default datagram budget ~1200 bytes. Reassemble with
-`try_reassemble_media` (Reed–Solomon when FEC shards present).
+(`RUDP_DATAGRAM_HEADER_LEN` = 32), then payload. Datagram version **2**: header
+byte 7 is `stream_id`. Flags include key / FEC / damage-full. Default datagram
+budget ~1200 bytes. Reassemble with `try_reassemble_media` (Reed–Solomon when
+FEC shards present), demuxing by `stream_id` before decode.
 
 Deliver complete access units to the decoder (`metis-decode` or equivalent) →
 RGBA for presentation.
@@ -207,8 +220,9 @@ let session = connect(RudpClientConfig {
 
 while let Some(ev) = session.recv_event().await {
     match ev {
-        SessionEvent::VideoReady { width, height, codec } => { /* open decoder */ }
-        SessionEvent::AccessUnit(au) => { /* decode au.data */ }
+        SessionEvent::DesktopLayout { monitors } => { /* pick outputs; SubscribeOutputs */ }
+        SessionEvent::VideoReady { width, height, codec, stream_id, output_id } => { /* decoder */ }
+        SessionEvent::AccessUnit(au) => { /* demux on au.stream_id; decode au.data */ }
         SessionEvent::AudioReady { .. } | SessionEvent::AudioPacket { .. } => { /* … */ }
         SessionEvent::PointerLock { locked } => { /* relative vs absolute */ }
         SessionEvent::ClipboardSet { text, serial, .. } => { /* set OS clipboard */ }
@@ -217,6 +231,8 @@ while let Some(ev) = session.recv_event().await {
 }
 
 session.send_input(RudpControlMsg::PointerAbsolute { x, y }).await?;
+// Multi-monitor: pick up to RUDP_MAX_SUBSCRIBED_OUTPUTS (4) layout ids; empty = primary.
+session.subscribe_outputs(vec!["DP-1".into(), "DP-2".into()]).await?;
 ```
 
 Interactive TOFU surfaces `ClientError::TofuUnknown` / `TofuMismatch`; call
@@ -241,7 +257,8 @@ Interactive TOFU surfaces `ClientError::TofuUnknown` / `TofuMismatch`; call
 
 A client is considered compatible when it can:
 
-- [ ] Complete TOFU + PAM against an enabled Metis Remote host (protocol v2)
+- [ ] Complete TOFU + PAM against an enabled Metis Remote host (protocol **v3**)
+- [ ] Honour `DesktopLayout` + `SubscribeOutputs`; demux video by `stream_id`
 - [ ] Decode H.264 access units to a visible frame
 - [ ] Send absolute pointer + key events that move/type on an unlocked session
 - [ ] Honour `Reject` / disconnect cleanly; never persist the password

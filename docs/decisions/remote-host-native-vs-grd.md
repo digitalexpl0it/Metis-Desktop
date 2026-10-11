@@ -37,9 +37,14 @@ a second custom TLS protocol for classic RDP clients.
 
 ## GA criteria (default flip — not done yet)
 
-- Credential UX matching GRD (stdin-set password, no argv secrets) — partial
-  (`METIS_RDP_PASSWORD` / runtime file).
-- Multi-monitor + lock pause parity with GRD QA.
+- [x] Credential UX matching GRD (stdin-set password, no argv secrets) — done:
+  `metis-remote set-credentials` / `native set-credentials` write
+  `$XDG_RUNTIME_DIR/metis/rdp-password` (0600, fail-closed runtime dir) and the
+  username to `remote.json`; enable is refused without credentials; status
+  `password_set` is derived; `metis-rdp-host` rejects empty-password auth.
+- [x] Metis Remote (RUDP) multi-monitor + lock pause — protocol v3 layout /
+  subscribe / per-output streams (2026-10-11). MetisNative RDP host still
+  single-surface vs GRD multi-monitor QA.
 - Packaging on Ubuntu 26.04+ / Debian 13 without a heavier GNOME stack.
 
 Until those land: **GRD default**, MetisNative opt-in, RustDesk optional third-party.

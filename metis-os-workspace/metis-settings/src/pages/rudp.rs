@@ -141,18 +141,28 @@ pub fn build() -> gtk::Widget {
          and falls back between them. Default is H.264 (widely available). Encoding \
          runs in a separate sandboxed process and only while a client is connected — \
          a driver fault restarts the encoder, never the desktop. Requires system \
-         FFmpeg with VAAPI and/or NVENC.",
+         FFmpeg with VAAPI and/or NVENC. Preferring AV1 on Auto tries GPU AV1, then \
+         CPU AV1 (libsvtav1, CPU-heavy), then H.264/HEVC; Software forces CPU AV1 only.",
     )));
     enc_hint.set_xalign(0.0);
     enc_hint.set_wrap(true);
     enc_hint.add_css_class("metis-settings-hint");
     enc_body.append(&enc_hint);
 
-    let encoder_labels = [tr("Auto"), tr("VAAPI (Intel/AMD)"), tr("NVENC (NVIDIA)")];
+    let encoder_labels = [
+        tr("Auto"),
+        tr("VAAPI (Intel/AMD)"),
+        tr("NVENC (NVIDIA)"),
+        tr("Software"),
+    ];
     let encoder_refs: Vec<&str> = encoder_labels.iter().map(|s| s.as_str()).collect();
     let encoder_dd = gtk::DropDown::from_strings(&encoder_refs);
     encoder_dd.set_selected(encoder_backend_index(cfg.borrow().encoder));
     encoder_dd.set_halign(gtk::Align::End);
+    encoder_dd.set_tooltip_text(Some(&tr(
+        "Software encodes AV1 on the CPU (libsvtav1 / libaom-av1) and ignores the \
+         preferred codec. Soft AV1 is CPU-heavy — use it only when no GPU encoder works.",
+    )));
     enc_body.append(&ui::row(&tr("Encoder"), &encoder_dd));
 
     let codec_labels = [tr("H.264"), tr("HEVC (H.265)"), tr("AV1")];
@@ -162,7 +172,8 @@ pub fn build() -> gtk::Widget {
     codec_dd.set_halign(gtk::Align::End);
     codec_dd.set_tooltip_text(Some(&tr(
         "Preferred codec — VAAPI still probes H.264 before HEVC. AV1 needs \
-         FFmpeg av1_vaapi/av1_nvenc and a capable GPU; otherwise the host falls back.",
+         FFmpeg av1_vaapi/av1_nvenc and a capable GPU; on Auto the host then tries \
+         CPU AV1 (libsvtav1, CPU-heavy) before falling back to H.264/HEVC.",
     )));
     enc_body.append(&ui::row(&tr("Preferred codec"), &codec_dd));
 
@@ -215,7 +226,11 @@ pub fn build() -> gtk::Widget {
                 }
                 None => guard_banner.set_visible(false),
             }
-            if c.enabled {
+            if c.enabled && c.lan_only && !c.firewall_applied {
+                status.set_text(&tr(
+                    "On, but not listening — LAN firewall rules are missing. Use Retry firewall apply.",
+                ));
+            } else if c.enabled {
                 status.set_text(&format!(
                     "{} (UDP {})",
                     tr("Enabled — compositor listens when Metis is on DRM"),
@@ -298,13 +313,29 @@ pub fn build() -> gtk::Widget {
         let refresh_status = refresh_status.clone();
         retry_fw.connect_clicked(move |_| {
             let c = cfg.borrow().clone();
-            if c.enabled && c.lan_only {
-                match metis_remote::firewall_rudp_apply() {
-                    Ok(_) => {}
-                    Err(err) => tracing::warn!(%err, "rudp firewall apply failed"),
+            if !c.lan_only {
+                return;
+            }
+            match metis_remote::firewall_rudp_apply() {
+                Ok(snap) if snap.applied => {
+                    *cfg.borrow_mut() = metis_config::load_rudp_config();
+                    // If the user already toggled the host on, ensure we persist
+                    // applied state and nudge the compositor to bind.
+                    if cfg.borrow().enabled {
+                        let _ = metis_config::save_rudp_config(&cfg.borrow());
+                        runtime::reload_rudp_async();
+                    }
+                    refresh_status();
                 }
-                *cfg.borrow_mut() = metis_config::load_rudp_config();
-                refresh_status();
+                Ok(_) => {
+                    *cfg.borrow_mut() = metis_config::load_rudp_config();
+                    refresh_status();
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "rudp firewall apply failed");
+                    *cfg.borrow_mut() = metis_config::load_rudp_config();
+                    refresh_status();
+                }
             }
         });
     }
@@ -335,11 +366,29 @@ pub fn build() -> gtk::Widget {
                 let lan_only = cfg.borrow().lan_only;
                 if lan_only {
                     match metis_remote::firewall_rudp_apply() {
-                        Ok(_) => {
+                        Ok(snap) if snap.applied => {
                             *cfg.borrow_mut() = metis_config::load_rudp_config();
                             cfg.borrow_mut().enabled = true;
+                            cfg.borrow_mut().firewall_applied = true;
+                            if !snap.backend.is_empty() {
+                                cfg.borrow_mut().firewall_backend = snap.backend;
+                            }
+                            cfg.borrow_mut().firewall_last_error = None;
                             let user = std::env::var("USER").unwrap_or_default();
                             cfg.borrow_mut().seed_current_user_if_needed(&user);
+                            rebuild_accounts(&list, &cfg, &persist, &toggling);
+                            persist();
+                        }
+                        Ok(snap) => {
+                            let err = snap.detail.unwrap_or_else(|| {
+                                "firewall apply did not activate LAN rules".into()
+                            });
+                            tracing::warn!(%err, "rudp firewall apply incomplete — host stays off");
+                            *cfg.borrow_mut() = metis_config::load_rudp_config();
+                            cfg.borrow_mut().enabled = false;
+                            toggling.set(true);
+                            enable_sw.set_active(false);
+                            toggling.set(false);
                             rebuild_accounts(&list, &cfg, &persist, &toggling);
                             persist();
                         }
@@ -433,6 +482,7 @@ fn encoder_backend_index(backend: RudpEncoderBackend) -> u32 {
         RudpEncoderBackend::Auto => 0,
         RudpEncoderBackend::Vaapi => 1,
         RudpEncoderBackend::Nvenc => 2,
+        RudpEncoderBackend::Soft => 3,
     }
 }
 
@@ -440,6 +490,7 @@ fn encoder_backend_from_index(idx: u32) -> RudpEncoderBackend {
     match idx {
         1 => RudpEncoderBackend::Vaapi,
         2 => RudpEncoderBackend::Nvenc,
+        3 => RudpEncoderBackend::Soft,
         _ => RudpEncoderBackend::Auto,
     }
 }
@@ -465,11 +516,12 @@ fn encode_plan_text(cfg: &RudpConfig) -> String {
         RudpEncoderBackend::Auto => tr("Auto → NVENC on NVIDIA, else VAAPI"),
         RudpEncoderBackend::Vaapi => tr("VAAPI"),
         RudpEncoderBackend::Nvenc => tr("NVENC"),
+        RudpEncoderBackend::Soft => tr("Software AV1 (CPU)"),
     };
     let codec = match cfg.codec {
         RudpVideoCodec::H264 => tr("prefer H.264 (VAAPI probes H.264 before HEVC)"),
         RudpVideoCodec::Hevc => tr("prefer HEVC (VAAPI still probes H.264 first)"),
-        RudpVideoCodec::Av1 => tr("prefer AV1 (VAAPI still probes H.264 first)"),
+        RudpVideoCodec::Av1 => tr("prefer AV1 (GPU AV1, then CPU AV1, then H.264/HEVC)"),
     };
     format!("{backend}; {codec}; {} kbps", cfg.bitrate_kbps)
 }
@@ -477,12 +529,6 @@ fn encode_plan_text(cfg: &RudpConfig) -> String {
 fn rudp_firewall_status_text(cfg: &RudpConfig) -> (String, bool) {
     if !cfg.lan_only {
         return (tr("LAN only is off — no Metis UDP firewall rules."), false);
-    }
-    if !cfg.enabled {
-        return (
-            tr("Enable Metis Remote to apply LAN-only UDP firewall rules."),
-            false,
-        );
     }
     if cfg.firewall_applied {
         let backend = if cfg.firewall_backend.is_empty() {
@@ -495,10 +541,14 @@ fn rudp_firewall_status_text(cfg: &RudpConfig) -> (String, bool) {
             false,
         );
     }
-    let detail = cfg
-        .firewall_last_error
-        .clone()
-        .unwrap_or_else(|| tr("LAN-only is on, but firewall rules are not applied yet."));
+    let detail = cfg.firewall_last_error.clone().unwrap_or_else(|| {
+        if cfg.enabled {
+            tr("LAN firewall missing — the host will not listen until rules apply.")
+        } else {
+            tr("Enable Metis Remote to apply LAN-only UDP firewall rules.")
+        }
+    });
+    // Retry when rules are missing (whether or not the host toggle is on).
     (detail, true)
 }
 

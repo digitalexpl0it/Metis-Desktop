@@ -10,6 +10,10 @@ use metis_i18n::tr;
 /// GTK controls for per-host RDP options.
 pub struct OptionsUi {
     pub root: gtk::Widget,
+    /// Metis Remote: one window per host monitor (shown only for RUDP hosts).
+    pub rudp_separate_windows: gtk::CheckButton,
+    /// Metis Remote: Dedicated desktop vs window on current desk (shown for RUDP).
+    pub rudp_placement: gtk::DropDown,
     color_depth: gtk::DropDown,
     display_mode: gtk::DropDown,
     width_entry: gtk::Entry,
@@ -75,7 +79,8 @@ impl OptionsUi {
             check_row(&span_monitors),
         ));
         let display_hint = gtk::Label::new(Some(&tr(
-            "Dedicated desktop moves FreeRDP onto its own workspace. Window mode keeps it on the current desk.",
+            "Dedicated desktop moves the session onto its own workspace (accent \
+             edge-bar dot). Window mode keeps it on the current desk.",
         )));
         display_hint.set_wrap(true);
         display_hint.set_xalign(0.0);
@@ -168,8 +173,41 @@ impl OptionsUi {
             display_mode.connect_notify_local(Some("selected"), move |_, _| sync_size());
         }
 
+        let rudp_separate_windows =
+            gtk::CheckButton::with_label(&tr("Open each host monitor in its own window"));
+        rudp_separate_windows.set_tooltip_text(Some(&tr(
+            "Metis Remote: stream every monitor (up to 4) over one connection, one \
+             Viewer window per output. Off: primary monitor only.",
+        )));
+        let rudp_placement = string_dropdown(ViewerPlacement::all().iter().map(|v| v.label()));
+        rudp_placement.set_tooltip_text(Some(&tr(
+            "On Metis: Dedicated desktop opens an ephemeral workspace (accent edge-bar \
+             dot). Window on current desktop leaves the session on the desk you \
+             connected from.",
+        )));
+
+        // Keep RDP notebook + RUDP placement dropdown in sync (same host field).
+        {
+            let placement_rdp = placement.clone();
+            let placement_rudp = rudp_placement.clone();
+            placement.connect_notify_local(Some("selected"), move |dd, _| {
+                if placement_rudp.selected() != dd.selected() {
+                    placement_rudp.set_selected(dd.selected());
+                }
+            });
+            let placement_rdp2 = placement_rdp;
+            let placement_rudp2 = rudp_placement.clone();
+            placement_rudp2.connect_notify_local(Some("selected"), move |dd, _| {
+                if placement_rdp2.selected() != dd.selected() {
+                    placement_rdp2.set_selected(dd.selected());
+                }
+            });
+        }
+
         let ui = Self {
             root: notebook.upcast(),
+            rudp_separate_windows,
+            rudp_placement,
             color_depth,
             display_mode,
             width_entry,
@@ -223,6 +261,10 @@ impl OptionsUi {
             &self.placement,
             index_of(ViewerPlacement::all(), opts.placement),
         );
+        set_dropdown_index(
+            &self.rudp_placement,
+            index_of(ViewerPlacement::all(), opts.placement),
+        );
         self.multi_monitor.set_active(opts.multi_monitor);
         self.span_monitors.set_active(opts.span_monitors);
         self.clipboard.set_active(opts.clipboard);
@@ -245,6 +287,13 @@ impl OptionsUi {
 
     pub fn apply_host(&self, host: &ViewerHost) {
         self.apply(&host.options);
+        self.rudp_separate_windows
+            .set_active(host.rudp_separate_monitor_windows);
+    }
+
+    /// Metis Remote preference: one Viewer window per host monitor.
+    pub fn collect_rudp_separate_windows(&self) -> bool {
+        self.rudp_separate_windows.is_active()
     }
 
     pub fn collect(&self) -> ViewerRdpOptions {

@@ -36,6 +36,7 @@ typedef struct
 	char* shmPath;
 	char* inputPath;
 	char* password;
+	char* username; /* optional: when set, the client login name must match */
 	int shmFd;
 	void* shmMap;
 	size_t shmSize;
@@ -169,18 +170,40 @@ static BOOL metis_input_rel_mouse(rdpShadowSubsystem* subsystem, rdpShadowClient
 	return TRUE;
 }
 
+/* Constant-time string compare (0 == equal) to avoid leaking prefix matches. */
+static int metis_secure_streq(const char* a, const char* b)
+{
+	size_t la = strlen(a);
+	size_t lb = strlen(b);
+	size_t n = la > lb ? la : lb;
+	unsigned char diff = (unsigned char)(la != lb);
+	size_t i;
+	for (i = 0; i < n; i++)
+	{
+		unsigned char ca = i < la ? (unsigned char)a[i] : 0;
+		unsigned char cb = i < lb ? (unsigned char)b[i] : 0;
+		diff |= (unsigned char)(ca ^ cb);
+	}
+	return diff;
+}
+
 static int metis_authenticate(rdpShadowSubsystem* subsystem, rdpShadowClient* client,
                               const char* user, const char* domain, const char* password)
 {
 	metisShadowSubsystem* sub = (metisShadowSubsystem*)subsystem;
 	(void)client;
-	(void)user;
 	(void)domain;
-	if (!sub->password || sub->password[0] == '\0')
-		return 1; /* no password configured → accept */
-	if (password && strcmp(password, sub->password) == 0)
-		return 1;
-	return 0;
+	/* Fail closed: an unset/empty configured password never authenticates. */
+	if (!sub || !sub->password || sub->password[0] == '\0')
+		return 0;
+	if (!password || password[0] == '\0')
+		return 0;
+	if (sub->username && sub->username[0] != '\0')
+	{
+		if (!user || metis_secure_streq(user, sub->username) != 0)
+			return 0;
+	}
+	return metis_secure_streq(password, sub->password) == 0 ? 1 : 0;
 }
 
 static UINT32 metis_enum_monitors(MONITOR_DEF* monitors, UINT32 maxMonitors)
@@ -346,7 +369,16 @@ static void metis_subsystem_free(rdpShadowSubsystem* subsystem)
 		return;
 	free(sub->shmPath);
 	free(sub->inputPath);
+	if (sub->password)
+	{
+		/* Best-effort scrub before release. */
+		volatile char* p = (volatile char*)sub->password;
+		size_t n = strlen(sub->password);
+		while (n--)
+			*p++ = 0;
+	}
 	free(sub->password);
+	free(sub->username);
 	free(sub);
 	if (g_subsystem == sub)
 		g_subsystem = NULL;
@@ -359,6 +391,7 @@ static int metis_subsystem_init(rdpShadowSubsystem* subsystem)
 	const char* shm = getenv("METIS_RDP_SHM_PATH");
 	const char* input = getenv("METIS_RDP_INPUT_PATH");
 	const char* password = getenv("METIS_RDP_PASSWORD");
+	const char* username = getenv("METIS_RDP_USERNAME");
 
 	if (shm)
 		sub->shmPath = _strdup(shm);
@@ -366,6 +399,8 @@ static int metis_subsystem_init(rdpShadowSubsystem* subsystem)
 		sub->inputPath = _strdup(input);
 	if (password)
 		sub->password = _strdup(password);
+	if (username && username[0] != '\0')
+		sub->username = _strdup(username);
 
 	sub->common.numMonitors = metis_enum_monitors(sub->common.monitors, 16);
 	sub->common.captureFrameRate = 30;
@@ -436,6 +471,10 @@ int metis_rdp_server_run(const char* shm_path, const char* input_path, uint16_t 
 {
 	int status;
 
+	/* Refuse to serve RDP without a password (no open auth). */
+	if (!password || password[0] == '\0')
+		return 4;
+
 	g_stop_requested = 0;
 	shadow_subsystem_set_entry(metis_subsystem_entry);
 
@@ -446,7 +485,7 @@ int metis_rdp_server_run(const char* shm_path, const char* input_path, uint16_t 
 	g_server->port = port;
 	g_server->mayView = TRUE;
 	g_server->mayInteract = TRUE;
-	g_server->authentication = (password && password[0] != '\0') ? TRUE : FALSE;
+	g_server->authentication = TRUE;
 	g_server->ShowMouseCursor = TRUE;
 
 	/* Subsystem Init reads these (shadow_server_init creates the subsystem). */

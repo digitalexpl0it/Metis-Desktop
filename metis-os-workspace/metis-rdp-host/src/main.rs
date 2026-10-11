@@ -30,20 +30,25 @@ unsafe extern "C" {
     fn metis_rdp_server_stop();
 }
 
-fn runtime_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
+/// `$XDG_RUNTIME_DIR/metis` — fail closed, never falls back to a shared `/tmp`.
+fn runtime_dir() -> Result<PathBuf> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("metis")
+        .filter(|p| p.is_dir())
+        .context("XDG_RUNTIME_DIR is unset or not a directory (refusing /tmp fallback)")?;
+    Ok(base.join("metis"))
 }
 
-fn password_from_env_or_file() -> String {
+/// Configured RDP password (env override, else `rdp-password` file). May be empty;
+/// the caller must refuse to serve RDP without one.
+fn password_from_env_or_file(dir: &std::path::Path) -> String {
     if let Ok(p) = std::env::var("METIS_RDP_PASSWORD") {
         return p;
     }
-    let path = runtime_dir().join("rdp-password");
-    std::fs::read_to_string(path)
-        .map(|s| s.trim().to_string())
+    // Strip only the trailing newline written by `metis-remote` so passwords with
+    // leading/trailing spaces survive.
+    std::fs::read_to_string(dir.join("rdp-password"))
+        .map(|s| s.trim_end_matches(['\r', '\n']).to_string())
         .unwrap_or_default()
 }
 
@@ -66,8 +71,18 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_PORT);
-    let dir = runtime_dir();
+    let dir = runtime_dir()?;
     std::fs::create_dir_all(&dir).context("create runtime dir")?;
+
+    // Fail closed before touching the portal: never run an open RDP server.
+    let password = password_from_env_or_file(&dir);
+    if password.is_empty() {
+        anyhow::bail!(
+            "no RDP password configured — run `metis-remote set-credentials <user>` \
+             (expected {}/rdp-password); refusing to start an unauthenticated server",
+            dir.display()
+        );
+    }
     let shm_path = dir.join("rdp-frames.shm");
     let input_path = dir.join("rdp-input.sock");
 
@@ -79,7 +94,6 @@ async fn main() -> Result<()> {
         .await
         .context("start ScreenCast capture")?;
 
-    let password = password_from_env_or_file();
     let shm_c = std::ffi::CString::new(shm_path.to_string_lossy().as_bytes())?;
     let input_c = std::ffi::CString::new(input_path.to_string_lossy().as_bytes())?;
     let pass_c = std::ffi::CString::new(password.as_str())?;
