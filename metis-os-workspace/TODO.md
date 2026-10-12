@@ -1031,6 +1031,9 @@ latency and clear setup docs.
       Ctrl+Alt+Home): Disconnect, Clipboard client mute, stream status; Super+Q
       still closes. Follow-ups: local Mbps/FPS estimate, host bitrate control
       message; FreeRDP N/A (external client).
+- [x] **Viewer RUDP dedicated tip** (2026-10-11) — first-run overlay on dedicated
+      desk (Super+Alt, connection bar, Super+Q) with don’t-show-again in
+      `viewer.json`.
 - [x] **RustDesk Settings preset** (2026-07-26) — Settings → Remote access card:
       detect system/Flatpak, Open RustDesk, copy install instructions + ports/
       portal notes. Optional `metis-remote` RustDesk backend still TBD.

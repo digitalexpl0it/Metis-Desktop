@@ -642,6 +642,41 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             border-radius: {rs}px;
             padding: 4px 8px;
         }}
+
+        /* Dedicated-desktop first-run tip. */
+        .metis-viewer-tips-scrim {{
+            background-color: rgba(0, 0, 0, 0.55);
+        }}
+        .metis-viewer-tips-card {{
+            background-color: {surface};
+            border: 1px solid {border};
+            border-radius: {rl}px;
+            padding: 20px 22px;
+            min-width: 360px;
+            max-width: 440px;
+        }}
+        .metis-viewer-tips-title {{
+            font-size: 18px;
+            font-weight: 650;
+            color: {text};
+        }}
+        .metis-viewer-tips-body {{
+            font-size: 13px;
+            color: {muted};
+            margin-top: 6px;
+        }}
+        .metis-viewer-tips-list {{
+            font-size: 13px;
+            color: {text};
+            margin-top: 12px;
+        }}
+        .metis-viewer-tips-list label {{
+            color: {text};
+        }}
+        .metis-viewer-tips-card checkbutton label {{
+            color: {text};
+            font-size: 12px;
+        }}
         "#
     )
 }

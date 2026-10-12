@@ -28,6 +28,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   the top edge (or **Ctrl+Alt+Home**): host label, stream status, **Clipboard**
   mute, and **Disconnect** (full session). Auto-hides when left; **Super+Q**
   remains the fast close path. FreeRDP unchanged (external client).
+- **Metis Remote dedicated-desktop tip** — first dedicated session shows a brief
+  overlay (Super+Alt desk switching, connection bar, Super+Q) with **Don’t show
+  again** (`viewer.json` `hide_rudp_dedicated_tips`).
 - **Metis Remote multi-monitor (protocol v3)** — the host sends `DesktopLayout`
   after login and streams only the outputs a session subscribes to (default:
   primary; max 4), one encoder and `stream_id` per output. `metis-rudp-client`

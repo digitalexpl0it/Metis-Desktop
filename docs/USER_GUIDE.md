@@ -1199,7 +1199,9 @@ sync; default on), and **Disconnect** (ends the whole session, including every
 monitor window). The strip auto-hides shortly after you leave it; Ctrl+Alt+Home
 toggles it. **Super+Q** still closes the focused window (and ends the session
 when it is the last one). Local edge bar, wallpaper, and desktop widgets return
-on other desks when you Super+Alt away from the remote desk. FreeRDP sessions
+on other desks when you Super+Alt away from the remote desk. The first dedicated
+session shows a short tip (Super+Alt desks, connection bar, Super+Q) with
+**Don’t show again** (`viewer.json` `hide_rudp_dedicated_tips`). FreeRDP sessions
 use the external FreeRDP client and do not get this strip.
 
 Host identity files: `~/.config/metis/rudp/host.crt`, `host.key`, `identity.json`.

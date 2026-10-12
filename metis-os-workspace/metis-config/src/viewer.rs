@@ -425,6 +425,9 @@ pub struct ViewerConfig {
     /// Tile (FlowBox cards) or compact list rows on the Hosts page.
     #[serde(default, skip_serializing_if = "ViewerHostsView::is_default")]
     pub hosts_view: ViewerHostsView,
+    /// When true, skip the Metis Remote dedicated-desktop tip overlay.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_rudp_dedicated_tips: bool,
 }
 
 impl ViewerHostsView {
@@ -551,6 +554,16 @@ pub fn save_hosts_view(view: ViewerHostsView) -> std::io::Result<()> {
         return Ok(());
     }
     cfg.hosts_view = view;
+    save_viewer_config(&cfg)
+}
+
+/// Persist “don’t show again” for the Metis Remote dedicated-desktop tip overlay.
+pub fn save_hide_rudp_dedicated_tips(hide: bool) -> std::io::Result<()> {
+    let mut cfg = load_viewer_config();
+    if cfg.hide_rudp_dedicated_tips == hide {
+        return Ok(());
+    }
+    cfg.hide_rudp_dedicated_tips = hide;
     save_viewer_config(&cfg)
 }
 
@@ -734,6 +747,20 @@ mod tests {
         let cfg: ViewerConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.recent.len(), 1);
         assert_eq!(cfg.recent[0].options, ViewerRdpOptions::default());
+        assert!(!cfg.hide_rudp_dedicated_tips);
+    }
+
+    #[test]
+    fn hide_rudp_dedicated_tips_omitted_when_false() {
+        let cfg = ViewerConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(!json.contains("hide_rudp_dedicated_tips"));
+        let on = ViewerConfig {
+            hide_rudp_dedicated_tips: true,
+            ..ViewerConfig::default()
+        };
+        let json = serde_json::to_string(&on).unwrap();
+        assert!(json.contains("hide_rudp_dedicated_tips"));
     }
 
     #[test]

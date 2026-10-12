@@ -570,6 +570,7 @@ struct StreamWindow {
     picture: gtk::Picture,
     /// Corner label until first video; then hidden (status lives in the bar).
     waiting: gtk::Label,
+    overlay: gtk::Overlay,
     bar: gtk::Box,
     bar_status: gtk::Label,
     clipboard_check: gtk::CheckButton,
@@ -636,6 +637,8 @@ struct SessionUi {
     clip_handler: Cell<Option<glib::SignalHandlerId>>,
     bar_revealed: Cell<bool>,
     bar_hide_timer: RefCell<Option<glib::SourceId>>,
+    /// Dedicated-desktop tip overlay shown at most once per session.
+    tips_shown: Cell<bool>,
     finished: Cell<bool>,
 }
 
@@ -670,11 +673,13 @@ impl SessionUi {
             clip_handler: Cell::new(None),
             bar_revealed: Cell::new(false),
             bar_hide_timer: RefCell::new(None),
+            tips_shown: Cell::new(false),
             finished: Cell::new(false),
         });
         let first = ui.add_window();
         first.picture.grab_focus();
         ui.connect_clipboard();
+        ui.maybe_show_dedicated_tips(&first);
 
         glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
             let Ok(rx) = gtk_rx.lock() else {
@@ -848,6 +853,28 @@ impl SessionUi {
         }
     }
 
+    /// First-run tip on dedicated desktop: Super+Alt desks, connection bar, Super+Q.
+    fn maybe_show_dedicated_tips(self: &Rc<Self>, sw: &Rc<StreamWindow>) {
+        if !self.fill_dedicated_desk {
+            return;
+        }
+        if metis_config::load_viewer_config().hide_rudp_dedicated_tips {
+            return;
+        }
+        if self.tips_shown.replace(true) {
+            return;
+        }
+        let overlay = sw.overlay.clone();
+        let ui = Rc::downgrade(self);
+        // Let fullscreen / desk placement settle before covering the stream.
+        glib::timeout_add_local_once(std::time::Duration::from_millis(450), move || {
+            let Some(_ui) = ui.upgrade() else {
+                return;
+            };
+            attach_dedicated_tips_overlay(&overlay);
+        });
+    }
+
     /// Re-send `SubscribeOutputs` for the windows that remain after a close.
     fn resubscribe_remaining(&self) {
         let remaining: Vec<String> = self
@@ -968,6 +995,7 @@ impl SessionUi {
             win: win.clone(),
             picture: picture.clone(),
             waiting,
+            overlay: overlay.clone(),
             bar: bar.clone(),
             bar_status,
             clipboard_check: clipboard_check.clone(),
@@ -1409,6 +1437,79 @@ impl SessionUi {
             present_rgba(&sw.picture, &frame.rgba, frame.width, frame.height);
         }
     }
+}
+
+/// Centered tip card for dedicated-desktop Metis Remote sessions.
+fn attach_dedicated_tips_overlay(overlay: &gtk::Overlay) {
+    let scrim = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    scrim.add_css_class("metis-viewer-tips-scrim");
+    scrim.set_halign(gtk::Align::Fill);
+    scrim.set_valign(gtk::Align::Fill);
+    scrim.set_hexpand(true);
+    scrim.set_vexpand(true);
+    scrim.set_can_target(true);
+
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    card.add_css_class("metis-viewer-tips-card");
+    card.set_halign(gtk::Align::Center);
+    card.set_valign(gtk::Align::Center);
+
+    let title = gtk::Label::new(Some(&tr("You’re on a dedicated remote desk")));
+    title.add_css_class("metis-viewer-tips-title");
+    title.set_wrap(true);
+    title.set_xalign(0.0);
+    card.append(&title);
+
+    let body = gtk::Label::new(Some(&tr(
+        "This session fills its own workspace so it feels integrated with Metis.",
+    )));
+    body.add_css_class("metis-viewer-tips-body");
+    body.set_wrap(true);
+    body.set_xalign(0.0);
+    card.append(&body);
+
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    list.add_css_class("metis-viewer-tips-list");
+    for line in [
+        tr("Super+Alt+← / → — move between local desktops and this remote desk"),
+        tr("Top edge or Ctrl+Alt+Home — connection bar (clipboard, disconnect, status)"),
+        tr("Super+Q — close the focused session window"),
+    ] {
+        let row = gtk::Label::new(Some(&format!("• {line}")));
+        row.set_wrap(true);
+        row.set_xalign(0.0);
+        list.append(&row);
+    }
+    card.append(&list);
+
+    let dont = gtk::CheckButton::with_label(&tr("Don’t show again"));
+    dont.set_margin_top(8);
+    card.append(&dont);
+
+    let got_it = gtk::Button::with_label(&tr("Got it"));
+    got_it.add_css_class("suggested-action");
+    got_it.set_halign(gtk::Align::End);
+    got_it.set_margin_top(4);
+    card.append(&got_it);
+
+    scrim.append(&card);
+    overlay.add_overlay(&scrim);
+
+    let scrim_dismiss = scrim.clone();
+    got_it.connect_clicked(move |_| {
+        if dont.is_active()
+            && let Err(err) = metis_config::save_hide_rudp_dedicated_tips(true)
+        {
+            tracing::warn!(%err, "could not save hide_rudp_dedicated_tips");
+        }
+        scrim_dismiss.set_visible(false);
+        if let Some(parent) = scrim_dismiss.parent() {
+            // Drop from the overlay so it cannot block input after dismiss.
+            if let Ok(ov) = parent.downcast::<gtk::Overlay>() {
+                ov.remove_overlay(&scrim_dismiss);
+            }
+        }
+    });
 }
 
 fn present_rgba(picture: &gtk::Picture, rgba: &[u8], width: u32, height: u32) {
