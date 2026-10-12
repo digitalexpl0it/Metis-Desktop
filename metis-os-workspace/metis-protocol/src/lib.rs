@@ -629,6 +629,9 @@ pub const WIDGETS_RUNTIME_VERBS: &[&str] = &[
     "reload-theme",
     "reload-locale",
     "reload-weather",
+    // Hide/show layer-shell desktop widgets (optional output name argument).
+    "hide-desktop-widgets",
+    "show-desktop-widgets",
 ];
 
 /// Parsed runtime command file line.

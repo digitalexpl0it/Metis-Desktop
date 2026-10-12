@@ -62,6 +62,21 @@ thread_local! {
     static LOCALE_REBUILD_PENDING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Show or hide desktop-widget host windows. `output` empty ⇒ every host;
+/// otherwise match compositor / GDK connector name (or primary when unbound).
+pub fn set_hosts_visible(visible: bool, output: &str) {
+    HOSTS.with(|cell| {
+        for host in cell.borrow().iter() {
+            let matches = output.is_empty()
+                || host.output == output
+                || (host.output.is_empty() && host.is_primary);
+            if matches {
+                host.window.set_visible(visible);
+            }
+        }
+    });
+}
+
 /// Start the desktop-widgets host (idempotent). Called once from bar startup.
 pub fn init() {
     if INITED.replace(true) {
@@ -939,6 +954,12 @@ fn watch_widgets_commands() {
                                 }
                                 "reload-locale" => apply_locale_reload(),
                                 "reload-weather" => crate::services::weather::weather_refresh(),
+                                "hide-desktop-widgets" => {
+                                    set_hosts_visible(false, parsed.arg);
+                                }
+                                "show-desktop-widgets" => {
+                                    set_hosts_visible(true, parsed.arg);
+                                }
                                 other => {
                                     tracing::debug!(%other, "unhandled widgets runtime command")
                                 }

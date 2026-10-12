@@ -9,15 +9,25 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- **Metis Remote stuck on every desktop** — true-fullscreen / floating session
+  windows (especially on Free layout, which never creates app tiles) were not
+  unmapped when leaving the ephemeral desk, so Super+Alt left the Viewer on all
+  desks with edge bar + wallpaper suppressed. Workspace switch now always unmaps
+  by window registry, restores chrome on local desks, and skips desktop-widget
+  underlays while exclusive fullscreen is mapped.
 - **Metis Remote dedicated desktop** — session windows are plain GTK windows and
   often had no xdg `app_id` on first map, so Metis never matched them for the
   ephemeral remote desk. Viewer now attaches the GTK application; the compositor
   also accepts the stable `Metis Remote` title when `app_id` is still unset.
-  Dedicated placement **maximizes** the session so the remote fills the desk
-  (edge bar remains for Super+Alt desk switching).
+  Dedicated placement uses **true fullscreen** (local edge bar hidden; Super+Alt
+  still cycles desks and restores the bar on local workspaces).
 
 ### Added
 
+- **Metis Remote connection bar** — RUDP session windows get a peek strip from
+  the top edge (or **Ctrl+Alt+Home**): host label, stream status, **Clipboard**
+  mute, and **Disconnect** (full session). Auto-hides when left; **Super+Q**
+  remains the fast close path. FreeRDP unchanged (external client).
 - **Metis Remote multi-monitor (protocol v3)** — the host sends `DesktopLayout`
   after login and streams only the outputs a session subscribes to (default:
   primary; max 4), one encoder and `stream_id` per output. `metis-rudp-client`

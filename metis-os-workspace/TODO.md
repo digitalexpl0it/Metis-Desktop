@@ -1025,7 +1025,12 @@ latency and clear setup docs.
 - [x] **Viewer RUDP dedicated desktop** (2026-10-11) — same Metis placement stamp
       for Metis Remote session windows (`Metis Remote…` titles; not connect UI);
       multi-monitor windows share one ephemeral desk; Window mode latch per
-      output; accent edge-bar dot parity with FreeRDP.
+      output; accent edge-bar dot parity with FreeRDP; dedicated mode true
+      fullscreen (local edge bar hidden; bar restored when switching away).
+- [x] **Viewer RUDP connection bar** (2026-10-11) — peek strip (top-edge hover /
+      Ctrl+Alt+Home): Disconnect, Clipboard client mute, stream status; Super+Q
+      still closes. Follow-ups: local Mbps/FPS estimate, host bitrate control
+      message; FreeRDP N/A (external client).
 - [x] **RustDesk Settings preset** (2026-07-26) — Settings → Remote access card:
       detect system/Flatpak, Open RustDesk, copy install instructions + ports/
       portal notes. Optional `metis-remote` RustDesk backend still TBD.

@@ -1181,14 +1181,26 @@ output. The host only encodes outputs some Viewer is watching.
 
 **Metis placement (client under Metis).** Same as FreeRDP: default **Dedicated
 desktop** moves Metis Remote session window(s) onto an ephemeral workspace past
-your configured dots, **maximized** to fill that desk (local edge bar stays so
-you can Super+Alt+←/→ or use Task View between local desks and the remote). The
-stream already shows the host wallpaper/edge bar — Metis does not draw a second
-desktop chrome. Multi-monitor windows share that one remote desk. Choose
-**Window on current desktop** in the Metis Remote **Metis placement** control
-(saved with the host’s Display options in `viewer.json`) to keep a normal window
-on the desk you connected from. The Viewer connect UI always stays on the
-current desktop.
+your configured dots and puts them in **true fullscreen** so the remote fills
+the output and the **local edge bar hides** (Cloud PC–style). Cycle with
+Super+Alt+←/→ or Task View — the bar returns on local desks while the session
+stays fullscreen on the remote desk. The stream already shows the host
+wallpaper/edge bar — Metis does not draw a second desktop chrome. Multi-monitor
+windows share that one remote desk. Choose **Window on current desktop** in the
+Metis Remote **Metis placement** control (saved with the host’s Display options
+in `viewer.json`) to keep a normal window on the desk you connected from. The
+Viewer connect UI always stays on the current desktop.
+
+**Connection bar (Metis Remote).** While a session is open, move the pointer to
+the top edge of the stream window or press **Ctrl+Alt+Home** to slide down a
+peek strip (Windows RDP–style). It shows the host, live stream status
+(resolution / codec / decoder), a **Clipboard** toggle (client-side mute of text
+sync; default on), and **Disconnect** (ends the whole session, including every
+monitor window). The strip auto-hides shortly after you leave it; Ctrl+Alt+Home
+toggles it. **Super+Q** still closes the focused window (and ends the session
+when it is the last one). Local edge bar, wallpaper, and desktop widgets return
+on other desks when you Super+Alt away from the remote desk. FreeRDP sessions
+use the external FreeRDP client and do not get this strip.
 
 Host identity files: `~/.config/metis/rudp/host.crt`, `host.key`, `identity.json`.
 Client pins: `~/.config/metis/rudp/known_hosts`.
@@ -1286,13 +1298,16 @@ login, when no password is configured.
    within a few seconds. Default certificate policy is **Ignore** so GNOME
    Remote Desktop’s self-signed LAN certificates work without a prompt.
 4. Under Metis, FreeRDP sessions default to their **own workspace** — an ephemeral
-   desk past your configured dots (e.g. a 5th when you have four). The edge bar
-   shows it as an **accent-colored** workspace dot while the session is active;
-   the dot disappears when FreeRDP closes (if you were on that desk, Metis
-   returns you to desktop 1). Cycle with Super+Alt+←/→ or open Task View with
-   Super+Tab. Choose **Window on current desktop** in Display → Metis placement
-   to keep the session on the desk you connected from (no extra accent dot).
-   The Metis Viewer connect window itself always stays on the current desktop.
+   desk past your configured dots (e.g. a 5th when you have four), in **true
+   fullscreen** so the local edge bar hides while you are on that desk. The edge
+   bar shows an **accent-colored** workspace dot while the session is active (the
+   bar itself is hidden on the remote desk; the dot is visible again on local
+   desks). The dot disappears when FreeRDP closes (if you were on that desk,
+   Metis returns you to desktop 1). Cycle with Super+Alt+←/→ or open Task View
+   with Super+Tab. Choose **Window on current desktop** in Display → Metis
+   placement to keep the session on the desk you connected from (no extra accent
+   dot). The Metis Viewer connect window itself always stays on the current
+   desktop.
 
 **Other clients.** Windows: *Remote Desktop Connection* (`mstsc`). macOS:
 *Microsoft Remote Desktop* from the App Store. Linux CLI:

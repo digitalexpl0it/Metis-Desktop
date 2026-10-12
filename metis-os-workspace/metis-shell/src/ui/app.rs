@@ -125,6 +125,18 @@ fn attach_system_events(event_rx: Receiver<SystemEvent>) {
                         &evt
                     {
                         crate::ui::bar::set_edge_bar_visible(output, *visible);
+                        // Desktop widgets run in a separate process — mirror
+                        // fullscreen chrome suppress so the ephemeral remote
+                        // desk / exclusive fullscreen does not leave local
+                        // widgets floating on a black underlay.
+                        let cmd = if *visible {
+                            format!("show-desktop-widgets {output}")
+                        } else {
+                            format!("hide-desktop-widgets {output}")
+                        };
+                        if let Err(err) = metis_protocol::write_runtime_command_widgets(&cmd) {
+                            tracing::debug!(%err, "desktop widgets visibility command");
+                        }
                     }
                     crate::services::windows::apply_event(&evt);
                     // A freshly opened window arrives without its output/workspace

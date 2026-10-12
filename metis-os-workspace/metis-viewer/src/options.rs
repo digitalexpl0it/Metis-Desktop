@@ -80,7 +80,8 @@ impl OptionsUi {
         ));
         let display_hint = gtk::Label::new(Some(&tr(
             "Dedicated desktop moves the session onto its own workspace (accent \
-             edge-bar dot). Window mode keeps it on the current desk.",
+             edge-bar dot) and fullscreens it (local edge bar hidden). Window \
+             mode keeps it on the current desk.",
         )));
         display_hint.set_wrap(true);
         display_hint.set_xalign(0.0);
@@ -182,8 +183,8 @@ impl OptionsUi {
         let rudp_placement = string_dropdown(ViewerPlacement::all().iter().map(|v| v.label()));
         rudp_placement.set_tooltip_text(Some(&tr(
             "On Metis: Dedicated desktop opens an ephemeral workspace (accent edge-bar \
-             dot). Window on current desktop leaves the session on the desk you \
-             connected from.",
+             dot) and fullscreens the session (local edge bar hidden). Window on \
+             current desktop leaves the session on the desk you connected from.",
         )));
 
         // Keep RDP notebook + RUDP placement dropdown in sync (same host field).

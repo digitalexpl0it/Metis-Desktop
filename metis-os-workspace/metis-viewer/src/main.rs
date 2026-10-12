@@ -452,8 +452,8 @@ fn build_hosts_page(prefill: &CliPrefill, freerdp_ok: bool) -> (gtk::Widget, Rc<
 
     let rudp_hint = gtk::Label::new(Some(&tr(
         "Metis Remote uses your local PAM password. Video is encoded on the host. \
-         On Metis, placement opens a dedicated workspace (accent edge-bar dot) \
-         unless you choose window mode.",
+         On Metis, dedicated placement fullscreens on an ephemeral workspace \
+         (accent edge-bar dot; local bar hidden) unless you choose window mode.",
     )));
     rudp_hint.set_xalign(0.0);
     rudp_hint.set_wrap(true);

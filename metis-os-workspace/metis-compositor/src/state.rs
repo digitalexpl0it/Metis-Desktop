@@ -161,6 +161,9 @@ pub struct MetisState {
     /// a shell restart after a game/launcher exited while fullscreen.
     pub(crate) output_fullscreen_windows:
         std::collections::HashMap<String, std::collections::HashSet<u32>>,
+    /// Last [`CompositorEvent::EdgeBarVisible`] value emitted per output — avoids
+    /// spamming the shell on every workspace tick.
+    pub(crate) last_edge_bar_visible: std::collections::HashMap<String, bool>,
     /// Window ids for which we've already logged a "fullscreen not flush at
     /// output origin" diagnostic, so the render loop emits it at most once per
     /// fullscreen session instead of every frame. Cleared on teardown /
@@ -952,6 +955,7 @@ impl MetisState {
             pending_gaming_launches: Vec::new(),
             x11_fullscreen_restore: std::collections::HashMap::new(),
             output_fullscreen_windows: std::collections::HashMap::new(),
+            last_edge_bar_visible: std::collections::HashMap::new(),
             fs_offset_warned: std::collections::HashSet::new(),
             windows: WindowRegistry::new(),
             floating: std::collections::HashSet::new(),
@@ -1281,14 +1285,25 @@ impl MetisState {
         }
     }
 
-    /// True when an output has at least one client in true fullscreen (bar hidden).
+    /// True when an output has at least one **mapped** client in true fullscreen
+    /// (edge bar hidden, scanout carve-outs). Fullscreen windows on inactive
+    /// workspaces stay in `output_fullscreen_windows` but are unmapped — they
+    /// must not keep the bar hidden or claim exclusive scanout.
     pub(crate) fn output_has_fullscreen(&self, output_name: Option<&str>) -> bool {
         let Some(name) = output_name else {
             return false;
         };
-        self.output_fullscreen_windows
-            .get(name)
-            .is_some_and(|s| !s.is_empty())
+        let Some(set) = self.output_fullscreen_windows.get(name) else {
+            return false;
+        };
+        set.iter().any(|&id| self.fullscreen_window_is_mapped(id))
+    }
+
+    /// Whether a fullscreen-tracked window is currently mapped on the space.
+    pub(crate) fn fullscreen_window_is_mapped(&self, id: u32) -> bool {
+        self.windows
+            .get(id)
+            .is_some_and(|r| self.space.element_location(&r.window).is_some())
     }
 
     /// True when a fullscreen client on `output` was promoted to primary-plane scanout.
@@ -5120,10 +5135,13 @@ impl MetisState {
         if !already_on_desk {
             self.switch_workspace(&key, target);
         }
-        // Fill the dedicated desk (usable area under the edge bar) so Super+Alt
-        // desk switching feels like local ↔ remote integration — not a floating
-        // window on an empty workspace.
-        self.set_maximized(id, true);
+        // True fullscreen (not maximize): fills the output and hides the local
+        // edge bar — Cloud PC–style immersion. Super+Alt still cycles desks;
+        // switch_workspace re-shows the bar when the fullscreen surface is
+        // unmapped on inactive workspaces. Re-apply geometry so a racing GTK
+        // fullscreen configure cannot leave the surface inset/off-origin.
+        self.set_fullscreen(id, true, None);
+        self.reapply_fullscreen_geometry(id);
         self.focus_window_id(id);
     }
 

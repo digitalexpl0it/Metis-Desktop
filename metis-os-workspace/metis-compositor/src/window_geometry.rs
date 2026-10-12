@@ -713,44 +713,61 @@ impl MetisState {
     }
 
     /// Record (or clear) a window's true-fullscreen state on an output and drive
-    /// the edge bar's visibility. The bar hides while the output's fullscreen set
-    /// is non-empty and reappears the instant it empties. Keyed by window id so
-    /// entering twice is idempotent and a stray leave for an unknown id is a
-    /// no-op — the counter model this replaced could drift out of sync and leave
-    /// the bar hidden forever after a game exited while fullscreen.
+    /// the edge bar's visibility. The bar hides while a **mapped** fullscreen
+    /// client owns the output and reappears when none remain mapped. Keyed by
+    /// window id so entering twice is idempotent and a stray leave for an
+    /// unknown id is a no-op — the counter model this replaced could drift out
+    /// of sync and leave the bar hidden forever after a game exited while
+    /// fullscreen.
     pub(crate) fn note_output_fullscreen(
         &mut self,
         output: &smithay::output::Output,
         id: u32,
         entering: bool,
     ) {
-        use metis_protocol::CompositorEvent;
-
         let name = output.name();
         if entering {
-            let set = self
-                .output_fullscreen_windows
+            self.output_fullscreen_windows
                 .entry(name.clone())
-                .or_default();
-            let was_empty = set.is_empty();
-            set.insert(id);
-            if was_empty {
-                self.event_bus.emit(&CompositorEvent::EdgeBarVisible {
-                    output: name,
-                    visible: false,
-                });
-            }
+                .or_default()
+                .insert(id);
         } else {
             let Some(set) = self.output_fullscreen_windows.get_mut(&name) else {
                 return;
             };
             if set.remove(&id) && set.is_empty() {
                 self.output_fullscreen_windows.remove(&name);
-                self.event_bus.emit(&CompositorEvent::EdgeBarVisible {
-                    output: name,
-                    visible: true,
-                });
             }
+        }
+        // Only the affected output — broadcasting every output made Primary /
+        // unbound edge bars flap (last emit won).
+        self.emit_edge_bar_visibility_for(&name);
+    }
+
+    /// Emit [`CompositorEvent::EdgeBarVisible`] for one output from **mapped**
+    /// fullscreen state. Deduped so workspace switches do not spam the shell.
+    pub(crate) fn emit_edge_bar_visibility_for(&mut self, output_name: &str) {
+        use metis_protocol::CompositorEvent;
+
+        let visible = !self.output_has_fullscreen(Some(output_name));
+        if self.last_edge_bar_visible.get(output_name) == Some(&visible) {
+            return;
+        }
+        self.last_edge_bar_visible
+            .insert(output_name.to_string(), visible);
+        self.event_bus.emit(&CompositorEvent::EdgeBarVisible {
+            output: output_name.to_string(),
+            visible,
+        });
+    }
+
+    /// Recompute edge-bar visibility for every output after workspace switches
+    /// that unmap/remap fullscreen clients (dedicated remote desks, games left
+    /// on another desk).
+    pub(crate) fn sync_edge_bar_fullscreen_visibility(&mut self) {
+        let names: Vec<String> = self.space.outputs().map(|o| o.name()).collect();
+        for name in names {
+            self.emit_edge_bar_visibility_for(&name);
         }
     }
 
@@ -761,21 +778,22 @@ impl MetisState {
     /// window that is destroyed or withdrawn while fullscreen always releases its
     /// hold on the bar. Re-shows the edge bar for any output whose set empties.
     pub(crate) fn drop_window_fullscreen(&mut self, id: u32) {
-        use metis_protocol::CompositorEvent;
-
         self.fs_offset_warned.remove(&id);
         let mut emptied = Vec::new();
+        let mut removed = false;
         for (name, set) in self.output_fullscreen_windows.iter_mut() {
-            if set.remove(&id) && set.is_empty() {
-                emptied.push(name.clone());
+            if set.remove(&id) {
+                removed = true;
+                if set.is_empty() {
+                    emptied.push(name.clone());
+                }
             }
         }
         for name in emptied {
             self.output_fullscreen_windows.remove(&name);
-            self.event_bus.emit(&CompositorEvent::EdgeBarVisible {
-                output: name,
-                visible: true,
-            });
+        }
+        if removed {
+            self.sync_edge_bar_fullscreen_visibility();
         }
     }
 
@@ -1164,7 +1182,7 @@ impl MetisState {
         self.apply_window_rect(id);
     }
 
-    fn reapply_fullscreen_geometry(&mut self, id: u32) {
+    pub(crate) fn reapply_fullscreen_geometry(&mut self, id: u32) {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
         use smithay::reexports::wayland_server::Resource;
 

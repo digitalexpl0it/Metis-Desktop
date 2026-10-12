@@ -461,8 +461,14 @@ impl MetisState {
             }
         }
 
-        // Background/bottom layer surfaces beneath the windows.
-        render_elements.extend(lower_layer_elems);
+        // Background/bottom layer surfaces (wallpaper desk icons host, desktop
+        // widgets). Skip with exclusive fullscreen so a mis-sized fullscreen
+        // client cannot leave widgets/icons glowing in the gaps — and so a
+        // dedicated Metis Remote desk does not composite local chrome under the
+        // stream (Cloud PC–style).
+        if !skip_underlay {
+            render_elements.extend(lower_layer_elems);
+        }
         // Below the windows, above the wallpaper.
         render_elements.extend(blur_elements.into_iter().map(OutputStack::Blur));
         if !wallpaper_elems.is_empty() {

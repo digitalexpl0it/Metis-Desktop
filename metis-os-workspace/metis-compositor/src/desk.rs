@@ -1479,18 +1479,23 @@ impl MetisState {
             return;
         }
 
+        // Always hide every window leaving this desk by registry workspace — not
+        // only app tiles. Free layout never creates tiles (`ensure_app_tile`
+        // no-ops), and true-fullscreen Metis Remote is floating, so a tile-only
+        // unmap left the session mapped on every desk (no wallpaper / edge bar,
+        // connection bar visible everywhere).
+        self.unmap_windows_on_workspace(output_key, current);
+
         if self.layout_kind_for(output_key, current) == metis_grid::LayoutKind::Free {
-            for id in self.window_ids_on_workspace(output_key, current) {
-                if let Some(record) = self.windows.get(id).cloned() {
-                    self.space.unmap_elem(&record.window);
-                }
-            }
             self.desk_mut_or_default(output_key).active_workspace = target;
             for id in self.window_ids_on_workspace(output_key, target) {
                 self.ensure_app_tile_for_window(id);
-                self.remap_window_for_desktop(id);
             }
+            // Full remap so any stray mapped client on a hidden desk is unmapped
+            // (not only the ones we just walked on `target`).
+            self.reposition_all_windows();
             self.focus_topmost_on_active_workspace();
+            self.sync_edge_bar_fullscreen_visibility();
             self.emit_workspace_changed(output_key);
             return;
         }
@@ -1507,17 +1512,6 @@ impl MetisState {
                     true
                 }
             });
-        }
-        // Hide the windows that just left the visible workspace.
-        for tile in &stashed {
-            if let TileKind::App {
-                window_id: Some(wid),
-                ..
-            } = &tile.kind
-                && let Some(record) = self.windows.get(*wid).cloned()
-            {
-                self.space.unmap_elem(&record.window);
-            }
         }
         {
             let desk = self.desk_mut_or_default(output_key);
@@ -1545,7 +1539,17 @@ impl MetisState {
         self.damaged = true;
         self.request_redraw();
         self.emit_layout_changed();
+        self.sync_edge_bar_fullscreen_visibility();
         self.emit_workspace_changed(output_key);
+    }
+
+    /// Unmap every window registered on `(output_key, workspace)`.
+    fn unmap_windows_on_workspace(&mut self, output_key: &str, workspace: u32) {
+        for id in self.window_ids_on_workspace(output_key, workspace) {
+            if let Some(record) = self.windows.get(id).cloned() {
+                self.space.unmap_elem(&record.window);
+            }
+        }
     }
 
     /// Output names sorted left-to-right (then top-to-bottom) for adjacent-monitor

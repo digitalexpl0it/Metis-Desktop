@@ -596,6 +596,52 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
         checkbutton label {{
             color: {text};
         }}
+
+        /* Metis Remote peek connection bar (RUDP session overlay). */
+        .metis-viewer-conn-bar {{
+            background-color: {raised};
+            border-bottom: 1px solid {border};
+            color: {text};
+            padding: 6px 12px;
+            min-height: 44px;
+            margin-top: -56px;
+            transition: margin-top 200ms ease;
+        }}
+        .metis-viewer-conn-bar.revealed {{
+            margin-top: 0px;
+        }}
+        .metis-viewer-conn-bar-title {{
+            font-size: 13px;
+            font-weight: 650;
+            color: {text};
+        }}
+        .metis-viewer-conn-bar-host {{
+            font-size: 12px;
+            color: {muted};
+        }}
+        .metis-viewer-conn-bar-status {{
+            font-size: 12px;
+            color: {muted};
+            margin-left: 12px;
+        }}
+        .metis-viewer-conn-bar checkbutton label {{
+            color: {text};
+            font-size: 12px;
+        }}
+        .metis-viewer-conn-bar button.destructive-action {{
+            min-height: 30px;
+            padding: 0 14px;
+            border-radius: {rs}px;
+            font-weight: 600;
+        }}
+        .metis-viewer-waiting {{
+            font-size: 12px;
+            color: {muted};
+            background-color: {surface};
+            border: 1px solid {border};
+            border-radius: {rs}px;
+            padding: 4px 8px;
+        }}
         "#
     )
 }
