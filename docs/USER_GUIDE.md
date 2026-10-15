@@ -82,8 +82,9 @@ again**, or with `metis-cmd.sh show-onboarding`. Disable for dev with
   status widgets (weather, battery, Bluetooth, network, volume, clipboard, clock).
 - **Desktop widgets** *(optional)* — free-floating panels over the wallpaper
   (Folders, Apps, Clock, System, Weather, Equalizer) in their own shell process.
-  Off by default; turn on in **Settings → Desktop widgets**, then use **Edit
-  mode** to move/resize.
+  Off by default; first enable (onboarding or **Settings → Desktop widgets**)
+  seeds a resolution-aware layout. Use **Edit mode** to fine-tune, **Add
+  widget** for more (placed without overlap), or **Reset to default layout**.
 - **Windows** — every app gets a compositor-drawn **titlebar** with close,
   minimize, and maximize buttons, plus a border. Windows tile into a grid by
   default — opening or closing an app re-splits the area below desk widgets among
@@ -932,13 +933,18 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
 - **Desktop widgets** — optional wallpaper panels (Folders, Apps, Clock, System,
   Weather, Equalizer, plus **JSON extensions**; off by default) hosted by a
   separate `metis-shell --desktop-widgets` process so a hung widget cannot freeze
-  the edge bar. Enable the layer, turn on **Edit mode** to move/resize, set
-  **Default look** (fill / border), and manage instances in a compact zebra list
-  (**Add** stays at the top; gear opens a configure dialog). Clock / Weather /
-  System: font, text colour, accent. Equalizer: Spectrum / Bars / Neon wave /
-  Radial, bar shapes, colour modes, peaks, reflection / mirror. Per-widget look
-  overrides live in each dialog. Writes `desktop-widgets.json`; the widgets
-  process live-reloads.
+  the edge bar. First enable (empty layout) seeds a resolution-aware default
+  pack for the primary display (Folders on the left; System / Clock / Weather
+  stacked on the right; Equalizer bottom-right on larger desks — smaller
+  outputs get a reduced non-overlapping set). **Add widget** places the new
+  instance without overlapping existing ones. **Reset to default layout**
+  replaces every instance with a fresh pack (keeps the feature enabled). Turn
+  on **Edit mode** to move/resize, set **Default look** (fill / border), and
+  manage instances in a compact zebra list (**Add** stays at the top; gear
+  opens a configure dialog). Clock / Weather / System: font, text colour,
+  accent. Equalizer: Spectrum / Bars / Neon wave / Radial, bar shapes, colour
+  modes, peaks, reflection / mirror. Per-widget look overrides live in each
+  dialog. Writes `desktop-widgets.json`; the widgets process live-reloads.
 
   **Extensions (Phase 14 §E).** Install a pack under
   `~/.local/share/metis/widgets/<id>/` (or `/usr/share/metis/widgets/<id>/`) with

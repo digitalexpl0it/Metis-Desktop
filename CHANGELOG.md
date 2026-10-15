@@ -24,6 +24,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Desktop widgets default layout** — first enable (onboarding or Settings) with
+  an empty layout seeds a resolution-aware pack (Folders left; System / Clock /
+  Weather right; Equalizer bottom-right on larger desks). **Add widget** places
+  without overlap; **Reset to default layout** restores the pack for the primary
+  display.
 - **Metis Remote connection bar** — RUDP session windows get a peek strip from
   the top edge (or **Ctrl+Alt+Home**): host label, stream status, **Clipboard**
   mute, and **Disconnect** (full session). Auto-hides when left; **Super+Q**

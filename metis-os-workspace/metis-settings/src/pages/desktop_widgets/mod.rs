@@ -22,8 +22,9 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 use metis_config::{
-    DesktopWidgetInstance, DesktopWidgetKind, DesktopWidgetsConfig, find_widget_extension,
-    load_desktop_widgets_config, save_desktop_widgets_config,
+    DesktopWidgetInstance, DesktopWidgetKind, DesktopWidgetsConfig, default_desktop_widget_pack,
+    find_widget_extension, load_desktop_widgets_config, place_instance_no_overlap,
+    save_desktop_widgets_config,
 };
 
 use crate::gtk_cb::OptFn0Cell;
@@ -64,11 +65,21 @@ pub fn build() -> gtk::Widget {
         &edit_mode,
     ));
 
+    let reset_btn = gtk::Button::with_label(&tr("Reset to default layout"));
+    reset_btn.add_css_class("destructive-action");
+    reset_btn.set_halign(gtk::Align::Start);
+    reset_btn.set_tooltip_text(Some(&tr(
+        "Replace all widgets with the built-in resolution-aware pack. Your \
+         custom positions will be lost.",
+    )));
+    panel_body.append(&reset_btn);
+
     let hint = gtk::Label::new(Some(&tr(
         "Widgets float over the wallpaper (not classic desktop icons). Off by \
-         default. In edit mode, drag the title bar to move and the corner handle \
-         to resize. Chrome below is the default look; each widget can override it \
-         from its Configure dialog.",
+         default. First enable places a resolution-aware layout (Folders, System, \
+         Clock, Weather, Equalizer). In edit mode, drag the title bar to move and \
+         the corner handle to resize. Chrome below is the default look; each \
+         widget can override it from its Configure dialog.",
     )));
     hint.set_xalign(0.0);
     hint.set_wrap(true);
@@ -252,8 +263,9 @@ pub fn build() -> gtk::Widget {
     list_body.append(&add_row);
 
     let empty = gtk::Label::new(Some(&tr(
-        "No widgets yet. Pick a type above and click Add widget. JSON extensions \
-         install under ~/.local/share/metis/widgets/.",
+        "No widgets yet. Turn on Show desktop widgets to seed the default layout, \
+         or Add widget below. JSON extensions install under \
+         ~/.local/share/metis/widgets/.",
     )));
     empty.set_xalign(0.0);
     empty.add_css_class("metis-settings-hint");
@@ -304,10 +316,19 @@ pub fn build() -> gtk::Widget {
 
     {
         let cfg = cfg.clone();
+        let refresh_list = refresh_list.clone();
         enabled.connect_active_notify(move |sw| {
+            let on = sw.is_active();
             mutate_from_disk(&cfg, |disk| {
-                disk.enabled = sw.is_active();
+                disk.enabled = on;
+                if on && disk.instances.is_empty() {
+                    let (w, h) = primary_monitor_logical_size();
+                    disk.instances = default_desktop_widget_pack(w, h);
+                }
             });
+            if let Some(refresh) = refresh_list.borrow().as_ref() {
+                refresh();
+            }
         });
     }
     {
@@ -316,6 +337,39 @@ pub fn build() -> gtk::Widget {
             mutate_from_disk(&cfg, |disk| {
                 disk.edit_mode = sw.is_active();
             });
+        });
+    }
+    {
+        let cfg = cfg.clone();
+        let refresh_list = refresh_list.clone();
+        let enabled_sw = enabled.clone();
+        reset_btn.connect_clicked(move |_| {
+            let cfg = cfg.clone();
+            let refresh_list = refresh_list.clone();
+            let enabled_sw = enabled_sw.clone();
+            let apply = Rc::new(move || {
+                mutate_from_disk(&cfg, |disk| {
+                    let (w, h) = primary_monitor_logical_size();
+                    disk.instances = default_desktop_widget_pack(w, h);
+                    disk.enabled = true;
+                });
+                enabled_sw.set_active(true);
+                if let Some(refresh) = refresh_list.borrow().as_ref() {
+                    refresh();
+                }
+            });
+            let _ = crate::dialog::confirm(
+                &tr("Reset desktop widgets?"),
+                &tr("Replace every widget with the built-in layout for this \
+                     display. Custom positions and sizes will be lost."),
+                crate::dialog::ConfirmButtons {
+                    cancel: tr("Cancel"),
+                    accept: tr("Reset layout"),
+                    accept_destructive: true,
+                },
+                apply,
+                Rc::new(|| {}),
+            );
         });
     }
     {
@@ -344,8 +398,11 @@ pub fn build() -> gtk::Widget {
                         }
                     }
                 };
-                new_id = Some(inst.id.clone());
-                disk.instances.push(inst);
+                let (w, h) = primary_monitor_logical_size();
+                let placed = place_instance_no_overlap(&disk.instances, inst, w, h);
+                new_id = Some(placed.id.clone());
+                disk.instances.push(placed);
+                disk.enabled = true;
             });
             if let Some(refresh) = refresh_list.borrow().as_ref() {
                 refresh();
@@ -366,6 +423,23 @@ pub fn build() -> gtk::Widget {
     }
 
     scroller.upcast()
+}
+
+/// Primary monitor logical size for seeding / placement (fallback 1920×1080).
+fn primary_monitor_logical_size() -> (i32, i32) {
+    use gtk::gio::prelude::ListModelExt;
+    let Some(display) = gtk::gdk::Display::default() else {
+        return (1920, 1080);
+    };
+    let list = display.monitors();
+    let monitor = list
+        .item(0)
+        .and_then(|o| o.downcast::<gtk::gdk::Monitor>().ok());
+    let Some(monitor) = monitor else {
+        return (1920, 1080);
+    };
+    let geo = monitor.geometry();
+    (geo.width().max(800), geo.height().max(600))
 }
 
 pub(crate) fn mutate_from_disk(

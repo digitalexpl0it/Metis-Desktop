@@ -451,8 +451,9 @@ pub use decorations::{
 pub use desktop_widgets::{
     DesktopWidgetChrome, DesktopWidgetChromeOverride, DesktopWidgetInstance, DesktopWidgetKind,
     DesktopWidgetView, DesktopWidgetsConfig, EqualizerBarShape, EqualizerColorMode,
-    EqualizerVizStyle, ResolvedDesktopWidgetChrome, desktop_widgets_config_path,
-    load_desktop_widgets_config, save_desktop_widgets_config,
+    EqualizerVizStyle, ResolvedDesktopWidgetChrome, WidgetRect, default_desktop_widget_pack,
+    desktop_widgets_config_path, load_desktop_widgets_config, place_instance_no_overlap,
+    save_desktop_widgets_config,
 };
 pub use game_rules::{
     GameRulesConfig, WindowRule, WindowRuleOutcome, game_rules_config_path, load_game_rules_config,

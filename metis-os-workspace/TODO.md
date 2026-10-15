@@ -1271,8 +1271,9 @@ Settings → Appearance ("Run setup again") or `metis-cmd.sh show-onboarding`.
 - [x] **Edge bar** — position, show on all/primary, opacity, blur.
 - [x] **Network** — Wi-Fi list / connect + wired status (2026-09-20).
 - [x] **Weather** — auto-detect on; optional city search (Open-Meteo geocoding).
-- [x] **Desktop widgets** — optional master switch; seeds Clock + Folders
-      when enabled with an empty layout (2026-09-20).
+- [x] **Desktop widgets** — optional master switch; seeds a resolution-aware
+      default pack when enabled with an empty layout (2026-09-20; pack +
+      non-overlap Add / Reset 2026-10-14).
 - [x] **Gaming** — hybrid/Steam summary + auto GPU / Flatpak optimize prefs.
 - [x] **Optional software** — detect Remote / Flatpak / GameMode / Bluetooth /
       printers / keyring; grey out installed; toggles + `pkexec apt-get install`
@@ -1623,6 +1624,11 @@ clicks only. Empty chrome aims for click-through where layer-shell allows
       default look, compact zebra list + configure dialog, add/remove,
       folder path, import app pins, per-instance lock, text style, equalizer
       options (style-dependent)
+- [x] **Adaptive default layout** — `default_desktop_widget_pack` /
+      `place_instance_no_overlap` in `metis-config`; seed on first enable
+      (onboarding + Settings); Add avoids overlap; Reset to default layout
+      (2026-10-14). Follow-up: live reflow on resolution/scale via persisted
+      anchors (out of scope this pass).
 - [x] **Docs** — User Guide + CHANGELOG + README (2026-07-18)
 - [x] **Widget chrome** — global defaults + per-widget overrides; opacity 0 /
       border width 0 fully clear the fill / edge (text stays opaque)

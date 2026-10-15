@@ -642,15 +642,14 @@ fn build_network() -> gtk::Widget {
 
 fn build_desktop_widgets() -> gtk::Widget {
     use metis_config::{
-        DesktopWidgetInstance, DesktopWidgetKind, load_desktop_widgets_config,
-        save_desktop_widgets_config,
+        default_desktop_widget_pack, load_desktop_widgets_config, save_desktop_widgets_config,
     };
 
     let col = step_shell();
 
     let hint = gtk::Label::new(Some(&metis_i18n::tr(
-        "Optional panels on your wallpaper — Folders, Clock, Weather, and more. \
-         Off by default so the desktop stays clean.",
+        "Optional panels on your wallpaper — Folders, System, Clock, Weather, \
+         Equalizer, and more. Off by default so the desktop stays clean.",
     )));
     hint.add_css_class("metis-onboarding-subtitle");
     hint.set_xalign(0.0);
@@ -670,7 +669,7 @@ fn build_desktop_widgets() -> gtk::Widget {
     ));
 
     let detail = gtk::Label::new(Some(&metis_i18n::tr(
-        "Turning this on places a Clock and Folders widget you can move later \
+        "Turning this on places a resolution-aware layout you can move later \
          (Settings → Desktop widgets → Edit mode).",
     )));
     detail.add_css_class("metis-onboarding-hint");
@@ -686,13 +685,8 @@ fn build_desktop_widgets() -> gtk::Widget {
         let mut cfg = load_desktop_widgets_config();
         cfg.enabled = on;
         if on && cfg.instances.is_empty() {
-            let mut clock = DesktopWidgetInstance::new(DesktopWidgetKind::Clock);
-            clock.x = 48;
-            clock.y = 48;
-            let mut folders = DesktopWidgetInstance::new(DesktopWidgetKind::Folders);
-            folders.x = 48;
-            folders.y = 220;
-            cfg.instances = vec![clock, folders];
+            let (w, h) = primary_monitor_logical_size_onboarding();
+            cfg.instances = default_desktop_widget_pack(w, h);
         }
         if let Err(err) = save_desktop_widgets_config(&cfg) {
             tracing::warn!(%err, "failed to save desktop-widgets.json");
@@ -700,6 +694,22 @@ fn build_desktop_widgets() -> gtk::Widget {
     });
 
     col.upcast()
+}
+
+fn primary_monitor_logical_size_onboarding() -> (i32, i32) {
+    use gtk::gio::prelude::ListModelExt;
+    let Some(display) = gtk::gdk::Display::default() else {
+        return (1920, 1080);
+    };
+    let list = display.monitors();
+    let monitor = list
+        .item(0)
+        .and_then(|o| o.downcast::<gtk::gdk::Monitor>().ok());
+    let Some(monitor) = monitor else {
+        return (1920, 1080);
+    };
+    let geo = monitor.geometry();
+    (geo.width().max(800), geo.height().max(600))
 }
 
 fn build_weather() -> gtk::Widget {

@@ -629,6 +629,212 @@ fn new_instance_id() -> String {
     format!("dw-{nanos:x}")
 }
 
+/// Axis-aligned widget rectangle in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WidgetRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl WidgetRect {
+    pub fn from_instance(inst: &DesktopWidgetInstance) -> Self {
+        Self {
+            x: inst.x,
+            y: inst.y,
+            w: inst.w.max(1) as i32,
+            h: inst.h.max(1) as i32,
+        }
+    }
+
+    pub fn overlaps(&self, other: &Self) -> bool {
+        self.x < other.x + other.w
+            && self.x + self.w > other.x
+            && self.y < other.y + other.h
+            && self.y + self.h > other.y
+    }
+
+    pub fn fits_in(&self, output_w: i32, output_h: i32) -> bool {
+        self.w > 0
+            && self.h > 0
+            && self.x >= 0
+            && self.y >= 0
+            && self.x + self.w <= output_w
+            && self.y + self.h <= output_h
+    }
+}
+
+fn pack_style_folders(mut inst: DesktopWidgetInstance) -> DesktopWidgetInstance {
+    inst.show_title = false;
+    inst.chrome.background_opacity = Some(0.0);
+    inst
+}
+
+fn pack_style_text_card(mut inst: DesktopWidgetInstance) -> DesktopWidgetInstance {
+    inst.show_title = false;
+    inst.text_color = "#ffffff".into();
+    inst
+}
+
+fn pack_style_equalizer(mut inst: DesktopWidgetInstance) -> DesktopWidgetInstance {
+    inst.show_title = false;
+    inst.chrome.background_opacity = Some(0.0);
+    inst.color_mode = EqualizerColorMode::Theme;
+    inst
+}
+
+/// Resolution-aware default desk pack (left Folders strip, right System/Clock/Weather,
+/// bottom-right Equalizer). Used when widgets are first enabled or reset.
+///
+/// Full five-widget pack when `output_w >= 1100` and `output_h >= 700`; otherwise
+/// Folders + System + Clock only. Geometry is always non-overlapping.
+pub fn default_desktop_widget_pack(output_w: i32, output_h: i32) -> Vec<DesktopWidgetInstance> {
+    const MARGIN: i32 = 16;
+    const GAP: i32 = 12;
+    const FOLDERS_W: i32 = 176;
+    const CARD_W: i32 = 355;
+    const SYSTEM_H: i32 = 157;
+    const CLOCK_W: i32 = 356;
+    const CLOCK_H: i32 = 120;
+    const WEATHER_H: i32 = 201;
+    const EQ_H: i32 = 194;
+
+    let w = output_w.max(800);
+    let h = output_h.max(600);
+    let full_pack = w >= 1100 && h >= 700;
+
+    let folders_h = (h - 2 * MARGIN).max(120);
+    let mut folders = pack_style_folders(DesktopWidgetInstance::new(DesktopWidgetKind::Folders));
+    folders.x = MARGIN;
+    folders.y = MARGIN;
+    folders.w = FOLDERS_W as u32;
+    folders.h = folders_h as u32;
+
+    let card_w = CARD_W.min((w - FOLDERS_W - 3 * MARGIN).max(240));
+    let right_x = (w - card_w - MARGIN).max(MARGIN);
+
+    let mut system = pack_style_text_card(DesktopWidgetInstance::new(DesktopWidgetKind::System));
+    system.x = right_x;
+    system.y = MARGIN;
+    system.w = card_w as u32;
+    system.h = SYSTEM_H as u32;
+
+    let mut clock = pack_style_text_card(DesktopWidgetInstance::new(DesktopWidgetKind::Clock));
+    clock.x = right_x;
+    clock.y = MARGIN + SYSTEM_H + GAP;
+    clock.w = CLOCK_W.min(card_w) as u32;
+    clock.h = CLOCK_H as u32;
+
+    let mut out = vec![folders, system, clock];
+
+    if full_pack {
+        let weather_y = MARGIN + SYSTEM_H + GAP + CLOCK_H + GAP;
+        let mut weather =
+            pack_style_text_card(DesktopWidgetInstance::new(DesktopWidgetKind::Weather));
+        weather.x = right_x;
+        weather.y = weather_y;
+        weather.w = card_w as u32;
+        weather.h = WEATHER_H as u32;
+
+        let stack_bottom = weather_y + WEATHER_H;
+        let eq_w = ((w as f32 * 0.28) as i32).clamp(280, 478);
+        let mut eq_h = EQ_H;
+        let mut eq_y = h - eq_h - MARGIN;
+        // Keep equalizer below the right stack (or shrink height).
+        if eq_y < stack_bottom + GAP {
+            eq_h = (h - MARGIN - (stack_bottom + GAP)).max(120);
+            eq_y = h - eq_h - MARGIN;
+        }
+        let mut eq = pack_style_equalizer(DesktopWidgetInstance::new(DesktopWidgetKind::Equalizer));
+        eq.x = (w - eq_w - MARGIN).max(MARGIN);
+        eq.y = eq_y.max(stack_bottom + GAP);
+        eq.w = eq_w as u32;
+        eq.h = eq_h as u32;
+
+        // If still overlapping after shrink, drop weather (keep eq).
+        let weather_rect = WidgetRect::from_instance(&weather);
+        let eq_rect = WidgetRect::from_instance(&eq);
+        if weather_rect.overlaps(&eq_rect) {
+            out.push(eq);
+        } else {
+            out.push(weather);
+            out.push(eq);
+        }
+    }
+
+    debug_assert!(
+        !pack_has_overlap(&out),
+        "default_desktop_widget_pack produced overlapping widgets"
+    );
+    out
+}
+
+fn pack_has_overlap(instances: &[DesktopWidgetInstance]) -> bool {
+    for (i, a) in instances.iter().enumerate() {
+        let ra = WidgetRect::from_instance(a);
+        for b in instances.iter().skip(i + 1) {
+            if ra.overlaps(&WidgetRect::from_instance(b)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn overlaps_any(rect: &WidgetRect, existing: &[DesktopWidgetInstance]) -> bool {
+    existing
+        .iter()
+        .any(|inst| rect.overlaps(&WidgetRect::from_instance(inst)))
+}
+
+/// Place `inst` so its rect does not intersect any of `existing` and stays inside
+/// the output. Tries the instance's current origin first, then a cascade of
+/// candidates (never silently stacks on an occupied `(80,80)`).
+pub fn place_instance_no_overlap(
+    existing: &[DesktopWidgetInstance],
+    mut inst: DesktopWidgetInstance,
+    output_w: i32,
+    output_h: i32,
+) -> DesktopWidgetInstance {
+    let w = output_w.max(400);
+    let h = output_h.max(300);
+    let iw = inst.w.max(160) as i32;
+    let ih = inst.h.max(120) as i32;
+    inst.w = iw as u32;
+    inst.h = ih as u32;
+
+    let mut candidates: Vec<(i32, i32)> = Vec::new();
+    candidates.push((inst.x, inst.y));
+    // Right column cascade.
+    let right_x = (w - iw - 16).max(16);
+    for y in (16..=(h - ih).max(16)).step_by(140) {
+        candidates.push((right_x, y));
+    }
+    // Left / center grid.
+    for y in (16..=(h - ih).max(16)).step_by(160) {
+        for x in (16..=(w - iw).max(16)).step_by(200) {
+            candidates.push((x, y));
+        }
+    }
+    // Fallback: bottom-right corner.
+    candidates.push(((w - iw - 16).max(0), (h - ih - 16).max(0)));
+
+    for (x, y) in candidates {
+        let rect = WidgetRect { x, y, w: iw, h: ih };
+        if rect.fits_in(w, h) && !overlaps_any(&rect, existing) {
+            inst.x = x;
+            inst.y = y;
+            return inst;
+        }
+    }
+
+    // Last resort: clamp into the output even if overlap remains (tiny desk).
+    inst.x = (w - iw - 16).max(0);
+    inst.y = (h - ih - 16).max(0);
+    inst
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DesktopWidgetsConfig {
     /// Master switch. Default off — wallpaper stays clean until the user opts in.
@@ -820,5 +1026,60 @@ mod tests {
         assert!(r.background_opacity.abs() < f32::EPSILON);
         assert!(r.border_width.abs() < f32::EPSILON);
         assert_eq!(r.border_color, "#ff0000");
+    }
+
+    #[test]
+    fn default_pack_1080p_regions_and_no_overlap() {
+        let pack = default_desktop_widget_pack(1920, 1080);
+        assert!(pack.len() >= 4);
+        assert!(!pack_has_overlap(&pack));
+        let folders = pack
+            .iter()
+            .find(|i| i.kind == DesktopWidgetKind::Folders)
+            .unwrap();
+        assert!(folders.x < 40);
+        let system = pack
+            .iter()
+            .find(|i| i.kind == DesktopWidgetKind::System)
+            .unwrap();
+        assert!(system.x > 1400);
+        let eq = pack
+            .iter()
+            .find(|i| i.kind == DesktopWidgetKind::Equalizer)
+            .unwrap();
+        assert!(eq.y + eq.h as i32 > 800);
+    }
+
+    #[test]
+    fn default_pack_small_output_reduced_no_overlap() {
+        // Below full-pack floor (W>=1100 && H>=700) → Folders + System + Clock.
+        let pack = default_desktop_widget_pack(1024, 768);
+        assert_eq!(pack.len(), 3);
+        assert!(!pack_has_overlap(&pack));
+        assert!(pack.iter().all(|i| {
+            matches!(
+                i.kind,
+                DesktopWidgetKind::Folders | DesktopWidgetKind::System | DesktopWidgetKind::Clock
+            )
+        }));
+        // 1366×768 clears the floor and still must not overlap.
+        let wide = default_desktop_widget_pack(1366, 768);
+        assert!(wide.len() >= 4);
+        assert!(!pack_has_overlap(&wide));
+    }
+
+    #[test]
+    fn place_instance_avoids_occupied_origin() {
+        let mut blocker = DesktopWidgetInstance::new(DesktopWidgetKind::Clock);
+        blocker.x = 80;
+        blocker.y = 80;
+        let mut next = DesktopWidgetInstance::new(DesktopWidgetKind::Weather);
+        next.x = 80;
+        next.y = 80;
+        let placed = place_instance_no_overlap(&[blocker.clone()], next, 1920, 1080);
+        let br = WidgetRect::from_instance(&blocker);
+        let pr = WidgetRect::from_instance(&placed);
+        assert!(!br.overlaps(&pr));
+        assert!(pr.fits_in(1920, 1080));
     }
 }
