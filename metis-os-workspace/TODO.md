@@ -92,6 +92,41 @@ Security items from the **2026-09-27 code review** sit above product stretch.
 done → **2** residuals (BT.2390 / colour protocol) or engineering backlog next;
 Gamescope **4** and native remote **3** landed.
 
+### Product backlog — Themes, icons, default apps (2026-10-18)
+
+Cross-desktop icon themes first: Metis should consume normal Freedesktop /
+GTK icon themes (the same packs users download for GNOME, KDE Plasma, XFCE,
+etc. — Papirus, Tela, Candy, …). Discover `index.theme` under
+`/usr/share/icons` and `~/.local/share/icons`, apply via GTK
+`gtk-icon-theme-name` (and session gsettings where useful). No Metis-only pack
+format; install = extract a standard theme tree; Inherits= chains resolve like
+other DEs. KDE “breeze” / oxygen-style themes that ship a valid `index.theme` +
+hicolor layout work the same way; reject or warn only on broken archives, not
+on “wrong DE”.
+
+- [ ] **Icon / theme manager** — Settings page to **select**, **install**
+      (zip/tar → `~/.local/share/icons/<Name>/`, require `index.theme`, path-safe
+      extract), and **remove** (user-installed only; never delete system themes).
+      Persist active theme; live-reload shell + Settings. Cursor themes optional
+      follow-up on the same page. Keep separate from Metis colour tokens
+      (`themes/light.json` / `dark.json`).
+- [ ] **Default programs** — Settings → Apps (or System) **Default applications**
+      for browser, file manager, terminal, mail, images, audio, video, PDF via
+      `mimeapps.list` / `xdg-settings` where appropriate. Align Metis Menu
+      terminal + file-manager prefs with the same defaults (single source of
+      truth).
+- [ ] **Custom app icons** — per-`desktop_id` override (path or icon name) in
+      config; `resolve_icon_for_app_id` / menu / taskbar honour override before
+      `.desktop` Icon=. Optional: write user hicolor + desktop override under
+      `~/.local/share/` so non-Metis apps see it too.
+- [ ] **Custom Metis DE / brand icons** — configurable paths for edge-bar
+      launcher brand (replace baked-in `metis_icon.png`), Settings app icon, and
+      other first-party chrome; fallback to packaged assets. Store under
+      `~/.config/metis/icons/` or a small branding config.
+
+**Suggested order:** icon theme select → default programs → brand + per-app
+overrides → install/remove packs.
+
 ---
 
 ## Engineering review backlog (2026-09-27)
@@ -331,12 +366,11 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
         clicking the search box first (`SearchEntry` key capture, no focus grab); and
         the scroll gutter/scrollbar stay flat in dark mode (GTK variant synced to the
         active theme)
-- [ ] **Drag-reorder edge-bar status icons** — let the user drag icons in the
-      right-side system cluster (network, bluetooth, volume, battery, tray, …)
-      to change order live (e.g. network to the right of bluetooth), persisting
-      to `bar.json` `widgets` (Settings → Edge bar order already exists; this is
-      on-bar drag). Respect migrate tray/updates clustering; don’t break click /
-      popover open (long-press or drag-threshold vs click).
+- [x] **Drag-reorder + toggle edge-bar status icons** (2026-10-18) — Settings →
+      Edge bar → Status icons toggles optional widgets; on-bar drag (threshold)
+      and ↑/↓ reorder persist to `bar.json` `widgets`. Migrate no longer
+      force-restores removed optionals; tray/updates/volumes still cluster when
+      present. Custom gradient fill respects opacity on every stop.
 
 ---
 

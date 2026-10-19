@@ -2,10 +2,16 @@
 //! tray mode, distance from the screen edge, opacity, backdrop blur, and the
 //! bar's pill border. All fields live in `bar.json`, which the shell watches.
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use metis_config::{
+    BarWidgetId, disable_status_widget, enable_status_widget, rebuild_bar_widgets,
+    split_bar_widget_layout,
+};
 
+use crate::gtk_cb::OptFn0Cell;
 use crate::pages::appearance_common::{
     color_dialog_button, hex_to_rgba, rgba_to_hex, set_stops, update_bar,
 };
@@ -364,6 +370,158 @@ pub fn build() -> gtk::Widget {
     bb_update_vis(bb.mode);
 
     content.append(&bar_card);
+
+    // ---- Status icons (toggle + order) ------------------------------------
+    let (status_card, status_body) =
+        ui::section_with_icon(&tr("Status icons"), "view-list-symbolic");
+    let status_hint = gtk::Label::new(Some(&tr(
+        "Enable icons here, then drag them on the edge bar (past the drag \
+         threshold) or use the arrows below to reorder. Icons also hide \
+         automatically when unused (no VPN profiles, no Bluetooth adapter, \
+         weather unavailable, and so on). Workspaces, running apps, and the \
+         clock stay on the bar.",
+    )));
+    status_hint.set_xalign(0.0);
+    status_hint.set_wrap(true);
+    status_hint.add_css_class("metis-settings-hint");
+    status_body.append(&status_hint);
+
+    let toggle_grid = gtk::FlowBox::new();
+    toggle_grid.set_selection_mode(gtk::SelectionMode::None);
+    toggle_grid.set_max_children_per_line(2);
+    toggle_grid.set_column_spacing(16);
+    toggle_grid.set_row_spacing(8);
+    status_body.append(&toggle_grid);
+
+    let order_label = gtk::Label::new(Some(&tr("Order on bar")));
+    order_label.set_xalign(0.0);
+    order_label.add_css_class("metis-settings-hint");
+    status_body.append(&order_label);
+
+    let order_list = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    order_list.add_css_class("metis-widget-list");
+    status_body.append(&order_list);
+
+    let (_, initial_status, _) = split_bar_widget_layout(&bar.widgets);
+    let status_state = Rc::new(RefCell::new(initial_status));
+    let seeding = Rc::new(Cell::new(true));
+    let refresh_order: OptFn0Cell = Rc::new(RefCell::new(None));
+    {
+        let order_list = order_list.clone();
+        let status_state = status_state.clone();
+        let refresh_slot = refresh_order.clone();
+        let refresh = Rc::new(move || {
+            while let Some(child) = order_list.first_child() {
+                order_list.remove(&child);
+            }
+            let status = status_state.borrow().clone();
+            if status.is_empty() {
+                let empty = gtk::Label::new(Some(&tr("No status icons enabled.")));
+                empty.set_xalign(0.0);
+                empty.add_css_class("metis-settings-hint");
+                order_list.append(&empty);
+                return;
+            }
+            for (idx, id) in status.iter().enumerate() {
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                row.set_hexpand(true);
+                row.add_css_class("metis-widget-list-row");
+                if idx % 2 == 1 {
+                    row.add_css_class("metis-widget-list-row-alt");
+                }
+                let name = gtk::Label::new(Some(&tr(id.label())));
+                name.set_xalign(0.0);
+                name.set_hexpand(true);
+                name.add_css_class("metis-widget-list-title");
+                row.append(&name);
+
+                let up = gtk::Button::from_icon_name("go-up-symbolic");
+                up.set_tooltip_text(Some(&tr("Move up")));
+                up.set_sensitive(idx > 0);
+                let down = gtk::Button::from_icon_name("go-down-symbolic");
+                down.set_tooltip_text(Some(&tr("Move down")));
+                down.set_sensitive(idx + 1 < status.len());
+
+                let move_id = *id;
+                {
+                    let status_state = status_state.clone();
+                    let refresh_slot = refresh_slot.clone();
+                    up.connect_clicked(move |_| {
+                        {
+                            let mut status = status_state.borrow_mut();
+                            if let Some(pos) = status.iter().position(|w| *w == move_id)
+                                && pos > 0
+                            {
+                                status.swap(pos, pos - 1);
+                            }
+                            let next = status.clone();
+                            drop(status);
+                            update_bar(move |c| c.widgets = rebuild_bar_widgets(&next));
+                        }
+                        if let Some(refresh) = refresh_slot.borrow().as_ref() {
+                            refresh();
+                        }
+                    });
+                }
+                {
+                    let status_state = status_state.clone();
+                    let refresh_slot = refresh_slot.clone();
+                    down.connect_clicked(move |_| {
+                        {
+                            let mut status = status_state.borrow_mut();
+                            if let Some(pos) = status.iter().position(|w| *w == move_id)
+                                && pos + 1 < status.len()
+                            {
+                                status.swap(pos, pos + 1);
+                            }
+                            let next = status.clone();
+                            drop(status);
+                            update_bar(move |c| c.widgets = rebuild_bar_widgets(&next));
+                        }
+                        if let Some(refresh) = refresh_slot.borrow().as_ref() {
+                            refresh();
+                        }
+                    });
+                }
+                row.append(&up);
+                row.append(&down);
+                order_list.append(&row);
+            }
+        });
+        *refresh_order.borrow_mut() = Some(refresh.clone());
+        refresh();
+    }
+
+    for &id in BarWidgetId::status_optional_catalogue() {
+        let check = gtk::CheckButton::with_label(&tr(id.label()));
+        check.set_active(status_state.borrow().contains(&id));
+        let seeding = seeding.clone();
+        let status_state = status_state.clone();
+        let refresh_order = refresh_order.clone();
+        check.connect_active_notify(move |btn| {
+            if seeding.get() {
+                return;
+            }
+            let on = btn.is_active();
+            {
+                let mut widgets = rebuild_bar_widgets(&status_state.borrow());
+                if on {
+                    enable_status_widget(&mut widgets, id);
+                } else {
+                    disable_status_widget(&mut widgets, id);
+                }
+                let (_, status, _) = split_bar_widget_layout(&widgets);
+                *status_state.borrow_mut() = status.clone();
+                update_bar(move |c| c.widgets = rebuild_bar_widgets(&status));
+            }
+            if let Some(refresh) = refresh_order.borrow().as_ref() {
+                refresh();
+            }
+        });
+        toggle_grid.append(&check);
+    }
+    seeding.set(false);
+    content.append(&status_card);
 
     // ---- Wiring -----------------------------------------------------------
     position_dd.connect_selected_notify(move |dd| {

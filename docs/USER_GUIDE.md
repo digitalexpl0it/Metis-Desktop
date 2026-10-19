@@ -920,13 +920,19 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   decode cache (`~/.cache/metis/wallpaper-rgba/`) so clicks apply quickly.
 - **Edge bar** — position (top/bottom/left/right),
   distance from the edge, **bar length** (40–100%, centered), **bar background**
-  (theme / solid / gradient + direction), **auto-hide** (slides to a peek and
+  (theme / solid / gradient + direction; custom gradient respects **Opacity** on
+  every colour stop), **auto-hide** (slides to a peek and
   **overlays** maximized windows — peek/reveal does not resize them; move to the
   thin edge strip to open again; with a top bar, use the titlebar band just below
   the peek for window controls),
   the bar border, *Show bar on* (all displays / primary
   only), *Workspaces* (independent vs linked), and *New workspace layout* (grid
-  vs scrolling).
+  vs scrolling). **Status icons** — toggle Weather, tray, network, volume, and
+  other optional icons in Settings (workspaces, running apps, and the clock stay
+  on); drag an icon on the bar past the drag threshold to reorder, or use the
+  arrows under Status icons. Enabled icons still **auto-hide** when unused (no
+  battery, no VPN profiles, no Bluetooth adapter, no Wi‑Fi/ethernet, weather
+  unavailable, empty tray volumes / no updates).
 - **Windows** — titlebar opacity, the title pill
   border, the window frame border, and **window padding** around maximized /
   snapped windows.

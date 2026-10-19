@@ -3,6 +3,7 @@ pub mod clock;
 mod launcher;
 mod menu;
 mod notifications;
+mod status_reorder;
 pub mod sys;
 mod tasks;
 mod tray;
@@ -187,6 +188,10 @@ pub fn build(
     let launcher = LauncherWidget::new();
     append_bar_widget(root, launcher.root(), bar_orientation);
 
+    let status_peers: status_reorder::StatusPeers = Rc::new(RefCell::new(Vec::new()));
+    let drop_slot: status_reorder::DropSlotCell = Rc::new(RefCell::new(None));
+    let horizontal = bar_orientation == gtk::Orientation::Horizontal;
+
     for widget in &cfg.widgets {
         match widget {
             BarWidgetId::Spacer => {
@@ -221,16 +226,37 @@ pub fn build(
             BarWidgetId::Tray => {
                 let w = TrayWidget::new(cfg.tray_icon_mode);
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.tray.borrow_mut() = Some(w);
             }
             BarWidgetId::RemovableVolumes => {
                 let w = VolumesWidget::new();
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.removable_volumes.borrow_mut() = Some(w);
             }
             BarWidgetId::Updates => {
                 let w = UpdatesWidget::new();
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.updates.borrow_mut() = Some(w);
             }
             BarWidgetId::Clock => {
@@ -241,26 +267,61 @@ pub fn build(
             BarWidgetId::Battery => {
                 let w = BatteryWidget::new();
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.battery.borrow_mut() = Some(w);
             }
             BarWidgetId::Network => {
                 let w = NetworkWidget::new();
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.network.borrow_mut() = Some(w);
             }
             BarWidgetId::Vpn => {
                 let w = VpnWidget::new();
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.vpn.borrow_mut() = Some(w);
             }
             BarWidgetId::Bluetooth => {
                 let w = BluetoothWidget::new();
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.bluetooth.borrow_mut() = Some(w);
             }
             BarWidgetId::Volume => {
                 let w = VolumeWidget::new();
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.volume.borrow_mut() = Some(w);
             }
             BarWidgetId::Notifications => {
@@ -271,11 +332,25 @@ pub fn build(
             BarWidgetId::Clipboard => {
                 let w = ClipboardWidget::new();
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.clipboard.borrow_mut() = Some(w);
             }
             BarWidgetId::Weather => {
                 let w = WeatherWidget::new(compact);
                 append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
                 *refs.weather.borrow_mut() = Some(w);
             }
         }

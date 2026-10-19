@@ -135,6 +135,25 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         {launcher_icon_shadow}
     }}
 
+    .metis-bar-status-dragging {{
+        opacity: 0.35;
+    }}
+
+    .metis-bar-status-drop-slot {{
+        min-width: 36px;
+        min-height: 28px;
+        margin: 2px 4px;
+        border-radius: {rs}px;
+        border: 1px solid rgba({accent_rgb}, 0.85);
+        background-color: rgba({accent_rgb}, 0.22);
+    }}
+
+    .metis-bar-pill-vertical .metis-bar-status-drop-slot {{
+        min-width: 28px;
+        min-height: 36px;
+        margin: 4px 2px;
+    }}
+
     .metis-bar-sys-icon {{
         padding: 0 5px;
         border: none;

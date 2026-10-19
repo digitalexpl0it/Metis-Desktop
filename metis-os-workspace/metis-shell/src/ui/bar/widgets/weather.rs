@@ -39,6 +39,8 @@ impl WeatherWidget {
         }
         root.set_child(Some(&bar_box));
         root.set_tooltip_text(Some(&metis_i18n::tr("Weather")));
+        // Hidden until a location reading is available.
+        root.set_visible(false);
 
         let panel = super::super::dropdown::build_panel();
         panel.set_spacing(10);
@@ -106,6 +108,7 @@ impl WeatherWidget {
 
         match snapshot.locations.first() {
             Some(primary) => {
+                self.root.set_visible(true);
                 if !self.compact {
                     self.temp_label
                         .set_text(&format!("{:.0}°{}", primary.temp.round(), unit));
@@ -121,10 +124,11 @@ impl WeatherWidget {
                 self.status.set_visible(false);
             }
             None => {
+                // No reading (error / not configured) — keep the bar clean.
+                self.root.set_visible(false);
                 if !self.compact {
                     self.temp_label.set_text("");
                 }
-                icons::set_icon(&self.icon, "weather-severe-alert-symbolic");
                 let msg = snapshot
                     .error
                     .clone()

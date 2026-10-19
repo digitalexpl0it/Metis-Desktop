@@ -209,24 +209,30 @@ fn resolve_fill_paint(fill: &BarFill, alpha: f32, position: BarPosition) -> Fill
         BarFillMode::Solid => FillPaint::Color(hex_to_rgba_css(&fill.color, alpha)),
         BarFillMode::Gradient => {
             let dir = gradient_css_dir(fill.gradient_direction, position);
-            // Translucent multi-stop gradients bleed under GTK; fall back to first stop.
-            if alpha < 1.0 - f32::EPSILON {
-                let first = fill
+            // Bake bar opacity into every stop so translucent gradients still
+            // show all colours (hex-only stops only work at opacity 1.0).
+            let stops = fill
+                .gradient
+                .iter()
+                .map(|h| h.trim())
+                .filter(|h| !h.is_empty())
+                .map(|h| hex_to_rgba_css(h, alpha))
+                .collect::<Vec<_>>();
+            let stops = if stops.len() < 2 {
+                let fallback = fill
                     .gradient
                     .first()
                     .map(String::as_str)
                     .unwrap_or("#1a1b26");
-                FillPaint::Color(hex_to_rgba_css(first, alpha))
+                format!(
+                    "{}, {}",
+                    hex_to_rgba_css(fallback, alpha),
+                    hex_to_rgba_css(fallback, alpha)
+                )
             } else {
-                let stops = fill
-                    .gradient
-                    .iter()
-                    .map(|h| h.trim().to_string())
-                    .filter(|h| !h.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                FillPaint::Gradient { dir, stops }
-            }
+                stops.join(", ")
+            };
+            FillPaint::Gradient { dir, stops }
         }
     }
 }

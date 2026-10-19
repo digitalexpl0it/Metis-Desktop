@@ -420,8 +420,9 @@ pub fn load_theme_tokens(name: &str) -> theme::ThemeTokens {
 pub use bar::{
     BarBorder, BarConfig, BarDisplays, BarFill, BarFillMode, BarGradientDirection, BarPosition,
     BarWidgetId, BorderMode, ClockConfig, DefaultLayout, TitlebarPillBorder, TrayIconMode,
-    WindowBorder, WorkspaceMode, bar_config_path, load_bar_config, sanitize_bar_config,
-    save_bar_config, save_default_bar_config,
+    WindowBorder, WorkspaceMode, bar_config_path, disable_status_widget, enable_status_widget,
+    load_bar_config, rebuild_bar_widgets, sanitize_bar_config, save_bar_config,
+    save_default_bar_config, split_bar_widget_layout,
 };
 pub use calendars::{
     AccountKind, CalendarAccount, CalendarsConfig, calendars_config_path, default_local_dir,

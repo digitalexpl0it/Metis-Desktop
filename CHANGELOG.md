@@ -9,6 +9,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- **Edge bar status icons UX** — Settings order list rows have proper padding;
+  on-bar drag shows a live accent drop gap while neighbours shift; drop no longer
+  blanks icons (poller state rehydrates after rebuild); migrate no longer undoes
+  tray order; unused icons auto-hide (VPN / Bluetooth / battery / network /
+  weather).
+- **Edge bar custom gradient at translucent opacity** — bar fill no longer
+  collapses to the first gradient stop when opacity is below 1.0; each stop uses
+  the opacity slider’s alpha.
 - **Metis Remote stuck on every desktop** — true-fullscreen / floating session
   windows (especially on Free layout, which never creates app tiles) were not
   unmapped when leaving the ephemeral desk, so Super+Alt left the Viewer on all
@@ -24,6 +32,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Edge bar status icons** — Settings → Edge bar → **Status icons** toggles
+  optional icons (Weather, tray, network, …) without migrate force-restoring
+  them; drag on the bar (past the DnD threshold) or use ↑/↓ to reorder. Workspaces,
+  running apps, and the clock stay required.
 - **Desktop widgets default layout** — first enable (onboarding or Settings) with
   an empty layout seeds a resolution-aware pack (Folders left; System / Clock /
   Weather right; Equalizer bottom-right on larger desks). **Add widget** places

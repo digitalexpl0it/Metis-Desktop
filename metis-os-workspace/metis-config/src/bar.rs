@@ -96,7 +96,7 @@ impl Default for ClockConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BarWidgetId {
     Workspaces,
@@ -119,6 +119,137 @@ pub enum BarWidgetId {
     Tray,
     /// Software updates available (PackageKit / Flatpak / fwupd). Hidden when idle.
     Updates,
+}
+
+impl BarWidgetId {
+    /// Status-cluster icons the user may hide from Settings / on-bar layout.
+    /// Workspaces, Tasks, Spacer, and Clock stay required.
+    pub fn is_status_optional(self) -> bool {
+        matches!(
+            self,
+            Self::Battery
+                | Self::Network
+                | Self::Vpn
+                | Self::Bluetooth
+                | Self::Volume
+                | Self::Clipboard
+                | Self::Weather
+                | Self::RemovableVolumes
+                | Self::Tray
+                | Self::Updates
+        )
+    }
+
+    /// Default order for optional status icons (Settings toggle catalogue).
+    pub fn status_optional_catalogue() -> &'static [Self] {
+        &[
+            Self::RemovableVolumes,
+            Self::Tray,
+            Self::Updates,
+            Self::Weather,
+            Self::Battery,
+            Self::Network,
+            Self::Vpn,
+            Self::Bluetooth,
+            Self::Volume,
+            Self::Clipboard,
+        ]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Workspaces => "Workspaces",
+            Self::Tasks => "Running apps",
+            Self::Spacer => "Spacer",
+            Self::Clock => "Clock",
+            Self::Battery => "Battery",
+            Self::Network => "Network",
+            Self::Vpn => "VPN",
+            Self::Bluetooth => "Bluetooth",
+            Self::Volume => "Volume",
+            Self::Notifications => "Notifications",
+            Self::Clipboard => "Clipboard",
+            Self::Weather => "Weather",
+            Self::RemovableVolumes => "Removable volumes",
+            Self::Tray => "System tray",
+            Self::Updates => "Software updates",
+        }
+    }
+}
+
+/// Split `widgets` into required prefix, optional status segment, and whether Clock is present.
+pub fn split_bar_widget_layout(
+    widgets: &[BarWidgetId],
+) -> (Vec<BarWidgetId>, Vec<BarWidgetId>, bool) {
+    let mut status = Vec::new();
+    let mut has_clock = false;
+    for w in widgets {
+        if *w == BarWidgetId::Clock {
+            has_clock = true;
+        } else if w.is_status_optional() && !status.contains(w) {
+            status.push(*w);
+        }
+    }
+    let prefix = vec![
+        BarWidgetId::Workspaces,
+        BarWidgetId::Tasks,
+        BarWidgetId::Spacer,
+    ];
+    (prefix, status, has_clock)
+}
+
+/// Rebuild `widgets` as `[Workspaces, Tasks, Spacer, …status…, Clock]`.
+/// Drops unknowns / Notifications; keeps only optional ids from `status`.
+pub fn rebuild_bar_widgets(status: &[BarWidgetId]) -> Vec<BarWidgetId> {
+    let mut out = vec![
+        BarWidgetId::Workspaces,
+        BarWidgetId::Tasks,
+        BarWidgetId::Spacer,
+    ];
+    for w in status {
+        if w.is_status_optional() && !out.contains(w) {
+            out.push(*w);
+        }
+    }
+    out.push(BarWidgetId::Clock);
+    out
+}
+
+/// Insert `id` into the status segment (before Clock) if missing, using catalogue order
+/// relative to already-enabled peers when possible.
+pub fn enable_status_widget(widgets: &mut Vec<BarWidgetId>, id: BarWidgetId) {
+    if !id.is_status_optional() || widgets.contains(&id) {
+        return;
+    }
+    let (_, mut status, _) = split_bar_widget_layout(widgets);
+    let catalogue = BarWidgetId::status_optional_catalogue();
+    let want_idx = catalogue
+        .iter()
+        .position(|c| *c == id)
+        .unwrap_or(status.len());
+    let mut insert_at = status.len();
+    for (i, existing) in status.iter().enumerate() {
+        let existing_idx = catalogue
+            .iter()
+            .position(|c| c == existing)
+            .unwrap_or(usize::MAX);
+        if existing_idx > want_idx {
+            insert_at = i;
+            break;
+        }
+    }
+    status.insert(insert_at, id);
+    *widgets = rebuild_bar_widgets(&status);
+}
+
+/// Remove an optional status widget. No-op for required ids.
+pub fn disable_status_widget(widgets: &mut Vec<BarWidgetId>, id: BarWidgetId) {
+    if !id.is_status_optional() {
+        return;
+    }
+    widgets.retain(|w| *w != id);
+    let (_, status, _) = split_bar_widget_layout(widgets);
+    *widgets = rebuild_bar_widgets(&status);
 }
 
 /// How system tray app icons appear on the edge bar.
@@ -741,32 +872,9 @@ fn migrate_bar_config(cfg: &mut BarConfig, allow_persist: bool) {
         cfg.clock.time_format = default_time_format();
     }
 
-    // Insert the weather widget into pre-existing layouts that predate it, ahead
-    // of the system/clock cluster so it leads the right-hand group.
-    if !cfg.widgets.contains(&BarWidgetId::Weather) {
-        let pos = cfg
-            .widgets
-            .iter()
-            .position(|w| {
-                matches!(
-                    w,
-                    BarWidgetId::Battery
-                        | BarWidgetId::Network
-                        | BarWidgetId::Vpn
-                        | BarWidgetId::Bluetooth
-                        | BarWidgetId::Volume
-                        | BarWidgetId::Clipboard
-                        | BarWidgetId::Notifications
-                        | BarWidgetId::Clock
-                )
-            })
-            .unwrap_or(cfg.widgets.len());
-        cfg.widgets.insert(pos, BarWidgetId::Weather);
-        dirty = true;
-    }
-
     // Insert the taskbar/dock into pre-existing layouts that predate it, just
     // after the workspaces cluster on the left (or at the front otherwise).
+    // Optional status icons are never force-inserted — Settings toggles must stick.
     if !cfg.widgets.contains(&BarWidgetId::Tasks) {
         let pos = cfg
             .widgets
@@ -778,155 +886,8 @@ fn migrate_bar_config(cfg: &mut BarConfig, allow_persist: bool) {
         dirty = true;
     }
 
-    // Insert the Bluetooth indicator after Network in layouts that predate it.
-    if !cfg.widgets.contains(&BarWidgetId::Bluetooth) {
-        let pos = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Network))
-            .map(|i| i + 1)
-            .unwrap_or(cfg.widgets.len());
-        cfg.widgets.insert(pos, BarWidgetId::Bluetooth);
-        dirty = true;
-    }
-
-    // VPN sits immediately after Network (before Bluetooth when present).
-    if !cfg.widgets.contains(&BarWidgetId::Vpn) {
-        let pos = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Network))
-            .map(|i| i + 1)
-            .unwrap_or(cfg.widgets.len());
-        cfg.widgets.insert(pos, BarWidgetId::Vpn);
-        dirty = true;
-    }
-
-    // Insert the clipboard history widget before notifications in older layouts.
-    if !cfg.widgets.contains(&BarWidgetId::Clipboard) {
-        let pos = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Notifications))
-            .unwrap_or(cfg.widgets.len());
-        cfg.widgets.insert(pos, BarWidgetId::Clipboard);
-        dirty = true;
-    }
-
-    // Insert the system tray widget immediately left of the weather cluster.
-    if !cfg.widgets.contains(&BarWidgetId::Tray) {
-        let pos = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Weather))
-            .unwrap_or(cfg.widgets.len());
-        cfg.widgets.insert(pos, BarWidgetId::Tray);
-        dirty = true;
-    } else {
-        // Reposition tray if it was placed elsewhere in an older layout.
-        let weather_pos = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Weather));
-        let tray_pos = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Tray));
-        // The tray cluster is `[Tray, Updates?]` directly left of Weather. Must
-        // stay consistent with the Updates rule below or migrate never converges.
-        if let (Some(wpos), Some(tpos)) = (weather_pos, tray_pos)
-            && tpos + 1 != tray_cluster_anchor(&cfg.widgets, wpos)
-        {
-            cfg.widgets.remove(tpos);
-            let insert_at = cfg
-                .widgets
-                .iter()
-                .position(|w| matches!(w, BarWidgetId::Weather))
-                .map(|w| tray_cluster_anchor(&cfg.widgets, w))
-                .unwrap_or(cfg.widgets.len());
-            cfg.widgets.insert(insert_at, BarWidgetId::Tray);
-            dirty = true;
-        }
-    }
-
-    // Removable volumes sit immediately left of the tray.
-    if !cfg.widgets.contains(&BarWidgetId::RemovableVolumes) {
-        let pos = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Tray))
-            .unwrap_or_else(|| {
-                cfg.widgets
-                    .iter()
-                    .position(|w| matches!(w, BarWidgetId::Weather))
-                    .unwrap_or(cfg.widgets.len())
-            });
-        cfg.widgets.insert(pos, BarWidgetId::RemovableVolumes);
-        dirty = true;
-    } else if let (Some(tray_pos), Some(vol_pos)) = (
-        cfg.widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Tray)),
-        cfg.widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::RemovableVolumes)),
-    ) && vol_pos != tray_pos.saturating_sub(1)
-    {
-        cfg.widgets.remove(vol_pos);
-        let insert_at = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Tray))
-            .unwrap_or(cfg.widgets.len());
-        cfg.widgets.insert(insert_at, BarWidgetId::RemovableVolumes);
-        if allow_persist {
-            persist_migrated_bar(cfg);
-        }
-    }
-
-    // Software updates indicator: immediately to the right of the tray
-    // (StatusNotifier / background apps). Reorder if an older migrate placed
-    // it left of the tray or elsewhere in the trailing cluster.
-    {
-        let tray_pos = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Tray));
-        let updates_pos = cfg
-            .widgets
-            .iter()
-            .position(|w| matches!(w, BarWidgetId::Updates));
-        let mut changed = false;
-        match (tray_pos, updates_pos) {
-            (Some(t), Some(u)) if u != t + 1 => {
-                cfg.widgets.retain(|w| !matches!(w, BarWidgetId::Updates));
-                let t = cfg
-                    .widgets
-                    .iter()
-                    .position(|w| matches!(w, BarWidgetId::Tray))
-                    .unwrap_or(0);
-                let insert_at = (t + 1).min(cfg.widgets.len());
-                cfg.widgets.insert(insert_at, BarWidgetId::Updates);
-                changed = true;
-            }
-            (Some(t), None) => {
-                let insert_at = (t + 1).min(cfg.widgets.len());
-                cfg.widgets.insert(insert_at, BarWidgetId::Updates);
-                changed = true;
-            }
-            (None, None) => {
-                let pos = cfg
-                    .widgets
-                    .iter()
-                    .position(|w| matches!(w, BarWidgetId::Weather))
-                    .unwrap_or(cfg.widgets.len());
-                cfg.widgets.insert(pos, BarWidgetId::Updates);
-                changed = true;
-            }
-            _ => {}
-        }
-        dirty |= changed;
-    }
+    // Tray / volumes / updates adjacency is no longer force-fixed — users reorder
+    // status icons freely (Settings arrows + on-bar drag).
 
     // Phase 13: Notification Center merges the bell into the clock. Strip the
     // standalone notifications widget when the clock is present so upgrades get
@@ -948,16 +909,6 @@ fn migrate_bar_config(cfg: &mut BarConfig, allow_persist: bool) {
         } else {
             persist_migrated_bar(cfg);
         }
-    }
-}
-
-/// Index where the tray belongs: right before Weather, or before an Updates
-/// widget that already sits right before Weather.
-fn tray_cluster_anchor(widgets: &[BarWidgetId], weather_pos: usize) -> usize {
-    if weather_pos > 0 && widgets[weather_pos - 1] == BarWidgetId::Updates {
-        weather_pos - 1
-    } else {
-        weather_pos
     }
 }
 
@@ -1001,48 +952,28 @@ mod tests {
     }
 
     #[test]
-    fn migrate_converges_for_misplaced_tray_and_updates() {
+    fn migrate_preserves_user_status_order() {
         use BarWidgetId::*;
-        let inputs = [
-            vec![
-                Workspaces,
-                Tasks,
-                Spacer,
-                Updates,
-                RemovableVolumes,
-                Tray,
-                Weather,
-                Clock,
-            ],
-            vec![
-                Workspaces,
-                Tasks,
-                Spacer,
-                Tray,
-                Weather,
-                Updates,
-                RemovableVolumes,
-                Clock,
-            ],
-            vec![Tray, Workspaces, Tasks, Spacer, Weather, Clock],
+        // Formerly migrate forced vol→tray→updates→weather; free reorder must stick.
+        let input = vec![
+            Workspaces,
+            Tasks,
+            Spacer,
+            Weather,
+            Updates,
+            Tray,
+            RemovableVolumes,
+            Clock,
         ];
-        for input in inputs {
-            let once = migrated(input);
-            assert_eq!(migrated(once.clone()), once, "migrate must be idempotent");
-            let tray = once.iter().position(|w| *w == Tray);
-            let upd = once.iter().position(|w| *w == Updates);
-            let vol = once.iter().position(|w| *w == RemovableVolumes);
-            let weather = once.iter().position(|w| *w == Weather);
-            assert_eq!(vol.map(|v| v + 1), tray);
-            assert_eq!(tray.map(|t| t + 1), upd);
-            assert_eq!(upd.map(|u| u + 1), weather);
-        }
+        let once = migrated(input.clone());
+        assert_eq!(once, input);
+        assert_eq!(migrated(once.clone()), once);
     }
 
     #[test]
-    fn migrate_inserts_missing_widgets_and_converges() {
+    fn migrate_inserts_tasks_but_not_optional_status() {
         use BarWidgetId::*;
-        // Pre-Weather/Tasks/Vpn/Clipboard/Tray layout (system strip only).
+        // Pre-Tasks layout with a trimmed status strip (user may omit optionals).
         let input = vec![
             Workspaces,
             Spacer,
@@ -1055,19 +986,41 @@ mod tests {
         ];
         let once = migrated(input);
         assert_eq!(migrated(once.clone()), once, "migrate must be idempotent");
-        assert!(once.contains(&Weather));
         assert!(once.contains(&Tasks));
-        assert!(once.contains(&Vpn));
-        assert!(once.contains(&Clipboard));
-        assert!(once.contains(&Tray));
-        assert!(once.contains(&RemovableVolumes));
-        assert!(once.contains(&Updates));
+        // Optional status icons are not force-restored.
+        assert!(!once.contains(&Weather));
+        assert!(!once.contains(&Vpn));
+        assert!(!once.contains(&Clipboard));
+        assert!(!once.contains(&Tray));
+        assert!(!once.contains(&RemovableVolumes));
+        assert!(!once.contains(&Updates));
         // Notifications merge into the clock affordance when both are present.
         assert!(!once.contains(&Notifications));
         assert!(once.contains(&Clock));
-        let net = once.iter().position(|w| *w == Network).unwrap();
-        let vpn = once.iter().position(|w| *w == Vpn).unwrap();
-        assert_eq!(vpn, net + 1);
+    }
+
+    #[test]
+    fn migrate_keeps_optional_status_removed() {
+        use BarWidgetId::*;
+        let without_weather = vec![
+            Workspaces,
+            Tasks,
+            Spacer,
+            RemovableVolumes,
+            Tray,
+            Updates,
+            Battery,
+            Network,
+            Vpn,
+            Bluetooth,
+            Volume,
+            Clipboard,
+            Clock,
+        ];
+        let once = migrated(without_weather.clone());
+        assert_eq!(once, without_weather);
+        assert_eq!(migrated(once.clone()), once);
+        assert!(!once.contains(&Weather));
     }
 
     #[test]
@@ -1124,26 +1077,6 @@ mod tests {
         let format_after = cfg.clock.time_format.clone();
         migrate_bar_config(&mut cfg, false);
         assert_eq!(cfg.clock.time_format, format_after);
-    }
-
-    #[test]
-    fn migrate_reorders_removable_volumes_left_of_tray() {
-        use BarWidgetId::*;
-        let input = vec![
-            Workspaces,
-            Tasks,
-            Spacer,
-            Tray,
-            Updates,
-            Weather,
-            RemovableVolumes,
-            Clock,
-        ];
-        let once = migrated(input);
-        assert_eq!(migrated(once.clone()), once);
-        let vol = once.iter().position(|w| *w == RemovableVolumes).unwrap();
-        let tray = once.iter().position(|w| *w == Tray).unwrap();
-        assert_eq!(vol + 1, tray);
     }
 
     #[test]

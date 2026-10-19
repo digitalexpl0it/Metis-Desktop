@@ -250,6 +250,9 @@ pub(crate) fn rebuild_bars_in_place(config: Rc<RefCell<BarConfig>>) {
 
 /// Re-apply cached service state after tearing down and rebuilding bar widgets.
 pub(crate) fn rehydrate_widget_state(refs: &widgets::WidgetRefs) {
+    // Restore battery / network / VPN / BT / volume visibility immediately so a
+    // widgets-order rebuild (status drag) does not blank the status cluster.
+    refs.apply_snapshot(&last_bar_snapshot());
     if let Some(snapshot) = last_weather_snapshot() {
         refs.apply_weather(&snapshot);
     } else if !crate::ui::onboarding::is_active() {
@@ -492,6 +495,20 @@ pub(crate) fn attach_tray_channel(events: std::sync::mpsc::Receiver<crate::servi
     });
 }
 
+thread_local! {
+    /// Latest poller snapshot — rehydrates auto-hide status icons after bar rebuild.
+    static LAST_BAR_SNAPSHOT: std::cell::RefCell<BarSnapshot> =
+        std::cell::RefCell::new(BarSnapshot::default());
+}
+
+pub(crate) fn last_bar_snapshot() -> BarSnapshot {
+    LAST_BAR_SNAPSHOT.with(|s| s.borrow().clone())
+}
+
+fn remember_bar_snapshot(snapshot: &BarSnapshot) {
+    LAST_BAR_SNAPSHOT.with(|s| *s.borrow_mut() = snapshot.clone());
+}
+
 pub(crate) fn attach_poll_channel(rx: Receiver<BarSnapshot>) {
     let mut last = BarSnapshot::default();
     glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
@@ -500,6 +517,7 @@ pub(crate) fn attach_poll_channel(rx: Receiver<BarSnapshot>) {
                 continue;
             }
             last = snapshot.clone();
+            remember_bar_snapshot(&snapshot);
             check_bluetooth_battery_alerts(&snapshot.bluetooth);
             BARS.with(|bars| {
                 for handle in bars.borrow().iter() {

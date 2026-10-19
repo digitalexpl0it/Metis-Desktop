@@ -25,6 +25,8 @@ impl BatteryWidget {
         root.add_css_class("metis-bar-widget");
         root.add_css_class("metis-bar-battery");
         root.add_css_class("metis-bar-sys-icon");
+        // Hidden until UPower reports a battery (desktops stay clean).
+        root.set_visible(false);
 
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         let icon = icons::image(names::battery(100, false));
@@ -64,23 +66,21 @@ impl BatteryWidget {
     }
 
     pub fn update(&self, percent: Option<u8>, charging: bool) {
+        self.root.set_visible(percent.is_some());
         if self.last_percent.get() == percent && self.last_charging.get() == charging {
             return;
         }
         self.last_percent.set(percent);
         self.last_charging.set(charging);
-        if let Some(pct) = percent {
-            self.label.set_text(&format!("{pct}%"));
-            self.label.set_visible(true);
-            self.root.set_tooltip_text(Some(
-                &metis_i18n::tr("Battery %1%").replace("%1", &pct.to_string()),
-            ));
-        } else {
-            self.label.set_visible(false);
-            self.root
-                .set_tooltip_text(Some(&metis_i18n::tr("AC power")));
-        }
-        icons::set_icon(&self.icon, names::battery(percent.unwrap_or(100), charging));
+        let Some(pct) = percent else {
+            return;
+        };
+        self.label.set_text(&format!("{pct}%"));
+        self.label.set_visible(true);
+        self.root.set_tooltip_text(Some(
+            &metis_i18n::tr("Battery %1%").replace("%1", &pct.to_string()),
+        ));
+        icons::set_icon(&self.icon, names::battery(pct, charging));
     }
 }
 
@@ -423,6 +423,8 @@ impl NetworkWidget {
         root.add_css_class("metis-bar-widget");
         root.add_css_class("metis-bar-network");
         root.add_css_class("metis-bar-sys-icon");
+        // Hidden until Wi-Fi or ethernet is present.
+        root.set_visible(false);
 
         let icon = icons::image(names::network(true));
         root.set_child(Some(&icon));
@@ -624,6 +626,7 @@ impl NetworkWidget {
         wifi_enabled: bool,
     ) {
         self.wifi_present.set(wifi_present);
+        self.root.set_visible(wifi_present || eth.present);
 
         let hotplug = crate::services::wifi_hotplug_suppressed();
         let mut wifi_enabled = wifi_enabled;
@@ -752,6 +755,8 @@ impl VpnWidget {
         root.add_css_class("metis-bar-widget");
         root.add_css_class("metis-bar-vpn");
         root.add_css_class("metis-bar-sys-icon");
+        // Hidden until NetworkManager has VPN / WireGuard profiles.
+        root.set_visible(false);
 
         let face = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         face.set_halign(gtk::Align::Center);
@@ -907,6 +912,11 @@ impl VpnWidget {
     }
 
     pub fn update(&self, vpn: &[VpnStatus], feedback: &VpnFeedback) {
+        let busy = feedback.pending_target.is_some()
+            || feedback.needs_password.is_some()
+            || feedback.last_error.is_some();
+        self.root.set_visible(!vpn.is_empty() || busy);
+
         let sig = format!(
             "{}|{}|{}|{}|{}",
             vpn_signature(vpn),
