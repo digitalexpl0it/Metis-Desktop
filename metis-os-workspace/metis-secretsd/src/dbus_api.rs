@@ -167,6 +167,9 @@ impl ServiceIface {
         attributes: HashMap<String, String>,
     ) -> fdo::Result<(Vec<OwnedObjectPath>, Vec<OwnedObjectPath>)> {
         let vault = self.state.vault.lock().await;
+        if vault.is_locked() {
+            return Ok((Vec::new(), Vec::new()));
+        }
         let unlocked = vault
             .search(&attributes)
             .into_iter()
@@ -179,7 +182,11 @@ impl ServiceIface {
         &self,
         objects: Vec<OwnedObjectPath>,
     ) -> fdo::Result<(Vec<OwnedObjectPath>, OwnedObjectPath)> {
-        // Vault is session-unlocked while the daemon runs.
+        let vault = self.state.vault.lock().await;
+        if vault.is_locked() {
+            // Password unlock via org.metis.Secrets1.UnlockWithPassword.
+            return Ok((Vec::new(), empty_path()));
+        }
         Ok((objects, empty_path()))
     }
 
@@ -187,6 +194,7 @@ impl ServiceIface {
         &self,
         _objects: Vec<OwnedObjectPath>,
     ) -> fdo::Result<(Vec<OwnedObjectPath>, OwnedObjectPath)> {
+        self.state.vault.lock().await.lock_vault();
         Ok((Vec::new(), empty_path()))
     }
 
@@ -196,6 +204,9 @@ impl ServiceIface {
         session: OwnedObjectPath,
     ) -> fdo::Result<HashMap<OwnedObjectPath, WireSecret>> {
         let vault = self.state.vault.lock().await;
+        if vault.is_locked() {
+            return Err(fdo::Error::AccessDenied("vault is locked".into()));
+        }
         let mut out = HashMap::new();
         for path in items {
             let id = path
@@ -236,6 +247,9 @@ impl CollectionIface {
     #[zbus(property)]
     async fn items(&self) -> Vec<OwnedObjectPath> {
         let vault = self.state.vault.lock().await;
+        if vault.is_locked() {
+            return Vec::new();
+        }
         vault.items().map(|i| item_path(&i.id)).collect()
     }
 
@@ -251,7 +265,7 @@ impl CollectionIface {
 
     #[zbus(property)]
     async fn locked(&self) -> bool {
-        false
+        self.state.vault.lock().await.is_locked()
     }
 
     #[zbus(property)]
@@ -275,6 +289,9 @@ impl CollectionIface {
         attributes: HashMap<String, String>,
     ) -> fdo::Result<Vec<OwnedObjectPath>> {
         let vault = self.state.vault.lock().await;
+        if vault.is_locked() {
+            return Err(fdo::Error::AccessDenied("vault is locked".into()));
+        }
         Ok(vault
             .search(&attributes)
             .into_iter()
@@ -289,6 +306,9 @@ impl CollectionIface {
         replace: bool,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> fdo::Result<(OwnedObjectPath, OwnedObjectPath)> {
+        if self.state.vault.lock().await.is_locked() {
+            return Err(fdo::Error::AccessDenied("vault is locked".into()));
+        }
         let label = label_from_props(&properties);
         let attributes = attrs_from_props(&properties);
         let value = String::from_utf8_lossy(&secret.value).into_owned();
@@ -361,12 +381,15 @@ impl CollectionIface {
 impl ItemIface {
     #[zbus(property)]
     async fn locked(&self) -> bool {
-        false
+        self.state.vault.lock().await.is_locked()
     }
 
     #[zbus(property)]
     async fn label(&self) -> fdo::Result<String> {
         let vault = self.state.vault.lock().await;
+        if vault.is_locked() {
+            return Err(fdo::Error::AccessDenied("vault is locked".into()));
+        }
         vault
             .get(&self.id)
             .map(|i| i.label.clone())
@@ -445,6 +468,9 @@ impl ItemIface {
 
     async fn get_secret(&self, session: OwnedObjectPath) -> fdo::Result<WireSecret> {
         let vault = self.state.vault.lock().await;
+        if vault.is_locked() {
+            return Err(fdo::Error::AccessDenied("vault is locked".into()));
+        }
         let item = vault
             .get(&self.id)
             .ok_or_else(|| fdo::Error::UnknownObject("item gone".into()))?;
@@ -468,7 +494,43 @@ impl ItemIface {
             .lock()
             .await
             .set_secret(&self.id, value, content_type)
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(|e| match e {
+                crate::vault::VaultError::Locked => fdo::Error::AccessDenied(e.to_string()),
+                other => fdo::Error::Failed(other.to_string()),
+            })
+    }
+}
+
+/// Metis extension: password unlock (Secret Service Prompt is not used in MVP).
+pub struct MetisSecretsIface {
+    pub state: AppState,
+}
+
+#[interface(name = "org.metis.Secrets1")]
+impl MetisSecretsIface {
+    #[zbus(property)]
+    async fn locked(&self) -> bool {
+        self.state.vault.lock().await.is_locked()
+    }
+
+    /// Unlock with the login password (PAM) or initialize/migrate the wrap.
+    async fn unlock_with_password(&self, password: &str) -> fdo::Result<()> {
+        let mut vault = self.state.vault.lock().await;
+        vault.unlock_with_password(password).map_err(|e| match e {
+            crate::vault::VaultError::AuthFailed => {
+                fdo::Error::AccessDenied("authentication failed".into())
+            }
+            other => fdo::Error::Failed(other.to_string()),
+        })?;
+        drop(vault);
+        // Re-export item objects after unlock.
+        let _ = register_existing_items(&self.state).await;
+        Ok(())
+    }
+
+    async fn lock(&self) -> fdo::Result<()> {
+        self.state.vault.lock().await.lock_vault();
+        Ok(())
     }
 }
 

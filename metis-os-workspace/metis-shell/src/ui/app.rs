@@ -49,6 +49,7 @@ pub fn run(init: MetisInit) {
     splash::show();
     splash::on_complete(onboarding::show_if_needed);
     bar::init_and_show();
+    crate::ui::secrets_unlock::maybe_prompt_at_startup();
     attach_system_events(init.event_rx);
     // The bar maps and pollers attach shortly after; let the splash ramp to
     // completion and fade once the shell is up and running.

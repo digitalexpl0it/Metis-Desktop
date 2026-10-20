@@ -1,5 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
+mod bar_reflow;
 mod battery_dim;
 mod blur;
 mod capture_overlay;
@@ -28,6 +29,7 @@ mod image_capture;
 mod input;
 mod ipc;
 mod ipc_dispatch;
+mod ipc_handlers;
 mod keybinds;
 mod lock;
 mod lock_auth_cues;
@@ -50,6 +52,7 @@ mod rudp_identity;
 mod screenshot_overlay;
 mod session_lock;
 mod session_restore;
+mod spawn;
 mod state;
 mod stream_export;
 mod surface_scale;

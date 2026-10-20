@@ -2,6 +2,7 @@
 
 **Status:** accepted  
 **Date:** 2026-10-07  
+**Updated:** 2026-10-20  
 **Related:** [`metis-secrets`](../../metis-os-workspace/metis-secrets/),
 [`metis-secretsd`](../../metis-os-workspace/metis-secretsd/),
 [UBUNTU_DEV.md](../UBUNTU_DEV.md) (Keyring section)
@@ -23,18 +24,20 @@ implements `org.freedesktop.secrets` on the user bus.
 - **Default:** session start launches `metis-secretsd` when the bus name is free.
 - **Compatible:** if another provider already owns `org.freedesktop.secrets`
   (KeePassXC, KWallet, pass-secret-service, gnome-keyring, …), leave it alone.
-- **No DE pin:** `metis-portals.conf` does not force
-  `org.freedesktop.impl.portal.Secret=gnome-keyring`. Portal Secret remains a
-  residual (sandboxed file-backend encrypt key); session SS is what unsandboxed
-  clients use today.
+- **At rest:** DEK wraps with Argon2id(login password) in `vault.wrap`; unlock via
+  `org.metis.Secrets1.UnlockWithPassword` (PAM). Legacy plaintext `vault.key` is
+  migrated on first unlock. Shell prompts at startup when locked.
+- **Portal Secret:** `metis-portal` implements
+  `org.freedesktop.impl.portal.Secret` and is pinned in `metis-portals.conf`;
+  per-app keys live in Session SS (`portal_secret` kind).
 
 ## Residuals
 
-- PAM / login-password unlock for the vault (MVP uses a session-local master key
-  file mode `0600` under `$XDG_DATA_HOME/metis/secrets/`)
-- `org.freedesktop.impl.portal.Secret` in `metis-portal`
-- SSH agent (not required for Metis credentials)
-- Full Secret Service feature parity (extra aliases, prompt UX, ACLs)
+- SSH agent (not required for Metis credentials; optional gnome-keyring
+  `--components=ssh` fallback remains)
+- Full Secret Service feature parity (extra aliases, Prompt UX, ACLs)
+- Re-wrap after login password change (user must unlock with old wrap password
+  until a rewrap path lands)
 
 ## Alternatives considered
 

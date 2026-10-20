@@ -114,12 +114,16 @@ the standard D-Bus API — not a Metis-private store. Decision:
 If another provider already owns the bus (KeePassXC, KWallet, pass-secret-service,
 gnome-keyring, …), Metis leaves it alone.
 
-Vault files live under `~/.local/share/metis/secrets/` (mode `0600` master key;
-session-unlocked while the daemon runs). PAM unlock is a residual.
+Vault files live under `~/.local/share/metis/secrets/`: `vault.bin` (encrypted
+items) plus `vault.wrap` (Argon2id-wrapped DEK). The daemon starts **locked**;
+unlock with the login password via D-Bus `org.metis.Secrets1.UnlockWithPassword`
+(shell prompt on first client need). Legacy plaintext `vault.key` migrates away
+on first successful unlock. Portal `org.freedesktop.impl.portal.Secret` is
+implemented by `metis-portal`. SSH agent integration remains a residual.
 
-**What Metis stores there:** CalDAV passwords, Microsoft 365 refresh tokens, and
-Viewer host passwords (`metis-secrets`). Account lists in `calendars.json` /
-`viewer.json` hold no secrets.
+**What Metis stores there:** CalDAV passwords, Microsoft 365 refresh tokens,
+Viewer host passwords, and portal per-app secrets (`metis-secrets`). Account
+lists in `calendars.json` / `viewer.json` hold no secrets.
 
 ### Phase 4 runtime tools (standalone session)
 
@@ -133,8 +137,9 @@ sudo apt install -y \
   power-profiles-daemon
 ```
 
-PipeWire/PulseAudio (`pipewire-pulse` / `pulseaudio-utils` for `pactl`) is usually
-already present on Ubuntu desktop installs.
+PipeWire/PulseAudio (`pipewire-pulse`) is usually already present on Ubuntu
+desktop installs. The edge bar talks to Pulse via libpulse; `pulseaudio-utils`
+(`pactl`) is optional (equalizer monitor resolve / debugging).
 
 ### Remote desktop (Phase 7)
 

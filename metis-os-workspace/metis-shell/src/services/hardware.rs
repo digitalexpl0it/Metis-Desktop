@@ -141,17 +141,27 @@ impl Buses {
 async fn handle(buses: &mut Buses, cmd: HwCommand) {
     match cmd {
         HwCommand::VolumeStep(delta) => {
-            pactl(&["set-sink-volume", "@DEFAULT_SINK@", &signed_percent(delta)]);
+            crate::services::pulse_audio::set_sink_volume_relative(delta.clamp(-100, 100) as i8);
+            // Brief settle so OSD reads the new level.
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
             report_volume();
         }
         HwCommand::VolumeMuteToggle => {
-            pactl(&["set-sink-mute", "@DEFAULT_SINK@", "toggle"]);
+            let muted = crate::services::pulse_audio::snapshot()
+                .sink_muted
+                .unwrap_or(false);
+            crate::services::pulse_audio::set_sink_mute(!muted);
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
             report_volume();
         }
         HwCommand::MicMuteToggle => {
-            pactl(&["set-source-mute", "@DEFAULT_SOURCE@", "toggle"]);
-            let muted = sink_muted(true).unwrap_or(false);
-            let pct = source_volume().unwrap_or(0);
+            let snap = crate::services::pulse_audio::snapshot();
+            let muted = snap.source_muted.unwrap_or(false);
+            crate::services::pulse_audio::set_source_mute(!muted);
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            let snap = crate::services::pulse_audio::snapshot();
+            let muted = snap.source_muted.unwrap_or(!muted);
+            let pct = snap.source_percent.unwrap_or(0);
             osd(
                 if muted {
                     "microphone-sensitivity-muted-symbolic"
@@ -178,25 +188,12 @@ async fn handle(buses: &mut Buses, cmd: HwCommand) {
     }
 }
 
-// ---- Audio (PipeWire / PulseAudio via `pactl`) --------------------------------
-
-fn pactl(args: &[&str]) {
-    if let Err(err) = std::process::Command::new("pactl").args(args).status() {
-        tracing::warn!(%err, ?args, "pactl command failed");
-    }
-}
-
-fn signed_percent(delta: i32) -> String {
-    if delta >= 0 {
-        format!("+{delta}%")
-    } else {
-        format!("{delta}%")
-    }
-}
+// ---- Audio (PipeWire / PulseAudio via libpulse) --------------------------------
 
 fn report_volume() {
-    let muted = sink_muted(false).unwrap_or(false);
-    let pct = sink_volume().unwrap_or(0);
+    let snap = crate::services::pulse_audio::snapshot();
+    let muted = snap.sink_muted.unwrap_or(false);
+    let pct = snap.sink_percent.unwrap_or(0);
     let icon = if muted || pct == 0 {
         "audio-volume-muted-symbolic"
     } else if pct < 34 {
@@ -207,48 +204,6 @@ fn report_volume() {
         "audio-volume-high-symbolic"
     };
     osd(icon, "Volume", Some(pct as f64), muted);
-}
-
-fn sink_volume() -> Option<u8> {
-    parse_volume(&pactl_read(&["get-sink-volume", "@DEFAULT_SINK@"])?)
-}
-
-fn source_volume() -> Option<u8> {
-    parse_volume(&pactl_read(&["get-source-volume", "@DEFAULT_SOURCE@"])?)
-}
-
-fn sink_muted(source: bool) -> Option<bool> {
-    let args: [&str; 2] = if source {
-        ["get-source-mute", "@DEFAULT_SOURCE@"]
-    } else {
-        ["get-sink-mute", "@DEFAULT_SINK@"]
-    };
-    let text = pactl_read(&args)?;
-    if text.contains("yes") {
-        Some(true)
-    } else if text.contains("no") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-fn pactl_read(args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("pactl")
-        .args(args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-fn parse_volume(text: &str) -> Option<u8> {
-    // "Volume: front-left: 45678 /  70% / -9.something dB, ..." — first `%` token.
-    text.split_whitespace()
-        .find_map(|tok| tok.strip_suffix('%').and_then(|n| n.parse::<u16>().ok()))
-        .map(|v| v.min(150) as u8)
 }
 
 // ---- Backlight (logind SetBrightness) -----------------------------------------

@@ -7,8 +7,43 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-10-20]
 
+### Changed
+
+- **HDR encode EETF fidelity (Urgent #2 close-out)** — Mixed float scene-linear
+  encode applies full BT.2390 EETF (highlight knee + fixed dark-room black
+  lift ≈ 0.005 nits) for PQ and HLG. Settings Displays HDR hint and USER_GUIDE
+  no longer call per-surface HDR “experimental”; client PQ/HLG hints still need
+  opt-in `METIS_COLOR_MGMT=1` until default-on colour protocol (M2 / Wave 3b).
+- **Shell poll: BlueZ ObjectManager + libpulse** — edge-bar Bluetooth inventory /
+  power / battery and volume/mute/defaults no longer fork `bluetoothctl` /
+  `pactl` on the hot path (D-Bus ObjectManager + in-process Pulse worker with
+  dirty wakes). Equalizer monitor setup may still one-shot `pactl` for the
+  default-sink monitor name.
+- **Compositor `state.rs` extract** — spawn / GPU client env → `spawn.rs`; IPC
+  command match → `ipc_handlers.rs`; bar position / auto-hide reflow →
+  `bar_reflow.rs` (no behavior change).
+- **Hybrid MultiRenderer polish (M6)** — documented known hybrid present limits;
+  session lock skips MultiRenderer (no fail-counter churn); Multi→transfer and
+  transfer→local paths emit rate-limited warnings with `CrossGpuStats`. Full-frame
+  `cross_gpu` transfer remains fail-fallback only.
+- **Fractional Display scale (M3 residual)** — `wl_output` / integer
+  `preferred_buffer_scale` now advertise `floor(scale)` instead of ceil, so a
+  125% UI scale no longer forces integer-only clients to 2×. Clients that
+  speak `wp_fractional_scale_v1` still get the true fractional factor. X11 apps
+  via XWayland inherit the primary output’s fractional scale (including after
+  Display scale changes).
+- **README** — dropped the “Beta” callout; Metis is presented as an active
+  Wayland desktop with first-party portals (roadmap maturity items live in
+  `metis-os-workspace/TODO.md`).
+
 ### Added
 
+- **Password-wrapped Secret Service vault + portal Secret** — `metis-secretsd`
+  stores the DEK in `vault.wrap` (Argon2id + ChaCha20Poly1305); starts locked;
+  unlocks via PAM (`UnlockWithPassword` / shell prompt); migrates legacy
+  plaintext `vault.key`. `metis-portal` implements
+  `org.freedesktop.impl.portal.Secret`. SSH agent still deferred. See
+  [`docs/decisions/secret-service-provider.md`](docs/decisions/secret-service-provider.md).
 - **Sandboxed widget WASM (M7 / Extension API v2)** — packs may ship
   `module.wasm` (`api: 2`) run in-process via Wasmtime with a deny-by-default
   host ABI (read host/helper/settings JSON, `set_text` / `set_visible`, hardened
@@ -43,22 +78,6 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   The Metis taskbar still uses compositor IPC; activate/close for foreign docks
   is not in this protocol. See
   [`docs/decisions/foreign-toplevel-list.md`](docs/decisions/foreign-toplevel-list.md).
-
-### Changed
-
-- **Hybrid MultiRenderer polish (M6)** — documented known hybrid present limits;
-  session lock skips MultiRenderer (no fail-counter churn); Multi→transfer and
-  transfer→local paths emit rate-limited warnings with `CrossGpuStats`. Full-frame
-  `cross_gpu` transfer remains fail-fallback only.
-- **Fractional Display scale (M3 residual)** — `wl_output` / integer
-  `preferred_buffer_scale` now advertise `floor(scale)` instead of ceil, so a
-  125% UI scale no longer forces integer-only clients to 2×. Clients that
-  speak `wp_fractional_scale_v1` still get the true fractional factor. X11 apps
-  via XWayland inherit the primary output’s fractional scale (including after
-  Display scale changes).
-- **README** — dropped the “Beta” callout; Metis is presented as an active
-  Wayland desktop with first-party portals (roadmap maturity items live in
-  `metis-os-workspace/TODO.md`).
 
 ### Fixed
 

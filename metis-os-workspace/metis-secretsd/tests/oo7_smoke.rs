@@ -55,14 +55,32 @@ async fn oo7_store_get_delete_against_metis_secretsd() {
     std::fs::create_dir_all(&dir).expect("mkdir");
 
     // If something else owns the bus, this smoke cannot run.
+    let test_pass = "metis-smoke-unlock-pass";
     let child = Command::new(&bin)
         .env("METIS_SECRETS_DIR", &dir)
+        .env("METIS_SECRETS_TEST_UNLOCK", test_pass)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn secretsd");
     let _daemon = Daemon(child);
     tokio::time::sleep(Duration::from_millis(300)).await;
+
+    {
+        let conn = zbus::Connection::session().await.expect("session bus");
+        let proxy = zbus::Proxy::new(
+            &conn,
+            "org.freedesktop.secrets",
+            "/org/freedesktop/secrets",
+            "org.metis.Secrets1",
+        )
+        .await
+        .expect("metis secrets proxy");
+        proxy
+            .call_method("UnlockWithPassword", &(test_pass,))
+            .await
+            .expect("unlock vault");
+    }
 
     let account = "smoke-test-account";
     let kind = metis_secrets::VIEWER_PASSWORD;

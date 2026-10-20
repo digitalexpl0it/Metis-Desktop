@@ -10,6 +10,7 @@ mod power_profile;
 mod screencast;
 mod screensaver;
 mod screenshot;
+mod secret;
 mod settings;
 
 use std::io::{self, Write};
@@ -18,6 +19,7 @@ use std::sync::Arc;
 use background::MetisBackground;
 use screencast::MetisScreencast;
 use screenshot::MetisScreenshot;
+use secret::MetisSecret;
 use settings::MetisSettings;
 
 const DBUS_NAME: &str = "org.freedesktop.impl.portal.desktop.metis";
@@ -82,7 +84,7 @@ async fn main() -> ashpd::Result<()> {
 
 async fn run_portal() -> ashpd::Result<()> {
     tracing::info!(
-        "starting Metis portal backend (Settings, Screenshot, ScreenCast, Background, PowerProfile)"
+        "starting Metis portal backend (Settings, Screenshot, ScreenCast, Background, PowerProfile, Secret)"
     );
 
     // Push gsettings before any client queries Settings — Nautilus / libadwaita
@@ -131,6 +133,7 @@ async fn run_portal() -> ashpd::Result<()> {
             Arc::clone(&pipewire),
         ))
         .background(MetisBackground)
+        .secret(MetisSecret)
         .build_with_connection(connection)
         .await?;
 

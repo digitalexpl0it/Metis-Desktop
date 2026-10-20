@@ -860,8 +860,10 @@ fn build_output_panel(
         hdr.set_active(output_prefs(&cfg.borrow(), &out.name).hdr_enabled);
         live_body.append(&ui::row(&tr("HDR"), &hdr));
         let hdr_hint = gtk::Label::new(Some(&tr(
-            "Signals HDR10 to the display and tone-maps the desktop (SDR→PQ). \
-             Per-surface HDR client content remains experimental (opt-in colour protocol).",
+            "Signals HDR10/HLG to the display and tone-maps the desktop \
+             (Mixed scene-linear + BT.2390 encode when HDR is on). Client PQ/HLG \
+             transfer hints still need METIS_COLOR_MGMT=1 until colour-protocol \
+             default-on lands.",
         )));
         hdr_hint.set_wrap(true);
         hdr_hint.set_xalign(0.0);

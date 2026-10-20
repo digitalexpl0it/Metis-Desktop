@@ -918,11 +918,12 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   HDR-only / fullscreen outputs so that content is not double-transformed.
   Mixed SDR+HDR on an HDR panel composites in scene-linear light (HDR windows,
   lifted SDR clients, wallpaper, titlebar chrome, layer-shell, and bar blur)
-  when the GPU supports float/10-bit intermediates, then applies a BT.2390-style
-  highlight shoulder at encode. Stage-1 CRTC gamma is already skipped while HDR
-  is active. Without float/10-bit, Metis falls back to sRGB decode with a soft
-  roll-off. HDR on an SDR panel always decodes to sRGB. Scroll-column and
-  minimize clips still apply.
+  when the GPU supports float/10-bit intermediates, then applies a BT.2390 EETF
+  at encode (highlight knee plus a fixed dark-room black lift ≈ 0.005 nits; no
+  Settings knob). Stage-1 CRTC gamma is already skipped while HDR is active.
+  Without float/10-bit, Metis falls back to sRGB decode with a soft roll-off.
+  HDR on an SDR panel always decodes to sRGB. Scroll-column and minimize clips
+  still apply.
   Rotation is still upcoming.
 - **Appearance** — Light/Dark style; accent, secondary, and semantic status
   colors; font. Edits write `themes/dark.json` / `themes/light.json` and survive
@@ -1048,7 +1049,9 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   top-slide sheet. Account metadata lives in `calendars.json`; **passwords and
   M365 refresh tokens** are stored in the freedesktop Secret Service via
   `metis-secrets` / oo7 (Metis’s `metis-secretsd` provider by default), not in
-  the JSON file. Removing an account also deletes its keyring entries.
+  the JSON file. Removing an account also deletes its keyring entries. After
+  login, unlock the Metis vault with your account password when prompted (PAM);
+  secrets stay unavailable until unlock.
 - **Input** — mouse, touchpad, and keyboard layout/repeat settings (`input.json`),
   plus **Keyboard → Shortcuts** to edit desktop keybinds (`keybinds.json`, live
   reload). **Shortcuts** (sidebar) is a searchable read-only chord guide with a
@@ -1084,8 +1087,8 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   the connection address, or open **Metis Viewer**. Requires a real (DRM)
   session — not nested dev. Open with `metis-cmd settings remote` or
   `metis-cmd viewer`.
-- **Sound** — default output and input device selection (bar volume widget
-  unchanged).
+- **Sound** — default output and input device selection via PipeWire/Pulse
+  (libpulse in the shell; bar volume scroll/mute uses the same path).
 - **Updates** — automatic checks (default every 6 hours; first soft check ~90s
   after login), source toggles (PackageKit / Flatpak / fwupd), notify-on-available,
   optional PackageKit security auto-install, **Check now** (full sources — also

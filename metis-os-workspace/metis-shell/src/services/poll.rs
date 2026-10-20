@@ -615,19 +615,21 @@ fn poll_loop(
         if network_dirty || tick.is_multiple_of(network_tick) {
             refresh_network_cache(&mut cached, &mut wifi_scan_grace_until);
         }
-        if tick.is_multiple_of(2) || audio_changed {
-            // Keep the last good reading when pactl times out / reports nothing,
+        let audio_dirty = crate::services::pulse_audio::take_dirty();
+        if audio_changed || audio_dirty || tick.is_multiple_of(10) {
+            // Keep the last good reading when Pulse times out / reports nothing,
             // so a transient failure doesn't snap sliders to 0 or flip mute state.
-            if let Some(v) = read_volume_percent() {
+            let snap = crate::services::pulse_audio::snapshot();
+            if let Some(v) = snap.sink_percent {
                 cached.volume_percent = v;
             }
-            if let Some(m) = read_volume_muted() {
+            if let Some(m) = snap.sink_muted {
                 cached.volume_muted = m;
             }
-            if let Some(v) = read_mic_percent() {
+            if let Some(v) = snap.source_percent {
                 cached.mic_percent = v;
             }
-            if let Some(m) = read_mic_muted() {
+            if let Some(m) = snap.source_muted {
                 cached.mic_muted = m;
             }
         }
@@ -900,8 +902,15 @@ pub fn vpn_down(target: String) {
 
 /// Enable or disable the Bluetooth adapter radio.
 pub fn bluetooth_set_powered(on: bool) {
-    let state = if on { "on" } else { "off" };
-    spawn_bluetoothctl(vec!["power".into(), state.into()], Duration::from_secs(8));
+    std::thread::spawn(move || {
+        let Some(rt) = spawn_current_thread_runtime("bt power") else {
+            return;
+        };
+        if let Err(err) = rt.block_on(crate::services::bluez_dbus::set_powered(on)) {
+            tracing::warn!(%err, on, "bluez set Powered failed");
+        }
+        BT_DIRTY.store(true, Ordering::Relaxed);
+    });
 }
 
 fn run_wifi_connect(ssid: String, password: Option<String>) {
@@ -1249,33 +1258,6 @@ fn remember_vpn_password(target: &str, password: &str) {
         "password-flags=0",
     ]);
     let _ = run_command_with_timeout(&mut flags, Duration::from_secs(5));
-}
-
-/// Spawn a `bluetoothctl` invocation on a detached thread.
-fn spawn_bluetoothctl(args: Vec<String>, timeout: Duration) {
-    thread::spawn(move || {
-        let mut cmd = std::process::Command::new("bluetoothctl");
-        cmd.args(&args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let Ok(mut child) = cmd.spawn() else {
-            return;
-        };
-        let deadline = Instant::now() + timeout;
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) => {}
-                Err(_) => return,
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-    });
 }
 
 /// Split a terse (`-t`) nmcli line into fields, honoring `\:` / `\\` escapes.
@@ -1703,47 +1685,34 @@ fn read_bluetooth_status() -> BluetoothStatus {
     if !bluetooth_adapter_present() {
         return BluetoothStatus::default();
     }
-
-    let mut cmd = std::process::Command::new("bluetoothctl");
-    cmd.args(["show"]);
-    let Some(output) = run_command(&mut cmd) else {
+    let Some(rt) = spawn_current_thread_runtime("bluez inventory") else {
         return BluetoothStatus {
             adapter_present: true,
             ..BluetoothStatus::default()
         };
     };
-    let text = String::from_utf8_lossy(&output.stdout);
-    if !text.contains("Controller") || text.contains("No default controller") {
-        return BluetoothStatus::default();
+    let snap = rt.block_on(crate::services::bluez_dbus::read_snapshot());
+    if !snap.adapter_present {
+        return BluetoothStatus {
+            adapter_present: true,
+            ..BluetoothStatus::default()
+        };
     }
-    let powered = text.contains("Powered: yes");
+    let upower = read_upower_bt_batteries();
     let mut devices = Vec::new();
-    if powered {
-        let mut devices_cmd = std::process::Command::new("bluetoothctl");
-        devices_cmd.args(["devices", "Connected"]);
-        if let Some(o) = run_command(&mut devices_cmd) {
-            // Enumerate UPower once per poll so each device is a cheap map lookup
-            // rather than a fresh `upower -i` spawn.
-            let upower = read_upower_bt_batteries();
-            let dev_text = String::from_utf8_lossy(&o.stdout);
-            for line in dev_text.lines() {
-                if let Some(rest) = line.strip_prefix("Device ") {
-                    let mut parts = rest.splitn(2, ' ');
-                    let Some(address) = parts.next() else {
-                        continue;
-                    };
-                    let name = parts.next().unwrap_or(address).to_string();
-                    let battery = read_bluetooth_device_battery(address, &upower);
-                    devices.push(BluetoothDevice {
-                        address: address.to_string(),
-                        name,
-                        battery_percent: battery.percent,
-                        battery_charging: battery.charging,
-                    });
-                }
+    if snap.powered {
+        for d in snap.devices {
+            let mut battery = read_bluetooth_device_battery(&d.address, &upower);
+            if battery.percent.is_none() {
+                battery.percent = d.battery_percent;
             }
+            devices.push(BluetoothDevice {
+                address: d.address,
+                name: d.name,
+                battery_percent: battery.percent,
+                battery_charging: battery.charging,
+            });
         }
-        // Solaar is ~2s CLI — only when HID/UPower left gaps on connected devices.
         let needs_solaar = devices
             .iter()
             .any(|d| d.battery_percent.is_none() || d.battery_charging.is_none());
@@ -1754,7 +1723,7 @@ fn read_bluetooth_status() -> BluetoothStatus {
     let device_name = devices.first().map(|d| d.name.clone());
     BluetoothStatus {
         adapter_present: true,
-        powered,
+        powered: snap.powered,
         connected: !devices.is_empty(),
         device_name,
         devices,
@@ -1778,8 +1747,8 @@ struct DeviceBattery {
 ///    `capacity` and a `status` we can map to charging; no extra BlueZ config.
 /// 2. UPower — aggregates peripheral batteries and reports a `state` (charging /
 ///    discharging / fully-charged) for devices/drivers that support it.
-/// 3. BlueZ `Battery1` via `bluetoothctl info` ("Battery Percentage: 0xNN (NN)")
-///    — percentage only; the BT Battery Service has no charging characteristic.
+/// 3. BlueZ `Battery1` via ObjectManager (wired in `bluez_dbus`) — percentage
+///    only; the BT Battery Service has no charging characteristic.
 fn read_bluetooth_device_battery(
     address: &str,
     upower: &HashMap<String, DeviceBattery>,
@@ -1787,25 +1756,10 @@ fn read_bluetooth_device_battery(
     if let Some(batt) = read_hid_battery_for_address(address) {
         return batt;
     }
-    let mut batt = upower
+    upower
         .get(&address.to_ascii_uppercase())
         .copied()
-        .unwrap_or_default();
-    if batt.percent.is_some() {
-        return batt;
-    }
-    // BlueZ Battery1 via CLI only when HID/UPower left percentage empty.
-    let mut cmd = std::process::Command::new("bluetoothctl");
-    cmd.args(["info", address]);
-    batt.percent = run_command(&mut cmd).and_then(|output| {
-        let text = String::from_utf8_lossy(&output.stdout);
-        text.lines().find_map(|line| {
-            line.trim()
-                .strip_prefix("Battery Percentage:")
-                .and_then(parse_battery_percentage)
-        })
-    });
-    batt
+        .unwrap_or_default()
 }
 
 /// Enumerate UPower peripheral batteries once, keyed by uppercased MAC.
@@ -2013,6 +1967,7 @@ fn parse_solaar_battery(rest: &str) -> DeviceBattery {
 
 /// Parse a BlueZ battery field like `0x40 (64)` — prefer the decimal in parens,
 /// falling back to decoding the `0xNN` hex value.
+#[cfg(test)]
 fn parse_battery_percentage(field: &str) -> Option<u8> {
     let field = field.trim();
     if let (Some(start), Some(end)) = (field.find('('), field.find(')'))
@@ -2094,48 +2049,8 @@ fn run_command_with_timeout(
     }
 }
 
-fn read_volume_percent() -> Option<u8> {
-    let mut cmd = std::process::Command::new("pactl");
-    cmd.args(["get-sink-volume", "@DEFAULT_SINK@"]);
-    run_command(&mut cmd).and_then(|o| {
-        let text = String::from_utf8_lossy(&o.stdout);
-        text.split_whitespace()
-            .nth(4)
-            .and_then(|s| s.trim_end_matches('%').parse().ok())
-    })
-}
-
 fn read_volume_muted() -> Option<bool> {
-    let mut cmd = std::process::Command::new("pactl");
-    cmd.args(["get-sink-mute", "@DEFAULT_SINK@"]);
-    run_command(&mut cmd).and_then(|o| parse_mute(&String::from_utf8_lossy(&o.stdout)))
-}
-
-fn parse_mute(text: &str) -> Option<bool> {
-    if text.contains("yes") {
-        Some(true)
-    } else if text.contains("no") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-fn read_mic_percent() -> Option<u8> {
-    let mut cmd = std::process::Command::new("pactl");
-    cmd.args(["get-source-volume", "@DEFAULT_SOURCE@"]);
-    run_command(&mut cmd).and_then(|o| {
-        let text = String::from_utf8_lossy(&o.stdout);
-        text.split_whitespace()
-            .nth(4)
-            .and_then(|s| s.trim_end_matches('%').parse().ok())
-    })
-}
-
-fn read_mic_muted() -> Option<bool> {
-    let mut cmd = std::process::Command::new("pactl");
-    cmd.args(["get-source-mute", "@DEFAULT_SOURCE@"]);
-    run_command(&mut cmd).and_then(|o| parse_mute(&String::from_utf8_lossy(&o.stdout)))
+    crate::services::pulse_audio::snapshot().sink_muted
 }
 
 pub fn set_volume_relative(delta: i8) {
@@ -2160,54 +2075,28 @@ pub fn set_mute(muted: bool) {
 
 #[allow(dead_code)] // audio control helper
 pub fn toggle_mute() {
-    let _ = std::process::Command::new("pactl")
-        .args(["set-sink-mute", "@DEFAULT_SINK@", "toggle"])
-        .status();
+    let muted = read_volume_muted().unwrap_or(false);
+    crate::services::pulse_audio::set_sink_mute(!muted);
 }
 
 fn run_set_volume_relative(delta: i8) {
-    let sign = if delta >= 0 { "+" } else { "" };
-    let mut cmd = std::process::Command::new("pactl");
-    cmd.args([
-        "set-sink-volume",
-        "@DEFAULT_SINK@",
-        &format!("{sign}{delta}%"),
-    ]);
-    let _ = run_command(&mut cmd);
+    crate::services::pulse_audio::set_sink_volume_relative(delta);
 }
 
 fn run_set_volume_absolute(percent: u8) {
-    let mut cmd = std::process::Command::new("pactl");
-    cmd.args([
-        "set-sink-volume",
-        "@DEFAULT_SINK@",
-        &format!("{}%", percent.min(100)),
-    ]);
-    let _ = run_command(&mut cmd);
+    crate::services::pulse_audio::set_sink_volume_absolute(percent);
 }
 
 fn run_set_mute(muted: bool) {
-    let flag = if muted { "yes" } else { "no" };
-    let mut cmd = std::process::Command::new("pactl");
-    cmd.args(["set-sink-mute", "@DEFAULT_SINK@", flag]);
-    let _ = run_command(&mut cmd);
+    crate::services::pulse_audio::set_sink_mute(muted);
 }
 
 fn run_set_mic_volume_absolute(percent: u8) {
-    let mut cmd = std::process::Command::new("pactl");
-    cmd.args([
-        "set-source-volume",
-        "@DEFAULT_SOURCE@",
-        &format!("{}%", percent.min(100)),
-    ]);
-    let _ = run_command(&mut cmd);
+    crate::services::pulse_audio::set_source_volume_absolute(percent);
 }
 
 fn run_set_mic_mute(muted: bool) {
-    let flag = if muted { "yes" } else { "no" };
-    let mut cmd = std::process::Command::new("pactl");
-    cmd.args(["set-source-mute", "@DEFAULT_SOURCE@", flag]);
-    let _ = run_command(&mut cmd);
+    crate::services::pulse_audio::set_source_mute(muted);
 }
 
 #[cfg(test)]
@@ -2371,12 +2260,7 @@ lo:loopback:unmanaged:--\n";
     }
 
     #[test]
-    fn parse_mute_and_battery_helpers() {
-        assert_eq!(parse_mute("Mute: yes"), Some(true));
-        assert_eq!(parse_mute("Mute: no"), Some(false));
-        // Substring match: any non-yes/no text with neither token → None.
-        assert_eq!(parse_mute("Mute: maybe"), None);
-
+    fn parse_battery_helpers() {
         let full = parse_solaar_battery(" N/A, full, next level 0%.");
         assert_eq!(full.percent, None);
         assert_eq!(full.charging, Some(true));

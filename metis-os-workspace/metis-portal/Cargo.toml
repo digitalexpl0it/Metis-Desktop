@@ -11,7 +11,7 @@ name = "metis-portal"
 path = "src/main.rs"
 
 [dependencies]
-ashpd = { version = "0.13", default-features = false, features = ["backend", "background", "settings", "screenshot", "screencast", "tokio"] }
+ashpd = { version = "0.13", default-features = false, features = ["backend", "background", "settings", "screenshot", "screencast", "secret", "tokio"] }
 async-trait = "0.1"
 enumflags2 = "0.7"
 futures-util = "0.3"
@@ -22,7 +22,9 @@ libc = "0.2"
 metis-capture = { workspace = true }
 metis-config = { workspace = true }
 metis-protocol = { workspace = true }
+metis-secrets = { workspace = true }
 png = "0.18"
+rand = "0.8"
 # 0.8 breaks against PipeWire 1.x headers (Ubuntu 26.04 / Debian 13): bindgen
 # emits opaque spa_pod_builder. 0.9+ fixes clang macro fallback; 0.10 adds v1_*.
 pipewire = { version = "0.10", features = ["v0_3_34"] }

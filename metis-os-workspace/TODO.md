@@ -57,18 +57,21 @@ is tracked under **Product backlog — Desktop maturity** below.
       fail-fallback only (ExportMem still available).
       → Wave 3a, Phase 3 multi-GPU notes, Phase 18 §E.
       *(dmabuf transfer 2026-09-27; MultiRenderer Wave A/B/C 2026-10-03)*
-- [ ] **2. True per-surface HDR decode** — mixed SDR+HDR on HDR outputs uses a
-      Rec.709 **scene-linear** composite (HDR decode + SDR client/wallpaper/
-      layer-shell lift, linear SSD + blur + night-light/battery-dim taps; prefer
-      float/10-bit FBO) with BT.2390-style EETF at encode; Stage-2 ICC uses a
-      linear Rec.709→display atlas on the float path (sRGB atlas elsewhere);
+- [x] **2. True per-surface HDR decode** (2026-10-20 close-out) — mixed
+      SDR+HDR on HDR outputs uses a Rec.709 **scene-linear** composite (HDR
+      decode + SDR client/wallpaper/layer-shell lift, linear SSD + blur +
+      night-light/battery-dim taps; prefer float/10-bit FBO) with BT.2390 EETF
+      at encode (knee + fixed dark-room black lift); Stage-2 ICC uses a linear
+      Rec.709→display atlas on the float path (sRGB atlas elsewhere);
       scroll/genie crop on GLES and hybrid Multi. Falls back to display-referred
       sRGB decode when float/10-bit is unavailable or the panel is SDR. HDR-only
       / fullscreen still pass-through (night light skipped only on that path).
-      **Residual:** default-on `wp_color_management_v1` (blocked on wayland-rs#949;
-      keep `METIS_COLOR_MGMT=1` opt-in) — see Wave **3b**.
-      → Phase 5 §B residual. *(decode 2026-09-27; crop+decode + tone-map + float
-      scene-linear + BT.2390/chrome 2026-10-03; ICC + layer/night-light 2026-10-10)*
+      **Still deferred (not part of #2):** default-on `wp_color_management_v1`
+      (blocked on wayland-rs#949; keep `METIS_COLOR_MGMT=1` opt-in) — Wave
+      **3b** / maturity **M2**.
+      → Phase 5 §B. *(decode 2026-09-27; crop+decode + tone-map + float
+      scene-linear + BT.2390/chrome 2026-10-03; ICC + layer/night-light
+      2026-10-10; EETF black-lift + docs close-out 2026-10-20)*
 - [x] **3. Metis-native remote host** — **Landed (2026-10-03…2026-10-11):**
       **RUDP** Phases 1–8 + clipboard/audio/HW decode/AV1/packet queue;
       **Metis native RDP** via `metis-rdp-host` (portal ScreenCast + FreeRDP;
@@ -88,8 +91,8 @@ is tracked under **Product backlog — Desktop maturity** below.
       still uses `gamescope_big_picture`.
       → Phase 19 §C. *(landed 2026-09-27)*
 
-**Suggested order:** S1–S3 + MultiRenderer **1** + HDR float scene **2** (core)
-done → **2** residuals (BT.2390 / colour protocol) or engineering backlog next;
+**Suggested order:** S1–S3 + MultiRenderer **1** + HDR float scene **2** landed
+→ colour protocol default-on (**3b** / **M2**, blocked) or engineering backlog;
 Gamescope **4** and native remote **3** landed.
 
 ### Product backlog — Themes, icons, default apps (2026-10-18)
@@ -184,7 +187,8 @@ called out as residuals only. Prefer working top→bottom.
       Kill-switch `METIS_WIDGET_WASM=0`. v1 JSON + helpers unchanged.
       → Wave **2** / Phase 14 §E.2.
 
-**Suggested order:** **M1**/**M3**–**M7** landed → **M2** when upstream allows.
+**Suggested order:** **M1**/**M3**–**M7** + Urgent **#2** HDR landed → **M2**
+when upstream allows.
 
 ---
 
@@ -214,7 +218,13 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       `$XDG_DATA_HOME/metis/secrets/`); leave third-party owners alone; portal
       `Secret=` unpinned; gnome-keyring is Suggests/fallback only. Decision:
       [`docs/decisions/secret-service-provider.md`](../docs/decisions/secret-service-provider.md).
-      Residuals: PAM unlock, portal Secret, SSH agent.
+- [x] **Secrets PAM vault + portal Secret** (2026-10-20) — vault format v2
+      (`vault.wrap` Argon2id + ChaCha20Poly1305; migrate/delete legacy
+      `vault.key`); daemon starts locked; `UnlockWithPassword` via PAM
+      (`metis` → `system-login` → `login`); shell unlock prompt; fail-closed
+      search/get until unlocked. `metis-portal`
+      `org.freedesktop.impl.portal.Secret` + packaging pin. Residual: SSH agent;
+      SS prompt/ACL parity; re-wrap after login password change.
 
 ### Performance / resources
 
@@ -239,8 +249,13 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       `perf_event_paranoid`≤2); empty-desktop idle.
 - [x] **Shell poll D-Bus dirty + fewer forks** (2026-10-07) — BlueZ/UPower
       dirty wakes; UPower via zbus; gate `bluetoothctl info` / `solaar`; stretch
-      nmcli heartbeat when NM watcher is alive. Residual: Pulse still `pactl`;
-      BlueZ inventory still `bluetoothctl show` / `devices Connected`.
+      nmcli heartbeat when NM watcher is alive.
+- [x] **Shell poll BlueZ OM + libpulse** (2026-10-20) — inventory / power /
+      battery via `org.bluez` ObjectManager + `Battery1`; volume/mute/defaults
+      via in-process libpulse worker + `AUDIO_DIRTY` (no bar/HW `pactl` /
+      `bluetoothctl` forks). Optional Solaar CLI overlay kept. Residual:
+      equalizer monitor source still resolves default sink via one-shot `pactl`
+      when needed.
 
 ### Code quality / maintainability
 
@@ -255,8 +270,10 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       parse failure (seed only when missing). `bar` migrate once-guard unchanged.
 - [x] **Split `state.rs`** (2026-10-07) — X11 lifecycle → `xwayland.rs`; geometry →
       `window_geometry.rs`; desk/scroll/workspaces → `desk.rs` (`OutputDesk`
-      re-exported from `state`). Residual: `handle_ipc` / spawn / output reflow
-      still in `state.rs` (~5.5k).
+      re-exported from `state`).
+- [x] **`state.rs` spawn / IPC / bar reflow extract** (2026-10-20) —
+      `spawn.rs`, `ipc_handlers.rs`, `bar_reflow.rs` (mechanical; no behavior
+      change). Residual: `state.rs` still ~4.5k (further splits later).
 - [x] **Split / share CSS** (2026-10-08) — `metis-config` `css/` modules;
       Settings uses `build_settings_app_stylesheet` (opaque + appearance
       preview + chrome) instead of the shell sheet; shared
@@ -305,12 +322,12 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       wayland-rs server/sys ObjectData UAF; keep `METIS_COLOR_MGMT=1` opt-in
       ([docs/upstream/](../docs/upstream/README.md)) — see maturity **M2**
 - [x] **3c** Per-surface HDR **pass-through** into encode path (PQ/HLG hints;
-      mixed SDR+HDR approximate). **Partial (2026-09-27 / 2026-10-03 /
-      2026-10-10):** per-window PQ/HLG decode (scroll/genie crop) + float
+      mixed SDR+HDR). **Landed (2026-09-27 / 2026-10-03 / 2026-10-10 /
+      2026-10-20):** per-window PQ/HLG decode (scroll/genie crop) + float
       scene-linear on HDR outputs (windows/wallpaper/SSD/blur/layer-shell) +
-      BT.2390-style encode + HDR-only pass-through; linear-aware Stage-2 ICC +
-      night-light/battery-dim on encode (not HdrOnly). **Residual:** default-on
-      colour protocol — Wave **3b** / **Urgent #2**.
+      BT.2390 EETF encode (knee + black lift) + HDR-only pass-through;
+      linear-aware Stage-2 ICC + night-light/battery-dim on encode (not
+      HdrOnly). Colour-protocol default-on remains Wave **3b** / **M2**.
 
 ### Wave 4 — Remote
 - [x] **4a** `metis-remote rustdesk status|enable|disable` + firewall/Polkit +
@@ -733,7 +750,8 @@ compositor live-reloads (mirrors the `bar.json` watcher pattern).
 ### Devices (D-Bus services)
 - [x] **Bluetooth** — adapter on/off, scan (toggle + auto-stop), pair / connect /
       trust / remove, battery level and charging state where reported; via BlueZ
-      (`bluetoothctl`) with UPower and optional Solaar (Logitech HID++) overlays.
+      D-Bus (bar: ObjectManager / Battery1; Settings may still use CLI tools)
+      with UPower and optional Solaar (Logitech HID++) overlays.
       Bar indicator appears only when an adapter is present
       (`BarWidgetId::Bluetooth`); popover lists connected devices with battery
       icons; low-battery in-bar alerts (≤20%, hysteresis, suppressed while
@@ -747,8 +765,8 @@ compositor live-reloads (mirrors the `bar.json` watcher pattern).
       suspend/lid via logind (best-effort); persisted to `power.json`; battery widget
       links to Power settings; **Connected devices** section lists Bluetooth peripherals
       with battery + charging status. **Follow-up:** wire **Dim on battery** to compositor.
-- [x] **Sound** — output / input device selection via `pactl` default sink/source;
-      volume readout on the settings page (bar volume widget unchanged)
+- [x] **Sound** — output / input device selection via libpulse default sink/source;
+      volume readout on the settings page (bar volume widget uses the same worker)
 - [x] **Display (settings UI)** — Settings → Display: monitor picker chips, per-output
       scale/enabled, night-light prefs in `outputs.json`; scale and enable/disable
       apply live via `ReloadOutputs` IPC + compositor file poll. Resolution /
@@ -1939,7 +1957,8 @@ big-bang `state.rs` rewrite; Sober/Flatpak app bugs unrelated to Metis portals.
 - [x] **Colour-management default-off assertion** — unit/doc coverage that the
       default env/config path does not enable `wp_color_management_v1`
 - [x] **Opportunistic `state.rs` extract** — `ipc_dispatch.rs` for IPC caps /
-      gating; further extracts as areas are touched (no big-bang rewrite)
+      gating; 2026-10-20: `spawn.rs` / `ipc_handlers.rs` / `bar_reflow.rs`
+      (~4.5k residual in `state.rs`)
 - [x] **Remaining intentional panics** — init-only `expect` / impossible
       calloop registration failures may still abort under `panic = "abort"`;
       prefer `tracing::warn!` on hot paths. Defer crate-wide `unwrap_used` deny
@@ -1971,6 +1990,8 @@ big-bang `state.rs` rewrite; Sober/Flatpak app bugs unrelated to Metis portals.
 - [x] **BlueZ / UPower dirty wakes + fewer CLI forks** (2026-10-07) — `BT_DIRTY` /
       `POWER_DIRTY`; UPower enumerate via zbus; gate `bluetoothctl info` /
       `solaar`; nmcli timed heartbeat ×4 when NM watcher lives
+- [x] **BlueZ ObjectManager + libpulse volume** (2026-10-20) — drop bar/HW
+      `bluetoothctl` / `pactl` forks; Pulse subscribe → `AUDIO_DIRTY`
 - [x] **GSK env documented** — `METIS_SHELL_GSK_RENDERER=gl` opt-in; Cairo default
       for shell. Settings defaults to Cairo too (`METIS_SETTINGS_GSK_RENDERER`,
       2026-09-19)
@@ -2317,10 +2338,10 @@ Send runtime commands to a running shell with `scripts/metis-cmd.sh {close-popov
 | Tasks | Running-apps dock — live compositor window state (`services/windows.rs`), per-app grouping, pin/minimize |
 | Clock | Opens Notification Center (calendar, world clocks, stopwatch, timer, alarms) + unread badge |
 | Battery | `/sys/class/power_supply/BAT*` |
-| Bluetooth | BlueZ (`bluetoothctl`) + UPower + optional Solaar (Logitech HID++); bar popover lists connected devices |
+| Bluetooth | BlueZ D-Bus (ObjectManager / Battery1) + UPower + optional Solaar (Logitech HID++); bar popover lists connected devices |
 | Network | `nmcli` (Wi-Fi + Ethernet) |
 | VPN | `nmcli` (OpenVPN / WireGuard connect/disconnect) |
-| Volume | `pactl` (scroll on widget to adjust) |
+| Volume | libpulse (scroll on widget to adjust; equalizer may one-shot `pactl` for monitor source) |
 | Notifications | *(optional)* Same Notification Center as clock; freedesktop D-Bus → runtime store |
 | Weather | Open-Meteo (keyless); IP-geolocation auto-detect (timezone fallback), override in Settings |
 

@@ -48,6 +48,11 @@ pub const OUTPUT_MASTERING_PEAK_NITS: f32 = 400.0;
 /// (HDR client on an SDR panel). Typical PQ/HLG grade peak.
 pub const DEFAULT_CONTENT_MAX_NITS: f32 = 1000.0;
 
+/// Assumed target-display black floor (nits) for BT.2390 EETF black lift.
+/// Dark-room default; no Settings knob. Passed as `display_min_nits` to the
+/// float encode shaders.
+pub const DEFAULT_DISPLAY_MIN_NITS: f32 = 0.005;
+
 /// Transfer function used for HDR encode + matching `HDR_OUTPUT_METADATA` EOTF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HdrTransfer {
@@ -604,6 +609,7 @@ uniform float alpha;
 varying vec2 v_coords;
 uniform float reference_white;
 uniform float content_max_nits;
+uniform float display_min_nits;
 
 #if defined(DEBUG_FLAGS)
 uniform float tint;
@@ -628,9 +634,9 @@ float linear_to_pq(float y) {
     return pow((c1 + c2 * ym) / (1.0 + c3 * ym), m2);
 }
 
-// BT.2390-10 EETF approximation (skip black lift). Input is scene-linear
-// relative to reference_white (1.0 = rw nits); returns absolute PQ code.
-float bt2390_eetf_pq(float x_rel, float rw, float peak) {
+// BT.2390-10 EETF (knee + black lift). Input is scene-linear relative to
+// reference_white (1.0 = rw nits); returns absolute PQ code.
+float bt2390_eetf_pq(float x_rel, float rw, float peak, float lmin) {
     float Y = max(x_rel, 0.0) * rw;
     float E = linear_to_pq(Y / 10000.0);
     float Ep = max(linear_to_pq(peak / 10000.0), 1e-6);
@@ -649,7 +655,9 @@ float bt2390_eetf_pq(float x_rel, float rw, float peak) {
            + (t3 - 2.0 * t2 + t) * (1.0 - KS)
            + (-2.0 * t3 + 3.0 * t2);
     }
-    return clamp(E2 * Ep, 0.0, 1.0);
+    float b = clamp(linear_to_pq(max(lmin, 0.0) / 10000.0) / Ep, 0.0, 1.0);
+    float E3 = E2 + b * pow(max(1.0 - E2, 0.0), 4.0);
+    return clamp(E3 * Ep, 0.0, 1.0);
 }
 
 void main() {
@@ -660,11 +668,12 @@ void main() {
 
     float rw = max(reference_white, 1.0);
     float peak = max(content_max_nits, rw);
+    float lmin = max(display_min_nits, 0.0);
     vec3 c2020 = rec709_to_bt2020(max(lin_in.rgb, vec3(0.0)));
     vec3 pq = vec3(
-        bt2390_eetf_pq(c2020.r, rw, peak),
-        bt2390_eetf_pq(c2020.g, rw, peak),
-        bt2390_eetf_pq(c2020.b, rw, peak)
+        bt2390_eetf_pq(c2020.r, rw, peak, lmin),
+        bt2390_eetf_pq(c2020.g, rw, peak, lmin),
+        bt2390_eetf_pq(c2020.b, rw, peak, lmin)
     );
 
     vec4 color = vec4(pq, lin_in.a) * alpha;
@@ -698,6 +707,7 @@ uniform float alpha;
 varying vec2 v_coords;
 uniform float reference_white;
 uniform float content_max_nits;
+uniform float display_min_nits;
 
 #if defined(DEBUG_FLAGS)
 uniform float tint;
@@ -746,7 +756,9 @@ float linear_to_hlg(float x) {
     return a * log(12.0 * x - b) + c;
 }
 
-float bt2390_eetf_pq(float x_rel, float rw, float peak) {
+// BT.2390-10 EETF (knee + black lift). Same as PQ float encode.
+// HLG parity = EETF-in-PQ then OETF.
+float bt2390_eetf_pq(float x_rel, float rw, float peak, float lmin) {
     float Y = max(x_rel, 0.0) * rw;
     float E = linear_to_pq(Y / 10000.0);
     float Ep = max(linear_to_pq(peak / 10000.0), 1e-6);
@@ -765,7 +777,9 @@ float bt2390_eetf_pq(float x_rel, float rw, float peak) {
            + (t3 - 2.0 * t2 + t) * (1.0 - KS)
            + (-2.0 * t3 + 3.0 * t2);
     }
-    return clamp(E2 * Ep, 0.0, 1.0);
+    float b = clamp(linear_to_pq(max(lmin, 0.0) / 10000.0) / Ep, 0.0, 1.0);
+    float E3 = E2 + b * pow(max(1.0 - E2, 0.0), 4.0);
+    return clamp(E3 * Ep, 0.0, 1.0);
 }
 
 void main() {
@@ -776,12 +790,13 @@ void main() {
 
     float rw = max(reference_white, 1.0);
     float peak = max(content_max_nits, rw);
+    float lmin = max(display_min_nits, 0.0);
     vec3 c2020 = rec709_to_bt2020(max(lin_in.rgb, vec3(0.0)));
     // EETF in PQ, then linear nits → HLG OETF (1000-nit system).
     vec3 pq = vec3(
-        bt2390_eetf_pq(c2020.r, rw, peak),
-        bt2390_eetf_pq(c2020.g, rw, peak),
-        bt2390_eetf_pq(c2020.b, rw, peak)
+        bt2390_eetf_pq(c2020.r, rw, peak, lmin),
+        bt2390_eetf_pq(c2020.g, rw, peak, lmin),
+        bt2390_eetf_pq(c2020.b, rw, peak, lmin)
     );
     vec3 nits = vec3(
         pq_to_linear(pq.r),
@@ -962,6 +977,7 @@ impl HdrEncodeRuntime {
                     &[
                         UniformName::new("reference_white", UniformType::_1f),
                         UniformName::new("content_max_nits", UniformType::_1f),
+                        UniformName::new("display_min_nits", UniformType::_1f),
                     ],
                 ) {
                     Ok(program) => {
@@ -982,6 +998,7 @@ impl HdrEncodeRuntime {
                     &[
                         UniformName::new("reference_white", UniformType::_1f),
                         UniformName::new("content_max_nits", UniformType::_1f),
+                        UniformName::new("display_min_nits", UniformType::_1f),
                     ],
                 ) {
                     Ok(program) => {
@@ -1518,6 +1535,7 @@ impl HdrEncodeRuntime {
                 vec![
                     Uniform::new("reference_white", REFERENCE_WHITE_NITS),
                     Uniform::new("content_max_nits", content_max),
+                    Uniform::new("display_min_nits", DEFAULT_DISPLAY_MIN_NITS),
                 ],
             )
         } else {
@@ -1566,6 +1584,7 @@ impl HdrEncodeRuntime {
                 vec![
                     Uniform::new("reference_white", REFERENCE_WHITE_NITS),
                     Uniform::new("content_max_nits", content_max),
+                    Uniform::new("display_min_nits", DEFAULT_DISPLAY_MIN_NITS),
                 ],
             )
         } else {
@@ -1604,3 +1623,91 @@ pub const HDR_CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 /// Transparent clear when rendering a single HDR window for decode.
 const DECODE_CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CPU mirror of the float-encode GLSL `linear_to_pq` (ST.2084).
+    fn linear_to_pq_sample(y: f32) -> f32 {
+        let y = y.max(0.0);
+        let m1 = 2610.0 / 16384.0;
+        let m2 = 2523.0 / 32.0;
+        let c1 = 3424.0 / 4096.0;
+        let c2 = 2413.0 / 128.0;
+        let c3 = 2392.0 / 128.0;
+        let ym = y.powf(m1);
+        ((c1 + c2 * ym) / (1.0 + c3 * ym)).powf(m2)
+    }
+
+    /// Knee-only path (pre–black-lift): returns `(E2, Ep)`.
+    fn bt2390_eetf_knee_normalized(x_rel: f32, rw: f32, peak: f32) -> (f32, f32) {
+        let rw = rw.max(1.0);
+        let peak = peak.max(rw);
+        let y = x_rel.max(0.0) * rw;
+        let e = linear_to_pq_sample(y / 10000.0);
+        let ep = linear_to_pq_sample(peak / 10000.0).max(1e-6);
+        let es = linear_to_pq_sample(rw / 10000.0);
+        let e1 = e / ep;
+        let es1 = es / ep;
+        let ks = (1.5 * es1 - 0.5).clamp(0.0, 0.99);
+        let e2 = if e1 < ks {
+            e1
+        } else {
+            let t = ((e1 - ks) / (1.0 - ks).max(1e-6)).clamp(0.0, 1.0);
+            let t2 = t * t;
+            let t3 = t2 * t;
+            (2.0 * t3 - 3.0 * t2 + 1.0) * ks
+                + (t3 - 2.0 * t2 + t) * (1.0 - ks)
+                + (-2.0 * t3 + 3.0 * t2)
+        };
+        (e2, ep)
+    }
+
+    /// CPU mirror of float-encode `bt2390_eetf_pq` (knee + black lift).
+    fn bt2390_eetf_pq_sample(x_rel: f32, rw: f32, peak: f32, min_nits: f32) -> f32 {
+        let (e2, ep) = bt2390_eetf_knee_normalized(x_rel, rw, peak);
+        let b = (linear_to_pq_sample(min_nits.max(0.0) / 10000.0) / ep).clamp(0.0, 1.0);
+        let e3 = e2 + b * (1.0 - e2).max(0.0).powi(4);
+        (e3 * ep).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn eetf_zero_black_matches_knee_only() {
+        let rw = REFERENCE_WHITE_NITS;
+        let peak = OUTPUT_MASTERING_PEAK_NITS;
+        for x in [0.0_f32, 0.01, 0.25, 1.0, 2.0] {
+            let with_b = bt2390_eetf_pq_sample(x, rw, peak, 0.0);
+            let (e2, ep) = bt2390_eetf_knee_normalized(x, rw, peak);
+            let knee = (e2 * ep).clamp(0.0, 1.0);
+            assert!((with_b - knee).abs() < 1e-6, "x={x}");
+        }
+    }
+
+    #[test]
+    fn eetf_black_lift_raises_shadows_not_mids() {
+        let rw = REFERENCE_WHITE_NITS;
+        let peak = OUTPUT_MASTERING_PEAK_NITS;
+        let near_black = 0.0_f32;
+        let mid = 1.0_f32; // reference white
+        let lifted_black = bt2390_eetf_pq_sample(near_black, rw, peak, DEFAULT_DISPLAY_MIN_NITS);
+        let knee_black = bt2390_eetf_pq_sample(near_black, rw, peak, 0.0);
+        assert!(
+            lifted_black > knee_black + 1e-6,
+            "black lift should raise PQ at x=0 ({lifted_black} vs {knee_black})"
+        );
+
+        let lifted_mid = bt2390_eetf_pq_sample(mid, rw, peak, DEFAULT_DISPLAY_MIN_NITS);
+        let knee_mid = bt2390_eetf_pq_sample(mid, rw, peak, 0.0);
+        // Taper (1-E2)^4 keeps mid-tones nearly unchanged.
+        assert!(
+            (lifted_mid - knee_mid).abs() < 5e-4,
+            "mid should stay near knee-only ({lifted_mid} vs {knee_mid})"
+        );
+    }
+
+    #[test]
+    fn eetf_default_min_nits_is_dark_room_floor() {
+        assert!((DEFAULT_DISPLAY_MIN_NITS - 0.005).abs() < f32::EPSILON);
+    }
+}

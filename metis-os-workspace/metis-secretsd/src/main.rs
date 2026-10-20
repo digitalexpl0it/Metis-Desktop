@@ -2,6 +2,7 @@
 //! provider is already on the session bus.
 
 mod dbus_api;
+mod pam_auth;
 mod vault;
 
 use std::process::ExitCode;
@@ -10,7 +11,8 @@ use tracing_subscriber::EnvFilter;
 use zbus::Connection;
 
 use crate::dbus_api::{
-    AppState, COLLECTION_PATH, CollectionIface, SERVICE_PATH, ServiceIface, register_existing_items,
+    AppState, COLLECTION_PATH, CollectionIface, MetisSecretsIface, SERVICE_PATH, ServiceIface,
+    register_existing_items,
 };
 use crate::vault::Vault;
 
@@ -68,6 +70,20 @@ async fn main() -> ExitCode {
         .await
     {
         tracing::error!(%err, "serve Service failed");
+        return ExitCode::from(1);
+    }
+
+    if let Err(err) = connection
+        .object_server()
+        .at(
+            SERVICE_PATH,
+            MetisSecretsIface {
+                state: state.clone(),
+            },
+        )
+        .await
+    {
+        tracing::error!(%err, "serve org.metis.Secrets1 failed");
         return ExitCode::from(1);
     }
 

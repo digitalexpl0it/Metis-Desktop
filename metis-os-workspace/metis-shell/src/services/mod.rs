@@ -1,5 +1,6 @@
 pub mod applications;
 pub mod audio_viz;
+mod bluez_dbus;
 pub mod calendar;
 mod clipboard;
 mod dashboard;
@@ -8,6 +9,7 @@ pub mod launch_pending;
 mod notifications;
 mod notify_dbus;
 mod poll;
+mod pulse_audio;
 pub mod secrets;
 mod tray;
 mod tray_dbus_types;
