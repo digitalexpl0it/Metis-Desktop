@@ -1,0 +1,27 @@
+{
+  "type": "column",
+  "spacing": 10,
+  "children": [
+    {
+      "type": "label",
+      "id": "title",
+      "text": "WASM widget",
+      "style": "title"
+    },
+    {
+      "type": "label",
+      "id": "status",
+      "text": "loading…",
+      "style": "muted"
+    },
+    {
+      "type": "button",
+      "id": "open_btn",
+      "label": "Open example.com",
+      "on_click": {
+        "action": "wasm_event",
+        "event": "open"
+      }
+    }
+  ]
+}

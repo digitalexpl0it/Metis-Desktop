@@ -177,14 +177,14 @@ called out as residuals only. Prefer working top→bottom.
 
 #### Widget extensibility
 
-- [ ] **M7. Sandboxed widget scripts (WASM and/or Rhai)** — Extension API v1 stays
-      declarative JSON; evaluate a heavily sandboxed in-process runtime for
-      interactive third-party widgets without loading arbitrary `.so`s.
-      Explicitly deferred today (Wave **2** / Phase 14 §E.2). Revisit with a
-      security design note before enabling.
+- [x] **M7. Sandboxed widget WASM (Extension API v2)** (2026-10-20) —
+      Wasmtime host (`metis-widget-wasm`); ADR + ABI + authoring docs; `api: 2`
+      manifest `wasm.module`, node `id`, `wasm_event`; shell desktop-widgets
+      instantiate/tick/effects; example `com.metis.example.wasmstatus`.
+      Kill-switch `METIS_WIDGET_WASM=0`. v1 JSON + helpers unchanged.
+      → Wave **2** / Phase 14 §E.2.
 
-**Suggested order:** **M1**/**M3**/**M4**/**M5**/**M6** landed → **M2** when
-upstream allows → **M7** last.
+**Suggested order:** **M1**/**M3**–**M7** landed → **M2** when upstream allows.
 
 ---
 
@@ -293,7 +293,8 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 
 ### Wave 2 — Widget §E.2 helpers
 - [x] Pack `helper` manifest + argv-only spawn + `{helper.*}` + example pack
-- [ ] In-process scripts / WASM (explicitly deferred) — see maturity **M7**
+- [x] In-process **WASM** (M7, 2026-10-20) — Wasmtime + `api: 2` host ABI
+      (Rhai/Lua declined)
 
 ### Wave 3 — Graphics
 - [x] **3a** Primary→secondary transfer for hybrid outputs (CPU readback path;
@@ -1771,9 +1772,10 @@ Config sketch:
       in-process `.so` in v1
 - [x] **§E.2 out-of-process helpers** (2026-07-27) — pack `helper.exec` basename,
       argv-only spawn, `{helper.*}` tokens; example `com.metis.example.helperstatus`
-- [ ] **§E.2 scripts / WASM** — Rhai/Lua/WASM runtimes still deferred
+- [x] **§E.2 WASM (M7)** (2026-10-20) — in-process Wasmtime (`api: 2`); Rhai/Lua
+      declined. See maturity **M7**.
 
-**Phase 14 complete (2026-07-18); §E JSON extensions shipped 2026-07-26; helpers 2026-07-27.**
+**Phase 14 complete (2026-07-18); §E JSON extensions shipped 2026-07-26; helpers 2026-07-27; WASM 2026-10-20.**
 
 **Dependencies:** Phase 1 theme/CSS + layer-shell patterns (done); Phase 10
 dashboard sampling (done); Phase 2 weather service (done); app launch /

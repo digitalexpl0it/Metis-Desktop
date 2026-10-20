@@ -5,8 +5,10 @@
 //! - `/usr/share/metis/widgets/<id>/` (and `/usr/local/share/...`)
 //!
 //! Each pack has `manifest.json` + `widget.json`. No scripts or `.so` loads.
+//! Optional `api: 2` packs may declare a sandboxed WASM module (M7); see
+//! `docs/decisions/widget-wasm.md`.
 //!
-//! **Host action hardening (v1):** `open_uri` is http(s) only; `launch` is
+//! **Host action hardening (v1/v2):** `open_uri` is http(s) only; `launch` is
 //! desktop-id or a single PATH basename (no argv / absolute paths); action
 //! fields are not settings-interpolated; layout trees are size-capped.
 
@@ -14,11 +16,17 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Current host API level understood by Metis.
-pub const WIDGET_EXT_API: u32 = 1;
+/// Latest Extension API level (v2 adds optional WASM).
+pub const WIDGET_EXT_API: u32 = 2;
+/// Original declarative-only API.
+pub const WIDGET_EXT_API_V1: u32 = 1;
+/// Declarative layout + optional sandboxed WASM module.
+pub const WIDGET_EXT_API_V2: u32 = 2;
 
 /// Reject oversized `widget.json` files before parse.
 pub const WIDGET_EXT_MAX_JSON_BYTES: u64 = 256 * 1024;
+/// Max WASM module bytes when `manifest.wasm` is set.
+pub const WIDGET_EXT_MAX_WASM_BYTES: u64 = 512 * 1024;
 /// Max nesting depth for layout nodes.
 pub const WIDGET_EXT_MAX_DEPTH: usize = 12;
 /// Max total nodes in one layout tree.
@@ -48,6 +56,71 @@ pub struct WidgetExtManifest {
     /// root only — spawned argv-only with stdout JSON `{ "key": "value", … }`.
     #[serde(default)]
     pub helper: Option<WidgetExtHelper>,
+    /// Optional sandboxed WASM module (`api` ≥ 2). Basename under the pack root.
+    #[serde(default)]
+    pub wasm: Option<WidgetExtWasm>,
+}
+
+/// In-process WASM module declared by an `api: 2` pack (M7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WidgetExtWasm {
+    /// File name inside the pack directory (no `/`, no `..`).
+    pub module: String,
+}
+
+/// True when `api` is a supported Extension API level.
+pub fn is_supported_widget_api(api: u32) -> bool {
+    api == WIDGET_EXT_API_V1 || api == WIDGET_EXT_API_V2
+}
+
+/// Kill-switch: when set to `0`/`false`/`off`, WASM modules are not loaded.
+pub fn widget_wasm_enabled() -> bool {
+    match std::env::var("METIS_WIDGET_WASM") {
+        Ok(v) => {
+            let v = v.trim();
+            !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"))
+        }
+        Err(_) => true,
+    }
+}
+
+/// Resolve and validate `wasm.module` to an absolute path under `pack_root`.
+pub fn resolve_wasm_module(pack_root: &Path, wasm: &WidgetExtWasm) -> Option<PathBuf> {
+    let name = wasm.module.trim();
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return None;
+    }
+    if name.starts_with('.') {
+        return None;
+    }
+    if !name.ends_with(".wasm") {
+        return None;
+    }
+    let path = pack_root.join(name);
+    let root = pack_root.canonicalize().ok()?;
+    let canon = path.canonicalize().ok()?;
+    if !canon.starts_with(&root) {
+        return None;
+    }
+    if !canon.is_file() {
+        return None;
+    }
+    let meta = std::fs::metadata(&canon).ok()?;
+    if meta.len() > WIDGET_EXT_MAX_WASM_BYTES {
+        return None;
+    }
+    Some(canon)
+}
+
+/// Validate a stable node `id` used by WASM `set_text` / `set_visible`.
+pub fn is_safe_node_id(id: &str) -> bool {
+    let id = id.trim();
+    if id.is_empty() || id.len() > 64 {
+        return false;
+    }
+    id.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
 }
 
 /// Out-of-process helper declared by a widget pack.
@@ -329,11 +402,14 @@ pub fn load_widget_extension(root: &Path) -> Result<DiscoveredWidgetExt, String>
             manifest.id
         ));
     }
-    if manifest.api != WIDGET_EXT_API {
+    if !is_supported_widget_api(manifest.api) {
         return Err(format!(
-            "unsupported api {} (need {WIDGET_EXT_API})",
+            "unsupported api {} (need {WIDGET_EXT_API_V1} or {WIDGET_EXT_API_V2})",
             manifest.api
         ));
+    }
+    if manifest.wasm.is_some() && manifest.api < WIDGET_EXT_API_V2 {
+        return Err("wasm requires api: 2".into());
     }
     // Reject path traversal in settings keys.
     for setting in &manifest.settings_schema {
@@ -353,6 +429,14 @@ pub fn load_widget_extension(root: &Path) -> Result<DiscoveredWidgetExt, String>
         return Err(format!(
             "helper.exec {:?} missing or escapes pack root",
             helper.exec
+        ));
+    }
+    if let Some(wasm) = &manifest.wasm
+        && resolve_wasm_module(root, wasm).is_none()
+    {
+        return Err(format!(
+            "wasm.module {:?} missing, too large, or escapes pack root",
+            wasm.module
         ));
     }
     Ok(DiscoveredWidgetExt {
@@ -405,33 +489,52 @@ fn validate_node(node: &WidgetExtNode, depth: usize, nodes: &mut usize) -> Resul
         ));
     }
     match node {
-        WidgetExtNode::Column { children, .. }
-        | WidgetExtNode::Row { children, .. }
-        | WidgetExtNode::List { children, .. } => {
+        WidgetExtNode::Column { id, children, .. }
+        | WidgetExtNode::Row { id, children, .. }
+        | WidgetExtNode::List { id, children, .. } => {
+            validate_optional_node_id(id)?;
             for child in children {
                 validate_node(child, depth + 1, nodes)?;
             }
             Ok(())
         }
-        WidgetExtNode::Label { text, .. } => {
+        WidgetExtNode::Label { id, text, .. } => {
+            validate_optional_node_id(id)?;
             if text.len() > WIDGET_EXT_MAX_STRING {
                 return Err("label text too long".into());
             }
             Ok(())
         }
-        WidgetExtNode::Icon { name, .. } => {
+        WidgetExtNode::Icon { id, name, .. } => {
+            validate_optional_node_id(id)?;
             if !is_safe_icon_name(name) {
                 return Err(format!("invalid icon name {name:?}"));
             }
             Ok(())
         }
-        WidgetExtNode::Button { label, on_click } => {
+        WidgetExtNode::Button {
+            id,
+            label,
+            on_click,
+        } => {
+            validate_optional_node_id(id)?;
             if label.len() > WIDGET_EXT_MAX_STRING {
                 return Err("button label too long".into());
             }
             validate_action(on_click)
         }
-        WidgetExtNode::Separator => Ok(()),
+        WidgetExtNode::Separator { id } => {
+            validate_optional_node_id(id)?;
+            Ok(())
+        }
+    }
+}
+
+fn validate_optional_node_id(id: &Option<String>) -> Result<(), String> {
+    match id {
+        None => Ok(()),
+        Some(id) if is_safe_node_id(id) => Ok(()),
+        Some(id) => Err(format!("invalid node id {id:?}")),
     }
 }
 
@@ -470,6 +573,12 @@ pub fn validate_action(action: &WidgetExtAction) -> Result<(), String> {
                 return Err(format!(
                     "copy_text exceeds max {WIDGET_EXT_MAX_COPY} characters"
                 ));
+            }
+            Ok(())
+        }
+        WidgetExtAction::WasmEvent { event } => {
+            if !is_safe_node_id(event) {
+                return Err(format!("wasm_event name rejected: {event:?}"));
             }
             Ok(())
         }
@@ -630,11 +739,15 @@ pub fn default_extension_settings(
 pub enum WidgetExtNode {
     Column {
         #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
         spacing: i32,
         #[serde(default)]
         children: Vec<WidgetExtNode>,
     },
     Row {
+        #[serde(default)]
+        id: Option<String>,
         #[serde(default)]
         spacing: i32,
         #[serde(default)]
@@ -642,22 +755,33 @@ pub enum WidgetExtNode {
     },
     Label {
         #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
         text: String,
         #[serde(default)]
         style: WidgetExtLabelStyle,
     },
     Icon {
+        #[serde(default)]
+        id: Option<String>,
         name: String,
         #[serde(default = "default_icon_px")]
         pixel_size: i32,
     },
     Button {
         #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
         label: String,
         on_click: WidgetExtAction,
     },
-    Separator,
+    Separator {
+        #[serde(default)]
+        id: Option<String>,
+    },
     List {
+        #[serde(default)]
+        id: Option<String>,
         #[serde(default)]
         spacing: i32,
         #[serde(default)]
@@ -693,6 +817,10 @@ pub enum WidgetExtAction {
     },
     CopyText {
         text: String,
+    },
+    /// Invoke guest `metis_on_event` with this UTF-8 name (`api: 2` + wasm).
+    WasmEvent {
+        event: String,
     },
 }
 
@@ -819,6 +947,7 @@ mod tests {
     #[test]
     fn rejects_unsafe_actions_in_layout() {
         let bad = WidgetExtNode::Button {
+            id: None,
             label: "x".into(),
             on_click: WidgetExtAction::OpenUri {
                 uri: "file:///tmp".into(),
@@ -827,6 +956,7 @@ mod tests {
         assert!(validate_widget_layout(&bad).is_err());
 
         let good = WidgetExtNode::Button {
+            id: None,
             label: "x".into(),
             on_click: WidgetExtAction::OpenUri {
                 uri: "https://example.com".into(),
@@ -990,5 +1120,14 @@ mod tests {
         assert!(hm.helper.is_some());
         let hn: WidgetExtNode = serde_json::from_str(helper_l).expect("hs layout");
         assert!(validate_widget_layout(&hn).is_ok());
+
+        let wasm_m =
+            include_str!("../../assets/widgets/com.metis.example.wasmstatus/manifest.json");
+        let wasm_l = include_str!("../../assets/widgets/com.metis.example.wasmstatus/widget.json");
+        let wm: WidgetExtManifest = serde_json::from_str(wasm_m).expect("wasm manifest");
+        assert_eq!(wm.api, WIDGET_EXT_API_V2);
+        assert!(wm.wasm.is_some());
+        let wn: WidgetExtNode = serde_json::from_str(wasm_l).expect("wasm layout");
+        assert!(validate_widget_layout(&wn).is_ok());
     }
 }

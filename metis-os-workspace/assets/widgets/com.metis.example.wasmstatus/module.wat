@@ -1,0 +1,23 @@
+;; Source for module.wasm — rebuild with: wat::parse_str / `wat2wasm`.
+;; See docs/WIDGET_WASM_ABI.md and docs/WIDGET_AUTHORING_WASM.md.
+(module
+  (import "metis" "get_host_json" (func $get_host_json (param i32 i32) (result i32)))
+  (import "metis" "set_text" (func $set_text (param i32 i32 i32 i32) (result i32)))
+  (import "metis" "open_uri" (func $open_uri (param i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "status")
+  (data (i32.const 16) "ok")
+  (data (i32.const 32) "https://example.com")
+  (func (export "metis_init") (result i32) (i32.const 0))
+  (func (export "metis_tick") (param i32) (result i32)
+    (local $n i32)
+    (local.set $n (call $get_host_json (i32.const 256) (i32.const 512)))
+    (if (i32.gt_s (local.get $n) (i32.const 0))
+      (then (call $set_text (i32.const 0) (i32.const 6) (i32.const 256) (local.get $n)))
+      (else (call $set_text (i32.const 0) (i32.const 6) (i32.const 16) (i32.const 2)))
+    )
+  )
+  (func (export "metis_on_event") (param i32 i32) (result i32)
+    (call $open_uri (i32.const 32) (i32.const 19))
+  )
+)

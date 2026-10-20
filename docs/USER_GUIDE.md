@@ -984,26 +984,26 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   modes, peaks, reflection / mirror. Per-widget look overrides live in each
   dialog. Writes `desktop-widgets.json`; the widgets process live-reloads.
 
-  **Extensions (Phase 14 §E).** Install a pack under
+  **Extensions (Phase 14 §E / M7).** Install a pack under
   `~/.local/share/metis/widgets/<id>/` (or `/usr/share/metis/widgets/<id>/`) with
   `manifest.json` + `widget.json`. Settings → Desktop widgets lists discovered
   packs in the Add dropdown. **Author schema:** [`WIDGET_PACK_SCHEMA.md`](WIDGET_PACK_SCHEMA.md)
-  (API 1). Discovery is fail-closed (Phase 18 C): unknown JSON fields, invalid
-  layouts, or missing declared helpers skip the pack (warn + startup toast) —
-  they never crash the widgets host. Declarative layout only (labels, icons,
-  buttons, lists); button actions: `open_uri` (**http/https only**), `launch`
-  (desktop id or a single PATH basename — no shell/argv/paths; interpreters
-  denylisted), `copy_text`. Settings placeholders apply to labels/copy text only
-  — **not** to URI/launch targets. Live host tokens in labels: `{host.time}`,
-  `{host.date}`, `{host.weather.temp}`, `{host.weather.unit}`,
-  `{host.weather.summary}`, `{host.sys.cpu}`, `{host.sys.mem}`,
-  `{host.sys.disk}` (refreshed by the widgets host; not allowed in action
-  fields). Optional **out-of-process helpers**: declare `helper.exec` (basename
-  under the pack) + `poll_seconds` in `manifest.json`; the helper is spawned
-  argv-only (cleared env, timeout, stdout size cap) and must print a JSON
-  object — labels may use `{helper.<key>}`. No network from helpers by default;
-  not available to `open_uri` / `launch`. Rhai/Lua/WASM remain deferred. Example
-  packs: `com.metis.example.quicklinks`, `com.metis.example.helperstatus`.
+  (API **1** JSON, API **2** optional WASM). Discovery is fail-closed (Phase 18 C):
+  unknown JSON fields, invalid layouts, or missing declared helpers/modules skip
+  the pack (warn + startup toast) — they never crash the widgets host.
+  Declarative layout (labels, icons, buttons, lists); button actions: `open_uri`
+  (**http/https only**), `launch` (desktop id or a single PATH basename — no
+  shell/argv/paths; interpreters denylisted), `copy_text`, and API 2
+  `wasm_event`. Settings placeholders apply to labels/copy text only — **not** to
+  URI/launch targets. Live host tokens in labels: `{host.time}`, `{host.date}`,
+  `{host.weather.temp}`, `{host.weather.unit}`, `{host.weather.summary}`,
+  `{host.sys.cpu}`, `{host.sys.mem}`, `{host.sys.disk}`. Optional
+  **out-of-process helpers**: `helper.exec` + `poll_seconds`. Optional
+  **sandboxed WASM** (`api: 2`, `wasm.module`): Wasmtime guest updates labels via
+  host ABI — see [`WIDGET_WASM_ABI.md`](WIDGET_WASM_ABI.md) /
+  [`WIDGET_AUTHORING_WASM.md`](WIDGET_AUTHORING_WASM.md). Kill-switch:
+  `METIS_WIDGET_WASM=0`. Example packs: `com.metis.example.quicklinks`,
+  `com.metis.example.helperstatus`, `com.metis.example.wasmstatus`.
 - **Metis Menu** — pick a **layout** from paginated thumbnails (Metis, Whisker,
   ArcMenu, Mint, plus the layout pack: **Bracket**, **Ledger**, **Mosaic**,
   **Ramp**, **Ladder**, **Plaza**, **Crest**, **Chip**), toggle the user avatar/name header,

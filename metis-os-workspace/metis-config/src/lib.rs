@@ -578,16 +578,18 @@ pub use weather::{
     weather_config_path,
 };
 pub use widget_ext::{
-    DiscoveredWidgetExt, HostBindValues, WIDGET_EXT_API, WIDGET_EXT_HELPER_MAX_STDOUT,
-    WIDGET_EXT_HELPER_TIMEOUT_SECS, WIDGET_EXT_MAX_COPY, WIDGET_EXT_MAX_DEPTH,
-    WIDGET_EXT_MAX_JSON_BYTES, WIDGET_EXT_MAX_NODES, WIDGET_EXT_MAX_STRING, WidgetExtAction,
-    WidgetExtDiscoverResult, WidgetExtHelper, WidgetExtLabelStyle, WidgetExtManifest,
-    WidgetExtNode, WidgetExtSetting, WidgetExtSettingType, default_extension_settings,
-    discover_widget_extensions, discover_widget_extensions_detailed, find_widget_extension,
-    interpolate_settings, interpolate_template, is_safe_icon_name, is_safe_launch_exec,
-    is_safe_launch_id, is_safe_open_uri, is_valid_extension_id, load_widget_extension,
-    load_widget_layout, resolve_helper_exec, run_helper_snapshot, template_needs_host,
-    validate_action, validate_widget_layout, widget_ext_search_dirs,
+    DiscoveredWidgetExt, HostBindValues, WIDGET_EXT_API, WIDGET_EXT_API_V1, WIDGET_EXT_API_V2,
+    WIDGET_EXT_HELPER_MAX_STDOUT, WIDGET_EXT_HELPER_TIMEOUT_SECS, WIDGET_EXT_MAX_COPY,
+    WIDGET_EXT_MAX_DEPTH, WIDGET_EXT_MAX_JSON_BYTES, WIDGET_EXT_MAX_NODES, WIDGET_EXT_MAX_STRING,
+    WIDGET_EXT_MAX_WASM_BYTES, WidgetExtAction, WidgetExtDiscoverResult, WidgetExtHelper,
+    WidgetExtLabelStyle, WidgetExtManifest, WidgetExtNode, WidgetExtSetting, WidgetExtSettingType,
+    WidgetExtWasm, default_extension_settings, discover_widget_extensions,
+    discover_widget_extensions_detailed, find_widget_extension, interpolate_settings,
+    interpolate_template, is_safe_icon_name, is_safe_launch_exec, is_safe_launch_id,
+    is_safe_node_id, is_safe_open_uri, is_supported_widget_api, is_valid_extension_id,
+    load_widget_extension, load_widget_layout, resolve_helper_exec, resolve_wasm_module,
+    run_helper_snapshot, template_needs_host, validate_action, validate_widget_layout,
+    widget_ext_search_dirs, widget_wasm_enabled,
 };
 pub use xwayland_policy::{
     DEFAULT_GAMING_XWAYLAND_PATTERNS, XwaylandPolicy, command_uses_gaming_xwayland,

@@ -79,6 +79,8 @@ skip = [
     { crate = "cpufeatures@0.2.17", reason = "crypto stack dual" },
     { crate = "foldhash@0.1.5", reason = "hashbrown stack dual" },
     { crate = "getrandom@0.2.17", reason = "rand 0.8 path" },
+    { crate = "getrandom@0.3.4", reason = "tempfile←smithay; prefer 0.4" },
+    { crate = "itertools@0.13.0", reason = "bindgen; wasmtime pulls 0.14" },
     { crate = "hashbrown@0.12.3", reason = "indexmap/older consumers" },
     { crate = "hashbrown@0.15.5", reason = "mid stack until unified" },
     { crate = "linux-raw-sys@0.4.15", reason = "rustix 0.38 path" },

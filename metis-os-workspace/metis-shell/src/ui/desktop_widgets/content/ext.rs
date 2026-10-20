@@ -1,4 +1,4 @@
-//! Declarative JSON extension widgets (Phase 14 §E).
+//! Declarative JSON extension widgets (Phase 14 §E) + optional WASM (M7 / API 2).
 //!
 //! Action fields are **not** settings-interpolated (labels/copy text may be).
 //! Labels may use `{host.*}` and `{helper.*}` live binds, refreshed on a short
@@ -10,6 +10,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
@@ -17,9 +18,10 @@ use metis_config::{
     DesktopWidgetInstance, HostBindValues, WIDGET_EXT_MAX_COPY, WidgetExtAction,
     WidgetExtLabelStyle, WidgetExtNode, find_widget_extension, interpolate_settings,
     interpolate_template, is_safe_launch_exec, is_safe_launch_id, is_safe_open_uri,
-    load_widget_layout, resolve_helper_exec, run_helper_snapshot, template_needs_host,
-    validate_action,
+    load_widget_layout, resolve_helper_exec, resolve_wasm_module, run_helper_snapshot,
+    template_needs_host, validate_action, widget_wasm_enabled,
 };
+use metis_widget_wasm::{HostEffects, HostSnapshots, TickReason, WidgetWasmInstance};
 use sysinfo::{Disks, System};
 
 use crate::services::applications;
@@ -39,11 +41,20 @@ struct HelperCacheEntry {
     exec: PathBuf,
 }
 
+struct WasmRuntime {
+    instance: WidgetWasmInstance,
+    extension_id: String,
+    settings: serde_json::Map<String, serde_json::Value>,
+    nodes: HashMap<String, gtk::Widget>,
+}
+
 thread_local! {
     static HOST_BOUNDS: RefCell<Vec<HostBoundLabel>> = const { RefCell::new(Vec::new()) };
     static HOST_TIMER: Cell<bool> = const { Cell::new(false) };
     static HOST_SYS: RefCell<Option<System>> = const { RefCell::new(None) };
     static HELPER_CACHE: RefCell<HashMap<String, HelperCacheEntry>> =
+        RefCell::new(HashMap::new());
+    static WASM_RUNTIMES: RefCell<HashMap<String, Rc<RefCell<WasmRuntime>>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -86,12 +97,65 @@ pub fn build(inst: &DesktopWidgetInstance) -> gtk::Widget {
     }
     let settings = inst.extension_settings.clone();
     let host = sample_host_binds(Some(&inst.extension_id));
+    let mut id_nodes = HashMap::new();
     let root = build_node(
         &layout,
         &settings,
         Some(&host),
         Some(inst.extension_id.as_str()),
+        &mut id_nodes,
     );
+
+    if let Some(wasm_decl) = &ext.manifest.wasm
+        && widget_wasm_enabled()
+        && let Some(module_path) = resolve_wasm_module(&ext.root, wasm_decl)
+    {
+        match std::fs::read(&module_path) {
+            Ok(bytes) => {
+                let snapshots = build_snapshots(&settings, Some(&inst.extension_id));
+                match WidgetWasmInstance::new(&bytes, snapshots) {
+                    Ok(mut instance) => {
+                        if let Err(err) = instance.call_init() {
+                            tracing::warn!(
+                                id = %inst.extension_id,
+                                %err,
+                                "widget wasm metis_init failed"
+                            );
+                        }
+                        let runtime = Rc::new(RefCell::new(WasmRuntime {
+                            instance,
+                            extension_id: inst.extension_id.clone(),
+                            settings: settings.clone(),
+                            nodes: id_nodes,
+                        }));
+                        {
+                            let mut rt = runtime.borrow_mut();
+                            let _ = rt.instance.call_tick(TickReason::Timer);
+                            apply_effects(&mut rt);
+                        }
+                        WASM_RUNTIMES.with(|map| {
+                            map.borrow_mut().insert(inst.extension_id.clone(), runtime);
+                        });
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            id = %inst.extension_id,
+                            %err,
+                            "widget wasm instantiate failed"
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    id = %inst.extension_id,
+                    %err,
+                    "widget wasm module read failed"
+                );
+            }
+        }
+    }
+
     ensure_host_timer();
     root
 }
@@ -128,31 +192,50 @@ fn build_node(
     settings: &serde_json::Map<String, serde_json::Value>,
     host: Option<&HostBindValues>,
     extension_id: Option<&str>,
+    id_nodes: &mut HashMap<String, gtk::Widget>,
 ) -> gtk::Widget {
     match node {
-        WidgetExtNode::Column { spacing, children } => {
+        WidgetExtNode::Column {
+            id,
+            spacing,
+            children,
+        } => {
             let col = gtk::Box::new(gtk::Orientation::Vertical, (*spacing).max(0));
             for child in children {
-                col.append(&build_node(child, settings, host, extension_id));
+                col.append(&build_node(child, settings, host, extension_id, id_nodes));
             }
-            col.upcast()
+            let w = col.upcast::<gtk::Widget>();
+            register_id(id, &w, id_nodes);
+            w
         }
-        WidgetExtNode::Row { spacing, children } => {
+        WidgetExtNode::Row {
+            id,
+            spacing,
+            children,
+        } => {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, (*spacing).max(0));
             for child in children {
-                row.append(&build_node(child, settings, host, extension_id));
+                row.append(&build_node(child, settings, host, extension_id, id_nodes));
             }
-            row.upcast()
+            let w = row.upcast::<gtk::Widget>();
+            register_id(id, &w, id_nodes);
+            w
         }
-        WidgetExtNode::List { spacing, children } => {
+        WidgetExtNode::List {
+            id,
+            spacing,
+            children,
+        } => {
             let col = gtk::Box::new(gtk::Orientation::Vertical, (*spacing).max(0));
             col.add_css_class("metis-dw-ext-list");
             for child in children {
-                col.append(&build_node(child, settings, host, extension_id));
+                col.append(&build_node(child, settings, host, extension_id, id_nodes));
             }
-            col.upcast()
+            let w = col.upcast::<gtk::Widget>();
+            register_id(id, &w, id_nodes);
+            w
         }
-        WidgetExtNode::Label { text, style } => {
+        WidgetExtNode::Label { id, text, style } => {
             let rendered = interpolate_template(text, settings, host);
             let label = gtk::Label::new(Some(&rendered));
             label.set_xalign(0.0);
@@ -171,30 +254,56 @@ fn build_node(
                     extension_id.map(str::to_string),
                 );
             }
-            label.upcast()
+            let w = label.upcast::<gtk::Widget>();
+            register_id(id, &w, id_nodes);
+            w
         }
-        WidgetExtNode::Icon { name, pixel_size } => {
+        WidgetExtNode::Icon {
+            id,
+            name,
+            pixel_size,
+        } => {
             let icon = gtk::Image::from_icon_name(name);
             icon.set_pixel_size((*pixel_size).clamp(8, 128));
-            icon.upcast()
+            let w = icon.upcast::<gtk::Widget>();
+            register_id(id, &w, id_nodes);
+            w
         }
-        WidgetExtNode::Separator => {
+        WidgetExtNode::Separator { id } => {
             let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
-            sep.upcast()
+            let w = sep.upcast::<gtk::Widget>();
+            register_id(id, &w, id_nodes);
+            w
         }
-        WidgetExtNode::Button { label, on_click } => {
-            // Button captions: settings only (no live host binds on buttons).
+        WidgetExtNode::Button {
+            id,
+            label,
+            on_click,
+        } => {
             let rendered = interpolate_settings(label, settings);
             let btn = gtk::Button::with_label(&rendered);
             btn.set_halign(gtk::Align::Fill);
             btn.add_css_class("metis-dw-ext-button");
             let action = on_click.clone();
             let settings = settings.clone();
+            let ext_id = extension_id.map(str::to_string);
             btn.connect_clicked(move |_| {
-                run_action(&action, &settings);
+                run_action(&action, &settings, ext_id.as_deref());
             });
-            btn.upcast()
+            let w = btn.upcast::<gtk::Widget>();
+            register_id(id, &w, id_nodes);
+            w
         }
+    }
+}
+
+fn register_id(
+    id: &Option<String>,
+    widget: &gtk::Widget,
+    id_nodes: &mut HashMap<String, gtk::Widget>,
+) {
+    if let Some(id) = id {
+        id_nodes.insert(id.clone(), widget.clone());
     }
 }
 
@@ -221,6 +330,7 @@ fn ensure_host_timer() {
     HOST_TIMER.set(true);
     glib::timeout_add_seconds_local(1, || {
         refresh_host_bounds();
+        tick_wasm_runtimes();
         glib::ControlFlow::Continue
     });
 }
@@ -246,6 +356,92 @@ fn refresh_host_bounds() {
             bound.label.set_text(&text);
         }
     });
+}
+
+fn tick_wasm_runtimes() {
+    WASM_RUNTIMES.with(|map| {
+        let mut map = map.borrow_mut();
+        map.retain(|_, rt| {
+            let rt = rt.borrow();
+            // Drop when no registered nodes remain mapped (card gone).
+            rt.nodes.values().any(|w| w.is_visible())
+        });
+        for rt in map.values() {
+            let mut rt = rt.borrow_mut();
+            let snaps = build_snapshots(&rt.settings, Some(&rt.extension_id));
+            rt.instance.update_snapshots(snaps);
+            if let Err(err) = rt.instance.call_tick(TickReason::Timer) {
+                tracing::debug!(id = %rt.extension_id, %err, "widget wasm tick failed");
+            }
+            apply_effects(&mut rt);
+        }
+    });
+}
+
+fn build_snapshots(
+    settings: &serde_json::Map<String, serde_json::Value>,
+    extension_id: Option<&str>,
+) -> HostSnapshots {
+    let host = sample_host_binds(extension_id);
+    let host_json = serde_json::json!({
+        "time": host.time,
+        "date": host.date,
+        "weather_temp": host.weather_temp,
+        "weather_unit": host.weather_unit,
+        "weather_summary": host.weather_summary,
+        "sys_cpu": host.sys_cpu,
+        "sys_mem": host.sys_mem,
+        "sys_disk": host.sys_disk,
+    })
+    .to_string();
+    let helper_json = serde_json::to_string(&host.helper).unwrap_or_else(|_| "{}".into());
+    let settings_json = serde_json::Value::Object(settings.clone()).to_string();
+    HostSnapshots {
+        settings_json,
+        host_json,
+        helper_json,
+    }
+}
+
+fn apply_effects(rt: &mut WasmRuntime) {
+    let effects: HostEffects = rt.instance.take_effects();
+    for (id, text) in effects.set_text {
+        if let Some(w) = rt.nodes.get(&id) {
+            if let Ok(label) = w.clone().downcast::<gtk::Label>() {
+                label.set_text(&text);
+            } else if let Ok(btn) = w.clone().downcast::<gtk::Button>() {
+                btn.set_label(&text);
+            }
+        }
+    }
+    for (id, visible) in effects.set_visible {
+        if let Some(w) = rt.nodes.get(&id) {
+            w.set_visible(visible);
+        }
+    }
+    if effects.request_helper_refresh {
+        HELPER_CACHE.with(|cache| {
+            if let Some(entry) = cache.borrow_mut().get_mut(&rt.extension_id) {
+                entry.values = run_helper_snapshot(&entry.exec).unwrap_or_default();
+                entry.next_poll = Instant::now() + entry.poll_every;
+            }
+        });
+    }
+    if let Some(uri) = effects.open_uri {
+        open_https_uri(&uri);
+    }
+    if let Some(id) = effects.launch_id {
+        applications::launch_id(&id);
+    } else if let Some(exec) = effects.launch_exec
+        && let Err(err) = crate::compositor::launch_argv([&exec])
+    {
+        tracing::warn!(%err, exec = %exec, "extension wasm launch failed");
+    }
+    if let Some(text) = effects.copy_text
+        && let Some(display) = gtk::gdk::Display::default()
+    {
+        display.clipboard().set_text(&text);
+    }
 }
 
 fn sample_host_binds(extension_id: Option<&str>) -> HostBindValues {
@@ -315,7 +511,11 @@ fn sample_host_binds(extension_id: Option<&str>) -> HostBindValues {
     }
 }
 
-fn run_action(action: &WidgetExtAction, settings: &serde_json::Map<String, serde_json::Value>) {
+fn run_action(
+    action: &WidgetExtAction,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    extension_id: Option<&str>,
+) {
     if let Err(err) = validate_action(action) {
         tracing::warn!(%err, "extension action blocked");
         return;
@@ -365,6 +565,25 @@ fn run_action(action: &WidgetExtAction, settings: &serde_json::Map<String, serde
             if let Some(display) = gtk::gdk::Display::default() {
                 display.clipboard().set_text(clipped);
             }
+        }
+        WidgetExtAction::WasmEvent { event } => {
+            let Some(ext_id) = extension_id else {
+                return;
+            };
+            WASM_RUNTIMES.with(|map| {
+                let Some(rt) = map.borrow().get(ext_id).cloned() else {
+                    tracing::warn!(id = %ext_id, "wasm_event: no runtime");
+                    return;
+                };
+                let mut rt = rt.borrow_mut();
+                let snaps = build_snapshots(&rt.settings, Some(&rt.extension_id));
+                rt.instance.update_snapshots(snaps);
+                if let Err(err) = rt.instance.call_on_event(event) {
+                    tracing::warn!(id = %ext_id, %err, "wasm_event failed");
+                }
+                let _ = rt.instance.call_tick(TickReason::Event);
+                apply_effects(&mut rt);
+            });
         }
     }
 }

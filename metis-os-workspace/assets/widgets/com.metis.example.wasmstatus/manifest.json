@@ -1,0 +1,10 @@
+{
+  "id": "com.metis.example.wasmstatus",
+  "name": "WASM Status (example)",
+  "version": "1.0.0",
+  "api": 2,
+  "default_size": [320, 160],
+  "wasm": {
+    "module": "module.wasm"
+  }
+}

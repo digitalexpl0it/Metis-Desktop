@@ -9,6 +9,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Sandboxed widget WASM (M7 / Extension API v2)** — packs may ship
+  `module.wasm` (`api: 2`) run in-process via Wasmtime with a deny-by-default
+  host ABI (read host/helper/settings JSON, `set_text` / `set_visible`, hardened
+  `open_uri` / `launch` / `copy_text`). JSON layout + out-of-process helpers
+  remain. Kill-switch `METIS_WIDGET_WASM=0`. ADR:
+  [`docs/decisions/widget-wasm.md`](docs/decisions/widget-wasm.md); ABI /
+  authoring: [`docs/WIDGET_WASM_ABI.md`](docs/WIDGET_WASM_ABI.md),
+  [`docs/WIDGET_AUTHORING_WASM.md`](docs/WIDGET_AUTHORING_WASM.md). Example:
+  `com.metis.example.wasmstatus`.
 - **Session power confirm** — Metis Menu **Log Out**, **Restart**, and
   **Shut Down** show a centered layer-shell overlay (Cancel / confirm; Escape
   or click outside dismisses) before ending the session.

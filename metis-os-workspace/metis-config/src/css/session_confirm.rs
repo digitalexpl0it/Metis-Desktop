@@ -12,18 +12,24 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     .metis-session-confirm-root {{
         background-color: transparent;
     }}
-    .metis-session-confirm-backdrop {{
+    button.metis-session-confirm-backdrop {{
         background-color: rgba(0, 0, 0, 0.45);
+        background-image: none;
         border: none;
         border-radius: 0;
         box-shadow: none;
+        outline: none;
         min-width: 1px;
         min-height: 1px;
     }}
-    .metis-session-confirm-backdrop:hover,
-    .metis-session-confirm-backdrop:active,
-    .metis-session-confirm-backdrop:focus {{
+    button.metis-session-confirm-backdrop:hover,
+    button.metis-session-confirm-backdrop:active,
+    button.metis-session-confirm-backdrop:focus,
+    button.metis-session-confirm-backdrop:checked {{
         background-color: rgba(0, 0, 0, 0.45);
+        background-image: none;
+        box-shadow: none;
+        outline: none;
     }}
     .metis-session-confirm-card {{
         background-color: {raised};
@@ -37,6 +43,7 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     }}
     .metis-session-confirm-icon {{
         color: {accent};
+        -gtk-icon-style: symbolic;
     }}
     .metis-session-confirm-title {{
         font-size: 18px;
@@ -50,32 +57,56 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     .metis-session-confirm-actions {{
         margin-top: 8px;
     }}
-    .metis-session-confirm-cancel {{
+    /* Defeat Adwaita button chrome — color alone on the parent is ignored. */
+    button.metis-session-confirm-cancel {{
         min-width: 110px;
         padding: 8px 16px;
         border-radius: 10px;
         background-color: rgba({text_rgb}, 0.08);
+        background-image: none;
         color: {text};
         border: 1px solid {border};
+        box-shadow: none;
+        outline: none;
     }}
-    .metis-session-confirm-cancel:hover {{
+    button.metis-session-confirm-cancel:hover {{
         background-color: rgba({text_rgb}, 0.14);
+        background-image: none;
     }}
-    .metis-session-confirm-cancel label {{
+    button.metis-session-confirm-cancel:active,
+    button.metis-session-confirm-cancel:focus {{
+        background-color: rgba({text_rgb}, 0.18);
+        background-image: none;
+        box-shadow: none;
+        outline: none;
+    }}
+    button.metis-session-confirm-cancel label {{
         color: {text};
     }}
-    .metis-session-confirm-ok {{
+    button.metis-session-confirm-ok {{
         min-width: 110px;
         padding: 8px 16px;
         border-radius: 10px;
         background-color: {accent};
+        background-image: none;
         color: #ffffff;
         border: none;
+        box-shadow: none;
+        outline: none;
     }}
-    .metis-session-confirm-ok:hover {{
+    button.metis-session-confirm-ok:hover {{
+        background-color: {accent};
+        background-image: none;
         filter: brightness(1.08);
     }}
-    .metis-session-confirm-ok label {{
+    button.metis-session-confirm-ok:active,
+    button.metis-session-confirm-ok:focus {{
+        background-color: {accent};
+        background-image: none;
+        box-shadow: none;
+        outline: none;
+    }}
+    button.metis-session-confirm-ok label {{
         color: #ffffff;
         font-weight: 600;
     }}
