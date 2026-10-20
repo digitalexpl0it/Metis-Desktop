@@ -130,14 +130,16 @@ called out as residuals only. Prefer working top→bottom.
 
 #### Reliability
 
-- [ ] **M1. Compositor session restore / crash recovery** — serialize enough
-      window/workspace/output state that a restarted `metis-compositor` can
-      reattach clients or relaunch the session without a full logout. Shell and
-      desktop-widgets are already separate processes; compositor death still ends
-      the session. Design: state file under `$XDG_RUNTIME_DIR` or
-      `$XDG_STATE_HOME`, restore policy on greeter relaunch, document limits
-      (XWayland, exclusive fullscreen).
-      → New; complements Phase 16 panic triage.
+- [x] **M1. Compositor session restore / crash recovery** (2026-10-20) —
+      `metis-session` supervises the compositor (clean logout → greeter; unclean
+      exit → in-session restart + `METIS_SESSION_RESTORE`). Debounced snapshot at
+      `$XDG_STATE_HOME/metis/session-snapshot.json`; preference
+      `session.json` / Settings → Startup → **Restore windows after crash**.
+      Relaunch by desktop id + best-effort place (not Wayland reattach).
+      Crash-loop brake (≥3 / 60s). ADR:
+      [`docs/decisions/session-restore.md`](../docs/decisions/session-restore.md).
+      Limits: XWayland / exclusive fullscreen / in-app state not faithfully
+      restored. Complements Phase 16 panic triage.
 
 #### Colour & display protocols
 
@@ -178,7 +180,7 @@ called out as residuals only. Prefer working top→bottom.
       Explicitly deferred today (Wave **2** / Phase 14 §E.2). Revisit with a
       security design note before enabling.
 
-**Suggested order:** **M1** (trust) → **M2** when upstream allows → **M5** for
+**Suggested order:** **M1** landed → **M2** when upstream allows → **M5** for
 remote GA → **M3**/**M4** interop → **M6** as hybrid reports arrive → **M7** last.
 
 ---

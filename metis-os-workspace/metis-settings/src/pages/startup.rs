@@ -1,5 +1,6 @@
 //! Session startup applications — master toggle + ordered desktop-id list.
 //! Persists to `~/.config/metis/startup.json` (compositor reads at session start).
+//! Also hosts the crash-restore preference (`session.json`).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,6 +18,7 @@ pub fn build() -> gtk::Widget {
 
     let (scroller, content) = ui::page_for("startup");
     let cfg = Rc::new(RefCell::new(metis_config::load_startup_config()));
+    let session_cfg = Rc::new(RefCell::new(metis_config::load_session_config()));
 
     let hint = gtk::Label::new(Some(&tr(
         "Applications listed here launch once after you sign in. Nothing starts \
@@ -26,6 +28,31 @@ pub fn build() -> gtk::Widget {
     hint.set_wrap(true);
     hint.add_css_class("metis-settings-hint");
     content.append(&hint);
+
+    // ---- Crash recovery ---------------------------------------------------
+    let (restore_card, restore_body) =
+        ui::section_with_icon(&tr("Crash recovery"), "view-refresh-symbolic");
+    let restore = gtk::Switch::new();
+    restore.set_active(session_cfg.borrow().restore_on_crash);
+    restore.set_halign(gtk::Align::End);
+    restore_body.append(&ui::row(&tr("Restore windows after crash"), &restore));
+    let restore_hint = gtk::Label::new(Some(&tr(
+        "If the compositor exits uncleanly, Metis keeps your login session and \
+         relaunches open apps best-effort. Clean logout always returns to the \
+         greeter. XWayland and exclusive fullscreen apps may not restore perfectly.",
+    )));
+    restore_hint.set_xalign(0.0);
+    restore_hint.set_wrap(true);
+    restore_hint.add_css_class("metis-settings-hint");
+    restore_body.append(&restore_hint);
+    content.append(&restore_card);
+    {
+        let session_cfg = session_cfg.clone();
+        restore.connect_active_notify(move |s| {
+            session_cfg.borrow_mut().restore_on_crash = s.is_active();
+            persist_session(&session_cfg.borrow());
+        });
+    }
 
     // ---- Master switch ----------------------------------------------------
     let (master_card, master_body) = ui::section_with_icon(&tr("Startup"), "system-run-symbolic");
@@ -311,5 +338,11 @@ fn refill_picker(
 fn persist(cfg: &StartupConfig) {
     if let Err(err) = metis_config::save_startup_config(cfg) {
         tracing::warn!(%err, "failed to save startup.json");
+    }
+}
+
+fn persist_session(cfg: &metis_config::SessionConfig) {
+    if let Err(err) = metis_config::save_session_config(cfg) {
+        tracing::warn!(%err, "failed to save session.json");
     }
 }

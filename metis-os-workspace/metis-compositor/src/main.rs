@@ -48,6 +48,7 @@ mod rudp_host;
 mod rudp_identity;
 mod screenshot_overlay;
 mod session_lock;
+mod session_restore;
 mod state;
 mod stream_export;
 mod text_layout;

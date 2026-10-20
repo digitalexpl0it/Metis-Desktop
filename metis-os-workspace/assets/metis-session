@@ -9,7 +9,9 @@
 #
 # It sets the desktop identity, pins the DRM backend, exports the session
 # environment to the user D-Bus / systemd activation environment (so portals and
-# activated apps land in this session), then execs the compositor.
+# activated apps land in this session), then supervises the compositor: unclean
+# exits restart in-session with optional window restore (see session-restore ADR);
+# clean logout returns to the greeter.
 
 set -uo pipefail
 
@@ -189,16 +191,106 @@ fi
 # --- activation environment ------------------------------------------------
 # Hand our session env to systemd --user and D-Bus so portals / activated apps
 # run inside Metis. Best-effort: a session may not have a user bus yet.
+# Re-run after each compositor restart — WAYLAND_DISPLAY may change.
 SESSION_VARS=(
     WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE
     XDG_SESSION_ID DISPLAY GDK_BACKEND METIS_SHELL_GSK_RENDERER GTK_A11Y NO_AT_BRIDGE
     SSH_AUTH_SOCK XDG_DATA_DIRS XDG_CONFIG_DIRS
     ELECTRON_OZONE_PLATFORM_HINT CLAUDE_USE_WAYLAND
+    METIS_SESSION_RESTORE
 )
-if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-    dbus-update-activation-environment --systemd "${SESSION_VARS[@]}" 2>/dev/null || true
-elif command -v systemctl >/dev/null 2>&1; then
-    systemctl --user import-environment "${SESSION_VARS[@]}" 2>/dev/null || true
-fi
+metis_export_activation_env() {
+    if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+        dbus-update-activation-environment --systemd "${SESSION_VARS[@]}" 2>/dev/null || true
+    elif command -v systemctl >/dev/null 2>&1; then
+        systemctl --user import-environment "${SESSION_VARS[@]}" 2>/dev/null || true
+    fi
+}
+metis_export_activation_env
 
-exec "$COMP_BIN" "$@" >"$SESSION_LOG" 2>&1
+# --- compositor supervisor (maturity M1) -----------------------------------
+# Stay in the login session across unclean compositor exits. Clean logout
+# (session-clean-exit marker or exit 0) returns to the greeter. ≥3 failures
+# within 60s abort the loop so a bad GPU/driver cannot spin forever.
+# See docs/decisions/session-restore.md.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/metis"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+CLEAN_MARKER="$STATE_DIR/session-clean-exit"
+RESTART_TIMES="$STATE_DIR/session-restart-times"
+CRASH_WINDOW_SECS=60
+CRASH_MAX=3
+
+metis_crash_loop_tripped() {
+    local now cutoff
+    now="$(date +%s)"
+    cutoff=$((now - CRASH_WINDOW_SECS))
+    if [[ ! -f "$RESTART_TIMES" ]]; then
+        return 1
+    fi
+    # Keep timestamps inside the window, count them.
+    local kept=()
+    local t
+    while IFS= read -r t; do
+        [[ -z "$t" ]] && continue
+        if [[ "$t" =~ ^[0-9]+$ ]] && (( t >= cutoff )); then
+            kept+=("$t")
+        fi
+    done <"$RESTART_TIMES"
+    if ((${#kept[@]} >= CRASH_MAX)); then
+        printf '%s\n' "${kept[@]}" >"$RESTART_TIMES" 2>/dev/null || true
+        return 0
+    fi
+    printf '%s\n' "${kept[@]}" >"$RESTART_TIMES" 2>/dev/null || true
+    return 1
+}
+
+metis_record_unclean_exit() {
+    date +%s >>"$RESTART_TIMES" 2>/dev/null || true
+}
+
+attempt=0
+while true; do
+    rm -f "$CLEAN_MARKER" 2>/dev/null || true
+    unset METIS_SESSION_RESTORE
+
+    if (( attempt > 0 )); then
+        export METIS_SESSION_RESTORE=1
+        {
+            echo "--- compositor restart ${attempt} (METIS_SESSION_RESTORE=1) $(date -Is) ---"
+        } >>"$SESSION_LOG"
+        # Brief pause so libseat/DRM can settle after an abrupt death.
+        sleep 0.4 2>/dev/null || true
+    else
+        {
+            echo "--- compositor start $(date -Is) ---"
+        } >>"$SESSION_LOG"
+    fi
+
+    metis_export_activation_env
+
+    "$COMP_BIN" "$@" >>"$SESSION_LOG" 2>&1
+    code=$?
+
+    attempt=$((attempt + 1))
+
+    if [[ -f "$CLEAN_MARKER" ]] || [[ "$code" -eq 0 ]]; then
+        rm -f "$CLEAN_MARKER" 2>/dev/null || true
+        rm -f "$RESTART_TIMES" 2>/dev/null || true
+        {
+            echo "--- compositor clean exit (code=${code}) $(date -Is) ---"
+        } >>"$SESSION_LOG"
+        exit 0
+    fi
+
+    metis_record_unclean_exit
+    {
+        echo "--- compositor unclean exit (code=${code}) $(date -Is); supervising restart ---"
+    } >>"$SESSION_LOG"
+
+    if metis_crash_loop_tripped; then
+        {
+            echo "metis-session: crash-loop brake — ${CRASH_MAX}+ unclean exits in ${CRASH_WINDOW_SECS}s; returning to greeter"
+        } | tee -a "$SESSION_LOG" >&2
+        exit 1
+    fi
+done

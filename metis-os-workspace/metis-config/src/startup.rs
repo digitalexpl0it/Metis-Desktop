@@ -98,7 +98,7 @@ pub fn resolve_desktop_launch_argv(id: &str) -> Option<Vec<String>> {
     if !is_safe_launch_id(id) {
         return None;
     }
-    let path = find_desktop_file(id)?;
+    let path = find_desktop_file_for_id(id)?;
     let exec = read_desktop_exec(&path)?;
     let argv = clean_exec_argv(&exec);
     if argv.is_empty() {
@@ -108,6 +108,16 @@ pub fn resolve_desktop_launch_argv(id: &str) -> Option<Vec<String>> {
         return None;
     }
     Some(argv)
+}
+
+/// Locate a `.desktop` file for `id` (with or without `.desktop` suffix).
+pub fn find_desktop_file_for_id(id: &str) -> Option<PathBuf> {
+    find_desktop_file(id)
+}
+
+/// XDG applications directories used for desktop-file lookup (session restore).
+pub fn applications_dirs_for_lookup() -> Vec<PathBuf> {
+    applications_dirs()
 }
 
 fn find_desktop_file(id: &str) -> Option<PathBuf> {

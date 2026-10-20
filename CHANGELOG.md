@@ -7,6 +7,16 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-10-20]
 
+### Added
+
+- **Compositor crash recovery (M1)** — `metis-session` supervises the DRM
+  compositor so an unclean exit keeps you logged in, restarts the desktop, and
+  (when enabled) relaunches open apps from
+  `$XDG_STATE_HOME/metis/session-snapshot.json`. Toggle under Settings →
+  Startup → **Restore windows after crash** (`session.json`). Clean logout
+  still returns to the greeter. See
+  [`docs/decisions/session-restore.md`](docs/decisions/session-restore.md).
+
 ### Changed
 
 - **README** — dropped the “Beta” callout; Metis is presented as an active

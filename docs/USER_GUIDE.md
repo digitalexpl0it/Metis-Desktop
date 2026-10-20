@@ -1055,7 +1055,8 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   `power-profiles-daemon`), laptop battery details, idle blank/suspend timeouts,
   lid-close action, and a **Connected devices** list for Bluetooth peripherals
   with battery status. See [Power profiles](#power-profiles-settings--power) below.
-- **Startup** — applications that launch once after sign-in (`startup.json`).
+- **Startup** — applications that launch once after sign-in (`startup.json`),
+  plus **Restore windows after crash** (`session.json`).
   Empty by default; use **Add application…** to pick desktop apps (no custom
   command lines). Master switch plus per-app enable toggles. The compositor
   starts them ~2 seconds after the session begins (skipped during onboarding
@@ -1457,6 +1458,25 @@ closes it rather than the application underneath. Configure in Settings →
 All configuration lives in `~/.config/metis/` as JSON. You can edit files by
 hand — `bar.json` and `themes/*.json` reload while Metis runs.
 
+### Crash recovery (compositor restart)
+
+On a greeter Metis login, `metis-session` **supervises** the compositor. If
+`metis-compositor` exits uncleanly (panic, kill, GPU hang teardown), the
+session stays logged in: the compositor and shell restart, and — when
+**Settings → Startup → Restore windows after crash** is on (default) — Metis
+relaunches the apps from the last snapshot and places them best-effort
+(workspace, output, float/tile, maximize/fullscreen/minimize).
+
+Wayland clients cannot reattach to a new display server, so restore is
+**relaunch**, not migration. Limits: XWayland / tray / exclusive fullscreen /
+Gamescope sessions and unsaved in-app documents are not faithfully restored.
+Clean logout (power menu, Ctrl+Alt+Backspace) always returns to the greeter
+and does not restore that desk on the next login. Three unclean exits within
+about a minute trip a crash-loop brake and return to the greeter.
+
+Details: [`docs/decisions/session-restore.md`](decisions/session-restore.md).
+Snapshot file: `$XDG_STATE_HOME/metis/session-snapshot.json`.
+
 ### Session IPC trust model
 
 Short map for auditors: [`SECURITY.md`](../SECURITY.md).
@@ -1536,6 +1556,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `keybinds.json` | Desktop shortcuts (chords → actions); browse in Settings → Shortcuts, edit under Keyboard → Shortcuts |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action, dim-on-battery (compositor overlay) |
 | `startup.json` | Session startup apps: master enable + desktop ids (empty by default; Settings → Startup) |
+| `session.json` | Crash recovery: `restore_on_crash` (default on; Settings → Startup → Crash recovery) |
 | `updates.json` | Software updates prefs: enabled, check interval, snooze, notify, auto-install security, PackageKit/Flatpak/fwupd sources, last check/error |
 | *(cache)* `~/.cache/metis/updates-snapshot.json` | Pending update list shared by Settings Check now, the edge-bar badge, and the updater |
 | `remote.json` | Classic RDP / third-party desktop sharing: enabled, backend (`gnome_rdp` default / `rustdesk` / `metis_native`), auto-start, LAN-only + firewall state |
@@ -1610,6 +1631,7 @@ changes live.
 | gdbus request path "does not exist" | Portal request objects are ephemeral — trigger a fresh `Screenshot` call; use `gdbus monitor --session --dest org.freedesktop.portal.Desktop` *before* the call to see the `Response` signal |
 | Bluetooth shows stale battery | Many devices only refresh over BT on reconnect; install **Solaar** for Logitech charging state, or use a Unifying/Bolt receiver |
 | Session won't start / behaves oddly | `./run-metis.sh --stop` then `./run-metis.sh --build --session` |
+| Compositor crashed but I'm still logged in with empty/wrong apps | Expected for M1 crash recovery — apps relaunch best-effort. Disable under Settings → Startup → Restore windows after crash, or check `~/.local/state/metis/logs/session-latest.log`. Three rapid crashes return to the greeter |
 | Theme looks wrong | Delete `~/.config/metis/themes/*.json` and restart to regenerate stock tokens (this resets custom accents), or use **Settings → System → Reset** |
 | Want factory defaults | **Settings → System → Reset** (backup first); then log out and sign back in |
 | Verify the shell is reachable | `./run-metis.sh --verify` |

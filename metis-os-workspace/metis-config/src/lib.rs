@@ -33,6 +33,7 @@ pub mod reset;
 pub mod rudp;
 pub mod sanitize;
 pub mod screenshot;
+pub mod session;
 pub mod startup;
 pub mod theme;
 pub mod updates;
@@ -51,6 +52,15 @@ pub use icons::{
     install_icon_theme_archive, load_icons_config, remove_user_icon_theme,
     resolve_app_icon_override, resolve_brand_launcher_path, resolve_brand_settings_path,
     save_icons_config, sync_session_icon_theme_from_config,
+};
+pub use session::{
+    SESSION_SNAPSHOT_VERSION, SessionConfig, SessionOutputSnapshot, SessionPixelRect,
+    SessionSnapshot, SessionTileRect, SessionWindowSnapshot, is_metis_chrome_app_id,
+    load_session_config, load_session_snapshot, mark_session_snapshot_ineligible,
+    match_restore_slot, metis_state_dir, resolve_desktop_id_for_app_id, save_session_config,
+    save_session_snapshot, session_clean_exit_marker_path, session_config_path,
+    session_snapshot_path, startup_id_covered_by_restore, unique_desktop_ids_for_restore,
+    unix_now_secs, write_session_clean_exit_marker,
 };
 
 use serde::{Deserialize, Serialize};

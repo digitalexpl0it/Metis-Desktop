@@ -614,6 +614,7 @@ impl MetisState {
                     self.desk_mut_or_default(key).scroll.remove(&ws);
                 }
             }
+            self.mark_session_snapshot_dirty();
             return;
         }
 
@@ -636,6 +637,7 @@ impl MetisState {
                 desk.scroll.remove(&ws);
             }
         }
+        self.mark_session_snapshot_dirty();
     }
 
     /// Set the layout mode of an output's active workspace and apply it live.
@@ -1497,6 +1499,7 @@ impl MetisState {
             self.focus_topmost_on_active_workspace();
             self.sync_edge_bar_fullscreen_visibility();
             self.emit_workspace_changed(output_key);
+            self.mark_session_snapshot_dirty();
             return;
         }
 
@@ -1541,6 +1544,7 @@ impl MetisState {
         self.emit_layout_changed();
         self.sync_edge_bar_fullscreen_visibility();
         self.emit_workspace_changed(output_key);
+        self.mark_session_snapshot_dirty();
     }
 
     /// Unmap every window registered on `(output_key, workspace)`.

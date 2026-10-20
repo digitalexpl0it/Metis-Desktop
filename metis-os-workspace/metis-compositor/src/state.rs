@@ -204,6 +204,10 @@ pub struct MetisState {
     pub(crate) x11_pending_withdraw: std::collections::HashMap<u32, std::time::Instant>,
     /// Persisted per-app floating geometry, so apps reopen where they were left.
     pub window_state: crate::window_state::WindowStateStore,
+    /// Crash-recovery snapshot + pending restore slots (maturity M1).
+    pub(crate) session_restore: crate::session_restore::SessionRestoreRuntime,
+    /// After restore placement: `(fullscreen, maximized, minimized)` applied once ready.
+    pub(crate) pending_session_restore_chrome: std::collections::HashMap<u32, (bool, bool, bool)>,
 
     /// Per-output desktops, keyed by output name. Created lazily as outputs map;
     /// the first (primary) output's desk is seeded from `desk.json` (widgets),
@@ -970,6 +974,8 @@ impl MetisState {
             minimize_genie_fx: std::collections::HashMap::new(),
             x11_pending_withdraw: std::collections::HashMap::new(),
             window_state: crate::window_state::WindowStateStore::load(),
+            session_restore: crate::session_restore::SessionRestoreRuntime::new(),
+            pending_session_restore_chrome: std::collections::HashMap::new(),
             desks: std::collections::HashMap::new(),
             default_layout: grid_layout,
             gutter_px: 14,
@@ -1112,6 +1118,7 @@ impl MetisState {
     /// render path so going idle can never starve shell/client spawn.
     pub fn tick_housekeeping(&mut self) {
         self.run_pending_startup();
+        self.tick_session_restore();
         crate::ipc::drain_ipc(self);
         self.tick_portal_elevate();
         self.protocol_lock_reap_dead();
@@ -1783,8 +1790,9 @@ impl MetisState {
             self.client_spawned = true;
         }
 
-        // Phase 3: user startup applications (~2s after compositor start).
+        // Phase 3: crash-restore + user startup applications (~2s after start).
         if !self.startup_apps_spawned && elapsed > Duration::from_secs(2) {
+            self.arm_session_restore_if_needed();
             self.arm_startup_applications();
             self.startup_apps_spawned = true;
         }
@@ -1822,6 +1830,16 @@ impl MetisState {
         let mut stagger_i = 0u32;
         for entry in &cfg.entries {
             if !entry.enabled {
+                continue;
+            }
+            if crate::session_restore::startup_covered_by_session_restore(
+                &self.session_restore,
+                &entry.id,
+            ) {
+                tracing::debug!(
+                    id = %entry.id,
+                    "startup app skipped — already queued by session restore"
+                );
                 continue;
             }
             match metis_config::resolve_desktop_launch_argv(&entry.id) {
@@ -2129,6 +2147,7 @@ impl MetisState {
     /// instead of leaving a black framebuffer.
     pub(crate) fn end_compositor_session(&mut self) {
         tracing::info!("shutting down compositor session");
+        self.prepare_clean_session_exit();
         self.kill_spawned_clients();
         if self.is_drm_backend() {
             self.drm_change_vt(1);
@@ -3555,6 +3574,10 @@ impl MetisState {
     /// Returns true when the window was placed as floating.
     fn place_new_window(&mut self, id: u32, app_id: Option<&str>) -> bool {
         if self.windows.placement_chosen(id) {
+            return self.floating.contains(&id);
+        }
+
+        if self.try_apply_session_restore_placement(id, app_id) {
             return self.floating.contains(&id);
         }
 
@@ -5302,6 +5325,9 @@ impl MetisState {
         if self.pending_game_fullscreen.remove(&id) {
             self.set_fullscreen(id, true, None);
         }
+
+        self.apply_pending_session_restore_chrome(id);
+        self.mark_session_snapshot_dirty();
     }
 
     pub(crate) fn set_app_tile_display_name(
@@ -5497,6 +5523,8 @@ impl MetisState {
         self.refresh_all_scroll_offsets();
         self.reposition_scroll_windows();
         self.persist_layout();
+        self.pending_session_restore_chrome.remove(&id);
+        self.mark_session_snapshot_dirty();
         self.event_bus.emit(&CompositorEvent::WindowClosed { id });
     }
 
