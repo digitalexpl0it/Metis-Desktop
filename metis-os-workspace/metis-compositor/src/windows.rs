@@ -4,6 +4,7 @@ use metis_grid::PixelRect;
 use metis_protocol::WindowInfo;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::backend::ObjectId;
+use smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle;
 use smithay::xwayland::X11Surface;
 use smithay::{desktop::Window, wayland::shell::xdg::ToplevelSurface};
 
@@ -74,6 +75,8 @@ pub struct WindowRecord {
     /// XWayland windows are managed as floating surfaces (no grid tiling/snap):
     /// they carry no `xdg_toplevel` state and are positioned via `configure`.
     pub is_x11: bool,
+    /// `ext-foreign-toplevel-list-v1` handle (projection for third-party clients).
+    pub foreign_toplevel: Option<ForeignToplevelHandle>,
 }
 
 impl WindowRecord {
@@ -155,6 +158,7 @@ impl WindowRegistry {
                 decoration_bound: false,
                 pre_fullscreen_maximized: false,
                 is_x11,
+                foreign_toplevel: None,
             },
         );
     }
@@ -257,6 +261,12 @@ impl WindowRegistry {
 
     pub fn get(&self, id: u32) -> Option<&WindowRecord> {
         self.by_id.get(&id)
+    }
+
+    pub fn set_foreign_toplevel(&mut self, id: u32, handle: Option<ForeignToplevelHandle>) {
+        if let Some(record) = self.by_id.get_mut(&id) {
+            record.foreign_toplevel = handle;
+        }
     }
 
     pub fn ids(&self) -> Vec<u32> {

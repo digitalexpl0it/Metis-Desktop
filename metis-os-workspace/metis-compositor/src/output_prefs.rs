@@ -175,6 +175,8 @@ fn post_output_geometry_change(state: &mut MetisState) {
     // DRM modeset / layout shifts can leave client GL buffers blank while Metis
     // SSD chrome still paints. Re-send configures so GTK (and others) redraw.
     state.nudge_clients_after_output_change();
+    // Preferred fractional / buffer scale for clients on every output.
+    state.refresh_all_surface_scales();
 }
 
 fn clamp_user_scale(raw: f64) -> f64 {

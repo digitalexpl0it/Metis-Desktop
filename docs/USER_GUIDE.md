@@ -694,6 +694,9 @@ Settings → Appearance → Edge bar → *Workspaces*:
   so all displays stay on the same virtual desktop number.
 
 The taskbar dock always follows its own bar's output and active workspace.
+(Third-party tools can *list* windows via Wayland
+`ext-foreign-toplevel-list-v1`; activate/minimize/close for those docks is not
+exported yet — the Metis dock uses the private compositor IPC.)
 
 ### Moving windows between monitors
 
@@ -878,8 +881,10 @@ metis-cmd settings appearance # open a specific page in its category sheet
 Search on Home filters category tiles and lists matching pages. Deep-link with
 `metis-cmd settings <page>` (e.g. `display`, `network`, `power`).
 
-- **Display** — per-output scale, enable/disable, resolution & refresh (DRM mode
-  list on real hardware), **Duplicate displays** (mirror clone with scale-to-fit
+- **Display** — per-output scale (clients get standard `wp_fractional_scale_v1`
+  / viewporter + preferred buffer scale on mixed-DPI setups), enable/disable,
+  resolution & refresh (DRM mode list on real hardware), **Duplicate displays**
+  (mirror clone with scale-to-fit
   letterboxing on DRM hardware), and multi-monitor arrangement (drag preview when
   two or more outputs are connected; hidden while duplicating; **Save display
   settings** with a keep/revert confirmation). Scale, **Active**, **Adaptive
@@ -1299,15 +1304,19 @@ dialog that spawns FreeRDP (`wlfreerdp3` → `wlfreerdp` → `xfreerdp3` →
 defaults to **Settings → Remote access** + `gnome-remote-desktop` / `metis-remote`.
 A **Metis native** RDP host (`metis-remote native enable` → `metis-rdp-host`) is
 also RDP-compatible with this viewer: it captures the Wayland session via the
-portal (PipeWire) and serves RDP on port 3389. GRD remains the supported default
-under **Settings → Remote access**. Enable **Metis native RDP** there after
-installing Metis with `metis-rdp-host` present. Like GRD, native RDP **requires
-credentials**: set a username/password under Remote access (or
+portal (PipeWire), composites up to four monitors into a virtual-desktop atlas,
+and serves RDP on port 3389. Enable Viewer **multi-monitor** / **span** when the
+host has more than one display. GRD remains the supported default under
+**Settings → Remote access**. Enable **Metis native RDP** there after installing
+Metis with `metis-rdp-host` present (FreeRDP shadow libraries required; GNOME
+Remote Desktop is not required for the native path). Like GRD, native RDP
+**requires credentials**: set a username/password under Remote access (or
 `metis-remote native set-credentials <user>` with the password on stdin) before
 enabling. The password is stored only in `$XDG_RUNTIME_DIR/metis/rdp-password`
 (mode 0600, cleared at logout — set it again after signing back in); the
 username is saved in `remote.json`. The host refuses to start, and rejects every
-login, when no password is configured.
+login, when no password is configured. Native host **audio and clipboard** are
+not implemented yet — use GRD or Metis Remote (RUDP) when you need those.
 
 1. Install a FreeRDP client on the machine that will connect (Ubuntu):
    `sudo apt install freerdp3-wayland`  

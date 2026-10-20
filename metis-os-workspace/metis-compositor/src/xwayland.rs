@@ -171,6 +171,7 @@ impl MetisState {
                     app_id,
                     suggested_rect,
                 });
+                self.foreign_toplevel_announce(existing);
             }
             let _ = window.set_activated(true);
             self.note_window_focus(existing);
@@ -260,6 +261,7 @@ impl MetisState {
             app_id,
             suggested_rect,
         });
+        self.foreign_toplevel_announce(id);
         self.maybe_place_remote_viewer_window(id);
         self.note_window_focus(id);
         self.focus_window_id(id);
@@ -541,6 +543,7 @@ impl MetisState {
         self.save_window_geometry(id);
         if let Some(record) = self.windows.unregister(id) {
             self.space.unmap_elem(&record.window);
+            self.foreign_toplevel_close(record.foreign_toplevel);
         }
         if ready {
             self.on_window_destroyed(id);

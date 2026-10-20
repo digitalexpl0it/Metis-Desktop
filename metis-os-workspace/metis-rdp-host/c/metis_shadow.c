@@ -206,10 +206,138 @@ static int metis_authenticate(rdpShadowSubsystem* subsystem, rdpShadowClient* cl
 	return metis_secure_streq(password, sub->password) == 0 ? 1 : 0;
 }
 
+/* Minimal field finder for rdp-layout.json produced by metis-rdp-host. */
+static const char* metis_json_find_key(const char* json, const char* key)
+{
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+	return strstr(json, pattern);
+}
+
+static int metis_json_next_int_after(const char* p, const char* key, INT32* out)
+{
+	const char* hit;
+	char pattern[64];
+	if (!p || !out)
+		return -1;
+	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+	hit = strstr(p, pattern);
+	if (!hit)
+		return -1;
+	hit = strchr(hit, ':');
+	if (!hit)
+		return -1;
+	hit++;
+	while (*hit == ' ' || *hit == '\t')
+		hit++;
+	*out = (INT32)strtol(hit, NULL, 10);
+	return 0;
+}
+
+static int metis_json_next_bool_after(const char* p, const char* key, int* out)
+{
+	const char* hit;
+	char pattern[64];
+	if (!p || !out)
+		return -1;
+	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+	hit = strstr(p, pattern);
+	if (!hit)
+		return -1;
+	hit = strchr(hit, ':');
+	if (!hit)
+		return -1;
+	hit++;
+	while (*hit == ' ' || *hit == '\t')
+		hit++;
+	*out = (strncmp(hit, "true", 4) == 0) ? 1 : 0;
+	return 0;
+}
+
+/**
+ * Load MONITOR_DEF entries from METIS_RDP_LAYOUT_PATH (rdp-layout.json).
+ * Falls back to a single 1920×1080 (or SHM size) monitor.
+ */
 static UINT32 metis_enum_monitors(MONITOR_DEF* monitors, UINT32 maxMonitors)
 {
+	const char* path;
+	char* buf = NULL;
+	FILE* f = NULL;
+	long sz = 0;
+	UINT32 count = 0;
+	const char* p;
+	INT32 atlas_w = 0;
+	INT32 atlas_h = 0;
+
 	if (!monitors || maxMonitors < 1)
 		return 0;
+
+	path = getenv("METIS_RDP_LAYOUT_PATH");
+	if (path && path[0] != '\0')
+		f = fopen(path, "r");
+	if (f)
+	{
+		if (fseek(f, 0, SEEK_END) == 0)
+			sz = ftell(f);
+		if (sz > 0 && sz < 1 << 20 && fseek(f, 0, SEEK_SET) == 0)
+		{
+			buf = (char*)malloc((size_t)sz + 1);
+			if (buf && fread(buf, 1, (size_t)sz, f) == (size_t)sz)
+			{
+				buf[sz] = '\0';
+				(void)metis_json_next_int_after(buf, "atlas_width", &atlas_w);
+				(void)metis_json_next_int_after(buf, "atlas_height", &atlas_h);
+				p = metis_json_find_key(buf, "monitors");
+				if (p)
+					p = strchr(p, '[');
+				while (p && count < maxMonitors && count < 4)
+				{
+					const char* obj = strchr(p, '{');
+					INT32 left = 0, top = 0, right = 0, bottom = 0;
+					int primary = 0;
+					if (!obj)
+						break;
+					if (metis_json_next_int_after(obj, "left", &left) != 0 ||
+					    metis_json_next_int_after(obj, "top", &top) != 0 ||
+					    metis_json_next_int_after(obj, "right", &right) != 0 ||
+					    metis_json_next_int_after(obj, "bottom", &bottom) != 0)
+					{
+						p = obj + 1;
+						continue;
+					}
+					(void)metis_json_next_bool_after(obj, "primary", &primary);
+					if (right > left && bottom > top)
+					{
+						monitors[count].left = left;
+						monitors[count].top = top;
+						monitors[count].right = right;
+						monitors[count].bottom = bottom;
+						monitors[count].flags = primary ? 1u : 0u;
+						count++;
+					}
+					p = strchr(obj + 1, '}');
+					if (p)
+						p++;
+				}
+			}
+		}
+		fclose(f);
+		free(buf);
+	}
+
+	if (count > 0)
+	{
+		if (g_subsystem)
+		{
+			if (atlas_w > 0)
+				g_subsystem->width = (UINT32)atlas_w;
+			if (atlas_h > 0)
+				g_subsystem->height = (UINT32)atlas_h;
+		}
+		return count;
+	}
+
+	/* Fallback: single monitor. */
 	monitors[0].left = 0;
 	monitors[0].top = 0;
 	monitors[0].right = 1920;
@@ -405,14 +533,33 @@ static int metis_subsystem_init(rdpShadowSubsystem* subsystem)
 	sub->common.numMonitors = metis_enum_monitors(sub->common.monitors, 16);
 	sub->common.captureFrameRate = 30;
 	sub->common.selectedMonitor = 0;
-	monitor = &sub->common.monitors[0];
-	sub->common.virtualScreen.left = monitor->left;
-	sub->common.virtualScreen.top = monitor->top;
-	sub->common.virtualScreen.right = monitor->right;
-	sub->common.virtualScreen.bottom = monitor->bottom;
-	sub->common.virtualScreen.flags = 1;
-	sub->width = (UINT32)(monitor->right - monitor->left);
-	sub->height = (UINT32)(monitor->bottom - monitor->top);
+	/* Virtual desktop = union of all MONITOR_DEF rects (multi-monitor atlas). */
+	{
+		UINT32 i;
+		INT32 vleft = sub->common.monitors[0].left;
+		INT32 vtop = sub->common.monitors[0].top;
+		INT32 vright = sub->common.monitors[0].right;
+		INT32 vbottom = sub->common.monitors[0].bottom;
+		for (i = 1; i < sub->common.numMonitors; i++)
+		{
+			monitor = &sub->common.monitors[i];
+			if (monitor->left < vleft)
+				vleft = monitor->left;
+			if (monitor->top < vtop)
+				vtop = monitor->top;
+			if (monitor->right > vright)
+				vright = monitor->right;
+			if (monitor->bottom > vbottom)
+				vbottom = monitor->bottom;
+		}
+		sub->common.virtualScreen.left = vleft;
+		sub->common.virtualScreen.top = vtop;
+		sub->common.virtualScreen.right = vright;
+		sub->common.virtualScreen.bottom = vbottom;
+		sub->common.virtualScreen.flags = 1;
+		sub->width = (UINT32)(vright - vleft);
+		sub->height = (UINT32)(vbottom - vtop);
+	}
 	(void)metis_map_shm(sub);
 	return 1;
 }

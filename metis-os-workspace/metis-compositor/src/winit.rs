@@ -355,6 +355,7 @@ pub fn init_winit(
                         }
                         for out in &frame_outputs {
                             state.send_layer_frames(out, now);
+                            state.refresh_scales_on_output(out);
                         }
                         state.damaged = false;
                         state.defer_client_flush = true;

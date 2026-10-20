@@ -1,7 +1,22 @@
-use metis_protocol::{CompositorCommand, CompositorEvent};
+use metis_protocol::{CompositorCommand, CompositorEvent, OutputInfo};
 
 pub fn portal_app_id(app_id: Option<ashpd::MaybeAppID>) -> Option<String> {
     app_id.map(|id| id.to_string())
+}
+
+/// Connected outputs from the compositor (primary first). Empty on IPC failure.
+pub fn list_outputs() -> Vec<OutputInfo> {
+    match metis_protocol::send_compositor_command(&CompositorCommand::ListOutputs) {
+        Ok(CompositorEvent::OutputList { outputs }) => outputs,
+        Ok(other) => {
+            tracing::debug!(?other, "ListOutputs unexpected reply");
+            Vec::new()
+        }
+        Err(err) => {
+            tracing::debug!(%err, "ListOutputs IPC failed");
+            Vec::new()
+        }
+    }
 }
 
 /// Ask the compositor to elevate capture UI. Returns `Err` when the compositor

@@ -432,7 +432,11 @@ pub fn autostart_from_config() -> Result<(), String> {
     if !cfg.enabled || !cfg.auto_start {
         return Ok(());
     }
-    if !gnome_rdp::grdctl_available() {
+    if matches!(cfg.backend, RemoteBackend::RustDesk) {
+        tracing::info!("remote autostart skipped: RustDesk backend (manual enable)");
+        return Ok(());
+    }
+    if autostart_requires_grd(cfg.backend) && !gnome_rdp::grdctl_available() {
         tracing::warn!("remote autostart skipped: gnome-remote-desktop not installed");
         return Ok(());
     }
@@ -441,7 +445,8 @@ pub fn autostart_from_config() -> Result<(), String> {
         tracing::warn!("remote autostart skipped: RDP credentials not set");
         return Ok(());
     }
-    enable_sharing().map_err(|e| {
+    // Dispatches on backend (GRD vs MetisNative).
+    enable().map_err(|e| {
         tracing::warn!(%e, "remote autostart failed");
         e
     })?;
@@ -451,4 +456,22 @@ pub fn autostart_from_config() -> Result<(), String> {
         tracing::warn!(%err, "remote autostart: LAN-only firewall apply failed");
     }
     Ok(())
+}
+
+/// Whether session autostart requires `grdctl` / gnome-remote-desktop.
+pub(crate) fn autostart_requires_grd(backend: RemoteBackend) -> bool {
+    matches!(backend, RemoteBackend::GnomeRdp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metis_config::RemoteBackend;
+
+    #[test]
+    fn autostart_grd_gate() {
+        assert!(autostart_requires_grd(RemoteBackend::GnomeRdp));
+        assert!(!autostart_requires_grd(RemoteBackend::MetisNative));
+        assert!(!autostart_requires_grd(RemoteBackend::RustDesk));
+    }
 }

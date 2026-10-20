@@ -2,11 +2,13 @@
 //!
 //! Spawned by `metis-remote native enable`. Captures the Wayland session via
 //! xdg-desktop-portal ScreenCast (metis-portal) and serves RDP on TCP 3389 so
-//! Metis Viewer / FreeRDP clients can connect. GRD remains the product default.
+//! Metis Viewer / FreeRDP clients can connect. Supports multi-monitor via a
+//! virtual-desktop atlas. GRD remains the product default.
 
 mod capture;
 mod framebuf;
 mod input;
+mod layout;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -16,6 +18,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::framebuf::FrameBuffer;
 use crate::input::InputBridge;
+use crate::layout::{fetch_layout_from_compositor, layout_path, save_layout};
 
 const DEFAULT_PORT: u16 = 3389;
 
@@ -83,14 +86,24 @@ async fn main() -> Result<()> {
             dir.display()
         );
     }
+
+    let layout = Arc::new(fetch_layout_from_compositor());
+    let layout_file = layout_path(&dir);
+    save_layout(&layout_file, &layout).context("write rdp-layout.json")?;
+    // SAFETY: single-threaded before FreeRDP thread; C reads this at EnumMonitors.
+    unsafe {
+        std::env::set_var("METIS_RDP_LAYOUT_PATH", &layout_file);
+    }
+
     let shm_path = dir.join("rdp-frames.shm");
     let input_path = dir.join("rdp-input.sock");
 
     let frames = Arc::new(Mutex::new(
-        FrameBuffer::create(&shm_path, 1920, 1080).context("create frame SHM")?,
+        FrameBuffer::create(&shm_path, layout.atlas_width, layout.atlas_height)
+            .context("create frame SHM")?,
     ));
     let input = InputBridge::start(&input_path).context("input bridge")?;
-    let _capture = capture::CaptureSession::start(Arc::clone(&frames))
+    let _capture = capture::CaptureSession::start(Arc::clone(&frames), Arc::clone(&layout))
         .await
         .context("start ScreenCast capture")?;
 
@@ -101,6 +114,10 @@ async fn main() -> Result<()> {
     tracing::info!(
         %port,
         shm = %shm_path.display(),
+        layout = %layout_file.display(),
+        monitors = layout.monitors.len(),
+        atlas_w = layout.atlas_width,
+        atlas_h = layout.atlas_height,
         "metis-rdp-host: starting FreeRDP shadow (portal capture)"
     );
 

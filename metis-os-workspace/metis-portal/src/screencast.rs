@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use enumflags2::BitFlags;
 
 use metis_capture::CaptureOptions;
+use metis_protocol::{OutputInfo, RUDP_MAX_SUBSCRIBED_OUTPUTS};
 
 use crate::capture::{CaptureHub, spawn_screencast_pump};
 use crate::compositor_ipc;
@@ -37,13 +38,16 @@ pub(crate) fn should_refuse_cast_while_locked(session_locked: bool) -> bool {
 struct CastSession {
     streams: Vec<u32>,
     cancel: Arc<AtomicBool>,
-    pump: Option<JoinHandle<()>>,
+    /// One pump thread per PipeWire stream (multi-monitor).
+    pumps: Vec<JoinHandle<()>>,
+    /// From SelectSources — when true, start_cast emits one stream per output.
+    multiple: bool,
 }
 
 impl CastSession {
     fn stop(&mut self, pipewire: &PipeWireHub) {
         self.cancel.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.pump.take() {
+        for handle in self.pumps.drain(..) {
             let _ = handle.join();
         }
         for node in self.streams.drain(..) {
@@ -112,7 +116,8 @@ impl ScreencastImpl for MetisScreencast {
                 CastSession {
                     streams: Vec::new(),
                     cancel: Arc::new(AtomicBool::new(false)),
-                    pump: None,
+                    pumps: Vec::new(),
+                    multiple: false,
                 },
             );
         Ok(CreateSessionResponse::new(session_token))
@@ -120,10 +125,16 @@ impl ScreencastImpl for MetisScreencast {
 
     async fn select_sources(
         &self,
-        _session_token: HandleToken,
+        session_token: HandleToken,
         _app_id: Option<MaybeAppID>,
-        _options: SelectSourcesOptions,
+        options: SelectSourcesOptions,
     ) -> ashpd::backend::Result<SelectSourcesResponse> {
+        let multiple = options.is_multiple().unwrap_or(false);
+        if let Ok(mut sessions) = self.sessions.lock()
+            && let Some(session) = sessions.get_mut(&session_token.to_string())
+        {
+            session.multiple = multiple;
+        }
         Ok(SelectSourcesResponse {})
     }
 
@@ -153,47 +164,137 @@ impl ScreencastImpl for MetisScreencast {
             if should_refuse_cast_while_locked(locked) {
                 return Err(PortalError::Failed(message));
             }
-            // Non-lock rejections (rate limit, etc.) also fail closed.
             return Err(PortalError::Failed(message));
         }
-        let (width, height) = self.capture.output_size(None).await;
-        let stream = self
-            .pipewire
-            .create_stream(width, height)
-            .map_err(|err| PortalError::Failed(format!("create PipeWire stream: {err}")))?;
+
+        let multiple = self
+            .sessions
+            .lock()
+            .ok()
+            .and_then(|g| g.get(&session_token.to_string()).map(|s| s.multiple))
+            .unwrap_or(false);
+
+        let targets = screencast_targets(multiple, &self.capture).await;
+        if targets.is_empty() {
+            return Err(PortalError::Failed(
+                "no outputs available for ScreenCast".into(),
+            ));
+        }
 
         let cancel = Arc::new(AtomicBool::new(false));
-        let Some(pump) = spawn_screencast_pump(
-            Arc::clone(&self.pipewire),
-            stream.node_id,
-            CaptureOptions {
-                draw_cursor: true,
-                ..Default::default()
-            },
-            Arc::clone(&cancel),
-        ) else {
-            return Err(PortalError::Failed(
-                "failed to spawn screencast pump thread".into(),
-            ));
-        };
+        let mut pw_streams = Vec::with_capacity(targets.len());
+        let mut node_ids = Vec::with_capacity(targets.len());
+        let mut pumps = Vec::with_capacity(targets.len());
+
+        for (idx, target) in targets.iter().enumerate() {
+            let stream = self
+                .pipewire
+                .create_stream(target.width, target.height)
+                .map_err(|err| PortalError::Failed(format!("create PipeWire stream: {err}")))?;
+
+            let Some(pump) = spawn_screencast_pump(
+                Arc::clone(&self.pipewire),
+                stream.node_id,
+                CaptureOptions {
+                    draw_cursor: true,
+                    output_index: target.output_index,
+                    connector: target.connector.clone(),
+                },
+                Arc::clone(&cancel),
+            ) else {
+                // Tear down streams already created for this cast.
+                for nid in &node_ids {
+                    self.pipewire.destroy_stream(*nid);
+                }
+                self.pipewire.destroy_stream(stream.node_id);
+                return Err(PortalError::Failed(
+                    "failed to spawn screencast pump thread".into(),
+                ));
+            };
+
+            let pw_stream = StreamBuilder::new(stream.node_id)
+                .source_type(SourceType::Monitor)
+                .size((target.width as i32, target.height as i32))
+                .position((target.x, target.y))
+                .mapping_id(format!("metis:{idx}"))
+                .build();
+
+            node_ids.push(stream.node_id);
+            pumps.push(pump);
+            pw_streams.push(pw_stream);
+        }
 
         if let Ok(mut sessions) = self.sessions.lock()
             && let Some(session) = sessions.get_mut(&session_token.to_string())
         {
-            session.streams.push(stream.node_id);
+            session.streams.extend(node_ids);
             session.cancel = cancel;
-            session.pump = Some(pump);
+            session.pumps = pumps;
         }
 
-        let pw_stream = StreamBuilder::new(stream.node_id)
-            .source_type(SourceType::Monitor)
-            .size((width as i32, height as i32))
-            .position((0, 0))
-            .mapping_id("metis:0".to_string())
-            .build();
-
-        Ok(StreamsBuilder::new(vec![pw_stream]).build())
+        tracing::info!(
+            streams = pw_streams.len(),
+            multiple,
+            "portal screencast streams ready"
+        );
+        Ok(StreamsBuilder::new(pw_streams).build())
     }
+}
+
+#[derive(Debug, Clone)]
+struct CastTarget {
+    connector: Option<String>,
+    output_index: usize,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+async fn screencast_targets(multiple: bool, capture: &CaptureHub) -> Vec<CastTarget> {
+    if !multiple {
+        let (width, height) = capture.output_size(None).await;
+        return vec![CastTarget {
+            connector: None,
+            output_index: 0,
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }];
+    }
+
+    let outputs = compositor_ipc::list_outputs();
+    let enabled: Vec<&OutputInfo> = outputs
+        .iter()
+        .filter(|o| o.enabled && !o.mirrored && o.rect.width > 0 && o.rect.height > 0)
+        .take(RUDP_MAX_SUBSCRIBED_OUTPUTS)
+        .collect();
+
+    if enabled.is_empty() {
+        let (width, height) = capture.output_size(None).await;
+        return vec![CastTarget {
+            connector: None,
+            output_index: 0,
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }];
+    }
+
+    enabled
+        .into_iter()
+        .enumerate()
+        .map(|(idx, o)| CastTarget {
+            connector: Some(o.name.clone()),
+            output_index: idx,
+            x: o.rect.x,
+            y: o.rect.y,
+            width: o.rect.width.max(1) as u32,
+            height: o.rect.height.max(1) as u32,
+        })
+        .collect()
 }
 
 #[cfg(test)]

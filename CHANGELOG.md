@@ -16,6 +16,21 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   Startup → **Restore windows after crash** (`session.json`). Clean logout
   still returns to the greeter. See
   [`docs/decisions/session-restore.md`](docs/decisions/session-restore.md).
+- **MetisNative RDP multi-monitor (M5)** — `metis-rdp-host` captures multiple
+  monitors via the portal into a virtual-desktop atlas (`rdp-layout.json`);
+  FreeRDP advertises each monitor for Viewer `/multimon` / `/span`. Session
+  autostart works for the MetisNative backend without `gnome-remote-desktop`.
+  GRD remains the Remote access default until QA sign-off. See
+  [`docs/decisions/remote-host-native-vs-grd.md`](docs/decisions/remote-host-native-vs-grd.md).
+- **Fractional scale protocols (M3)** — the compositor advertises
+  `wp_viewporter` and `wp_fractional_scale_v1`, and uses `wl_compositor` v6 so
+  clients receive `preferred_buffer_scale` / transform updates when windows
+  move across mixed-DPI outputs or Display scale changes.
+- **Foreign toplevel list (M4)** — `ext-foreign-toplevel-list-v1` exports open
+  windows (title / app_id / stable `metis-{id}`) for third-party list clients.
+  The Metis taskbar still uses compositor IPC; activate/close for foreign docks
+  is not in this protocol. See
+  [`docs/decisions/foreign-toplevel-list.md`](docs/decisions/foreign-toplevel-list.md).
 
 ### Changed
 

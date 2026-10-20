@@ -1632,6 +1632,7 @@ impl MetisState {
                             .send_frame(&out, now, Some(Duration::ZERO), |_, _| Some(out.clone()));
                     });
                     self.send_layer_frames(&out, now);
+                    self.refresh_scales_on_output(&out);
 
                     if let Some(states) = frame_states.as_ref()
                         && self.output_scanout_promoted(&out, states)

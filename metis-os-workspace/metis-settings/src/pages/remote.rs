@@ -195,8 +195,9 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     native_body.append(&readout_row(&tr("Status"), &native_status));
     let native_hint = gtk::Label::new(Some(&tr(
         "Starts metis-rdp-host: captures this Wayland session via the portal \
-         (PipeWire) and serves RDP on port 3389 for Metis Viewer. GNOME Remote \
-         Desktop remains the supported default for classic RDP.",
+         (PipeWire), including multi-monitor as a virtual desktop, and serves \
+         RDP on port 3389 for Metis Viewer. GNOME Remote Desktop remains the \
+         supported default for classic RDP (audio/clipboard).",
     )));
     native_hint.set_xalign(0.0);
     native_hint.set_wrap(true);

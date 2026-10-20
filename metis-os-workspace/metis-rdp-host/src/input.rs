@@ -1,4 +1,9 @@
 //! Receive FreeRDP input events (JSON datagrams) and inject into the compositor.
+//!
+//! Absolute pointer coordinates are virtual-desktop / global logical pixels
+//! matching `rdp-layout.json` MONITOR_DEF left/top/right/bottom (and compositor
+//! `ListOutputs` rects). Multi-monitor clients therefore hit the correct output
+//! without an extra transform.
 
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};

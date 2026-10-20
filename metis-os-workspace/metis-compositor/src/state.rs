@@ -22,6 +22,8 @@ use smithay::{
     utils::{IsAlive, Logical, Point, Rectangle, Size},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
+        foreign_toplevel_list::ForeignToplevelListState,
+        fractional_scale::FractionalScaleManagerState,
         idle_inhibit::IdleInhibitManagerState,
         idle_notify::IdleNotifierState,
         output::OutputManagerState,
@@ -34,6 +36,7 @@ use smithay::{
         shm::ShmState,
         socket::ListeningSocketSource,
         text_input::TextInputManagerState,
+        viewporter::ViewporterState,
     },
 };
 
@@ -125,6 +128,9 @@ pub struct MetisState {
     pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
     pub _output_manager_state: OutputManagerState,
+    pub _viewporter_state: ViewporterState,
+    pub _fractional_scale_manager_state: FractionalScaleManagerState,
+    pub foreign_toplevel_list_state: ForeignToplevelListState,
     pub seat_state: SeatState<MetisState>,
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
@@ -864,13 +870,23 @@ impl MetisState {
         let start_time = std::time::Instant::now();
         let dh = display.handle();
 
-        let compositor_state = CompositorState::new::<MetisState>(&dh);
+        let compositor_state = CompositorState::new_v6::<MetisState>(&dh);
         let xdg_shell_state = XdgShellState::new::<MetisState>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<MetisState>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<MetisState>(&dh);
         let shm_state = ShmState::new::<MetisState>(&dh, vec![]);
         let popups = PopupManager::default();
         let output_manager_state = OutputManagerState::new_with_xdg_output::<MetisState>(&dh);
+        let viewporter_state = ViewporterState::new::<MetisState>(&dh);
+        let fractional_scale_manager_state = FractionalScaleManagerState::new::<MetisState>(&dh);
+        let dh_for_filter = dh.clone();
+        let foreign_toplevel_list_state = ForeignToplevelListState::new_with_filter::<MetisState>(
+            &dh,
+            move |client| match client.get_credentials(&dh_for_filter) {
+                Ok(creds) => creds.uid == unsafe { libc::geteuid() },
+                Err(_) => false,
+            },
+        );
         let data_device_state = DataDeviceState::new::<MetisState>(&dh);
         let primary_selection_state = PrimarySelectionState::new::<MetisState>(&dh);
         let xwayland_shell_state =
@@ -944,6 +960,9 @@ impl MetisState {
             layer_shell_state,
             shm_state,
             _output_manager_state: output_manager_state,
+            _viewporter_state: viewporter_state,
+            _fractional_scale_manager_state: fractional_scale_manager_state,
+            foreign_toplevel_list_state,
             seat_state,
             data_device_state,
             primary_selection_state,
@@ -5307,6 +5326,7 @@ impl MetisState {
             app_id,
             suggested_rect,
         });
+        self.foreign_toplevel_announce(id);
 
         // A freshly mapped window becomes the active one: raise it, give it
         // keyboard focus, and report the focus to the shell. Without this the
@@ -5548,6 +5568,7 @@ impl MetisState {
             self.save_window_geometry(id);
             if let Some(record) = self.windows.unregister(id) {
                 self.space.unmap_elem(&record.window);
+                self.foreign_toplevel_close(record.foreign_toplevel);
             }
             self.on_window_destroyed(id);
         }

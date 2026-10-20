@@ -311,6 +311,7 @@ impl XdgShellHandler for MetisState {
         self.save_window_geometry(id);
         if let Some(record) = self.windows.unregister(id) {
             self.space.unmap_elem(&record.window);
+            self.foreign_toplevel_close(record.foreign_toplevel);
         }
         if ready {
             self.on_window_destroyed(id);
@@ -470,6 +471,7 @@ impl MetisState {
             use metis_protocol::CompositorEvent;
             self.event_bus
                 .emit(&CompositorEvent::WindowMetadata { id, title, app_id });
+            self.foreign_toplevel_sync_metadata(id);
         }
     }
 
