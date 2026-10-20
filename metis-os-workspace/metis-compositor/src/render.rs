@@ -367,7 +367,7 @@ impl MetisState {
             let mut loc = (elem_loc - geo_off).to_physical_precise_round(win_scale) - render_origin;
             let mut alpha = 1.0f32;
             if let Some(id) = id {
-                let nudge = self.scroll_render_nudge(id);
+                let nudge = self.scroll_render_nudge(id) + self.workspace_slide_dx(id);
                 if nudge != 0 {
                     loc = Point::from((loc.x + nudge, loc.y));
                 }
@@ -375,8 +375,8 @@ impl MetisState {
                     alpha = genie_alpha;
                 }
             }
-            // Scroll columns may overhang their display edge; clip them to their
-            // own output (in local coords) so they never paint onto a neighbour.
+            // Scroll columns / workspace slides may overhang their display edge;
+            // clip them to their own output so they never paint onto a neighbour.
             let clip = id.and_then(|id| {
                 if self.is_minimize_genie_active(id) {
                     self.minimize_genie_render(id).map(|(r, _)| {
@@ -387,6 +387,8 @@ impl MetisState {
                                 .to_physical_precise_round(win_scale),
                         )
                     })
+                } else if let Some(c) = self.workspace_slide_clip(id, win_scale) {
+                    Some(Rectangle::new(c.loc - render_origin, c.size))
                 } else {
                     self.scroll_window_clip(id, win_scale)
                         .map(|c| Rectangle::new(c.loc - render_origin, c.size))

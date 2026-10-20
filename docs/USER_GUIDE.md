@@ -665,20 +665,23 @@ all configurable in Settings → Appearance → Windows.
 ## 6. Workspaces
 
 Each workspace is a separate set of app windows. Switch between them with the bar
-dots or the keyboard:
+dots or the keyboard. When window animations are enabled (default; Settings →
+Appearance → Edge bar), the desktop **slides** horizontally in the direction of
+the switch (wallpaper stays put).
 
 - `Super`+`1` .. `Super`+`9` — switch to that workspace.
 - `Super`+`Shift`+`1` .. `9` — move the focused window to that workspace.
 - `Super`+`Alt`+`←` / `→` — cycle to the previous / next workspace (wraps at
   1..=count). Always uses **Super**+**Alt** — not remapped by `METIS_MOD` (see
   nested sessions below).
-- Click a workspace dot in the bar to switch.
+- Click a workspace dot in the bar to switch (same slide as the keybinds).
 - `Super`+`Tab` — **Task View** (Windows-style sticky overlay) for the focused
   output: live thumbnails of apps on the current workspace, plus a bottom shelf
   of desktop mini-previews. Click an app card (or press Enter) to focus it and
   dismiss; press-and-drag a card onto a desktop tile to move it; click × on a
   card to close that window without leaving Task View; click a desktop tile to
-  switch workspaces; Esc or empty backdrop dismisses. Further `Super`+`Tab`
+  switch workspaces (same directional slide as the bar dots); Esc or empty
+  backdrop dismisses. Further `Super`+`Tab`
   cycles apps; `Super`+`Shift`+`Tab` cycles backward. Releasing Super does **not**
   close Task View. `Alt`+`Tab` is unbound by default — remap **Task View (next) /
   (previous)** in Settings → Keyboard if you want Alt+Tab again.

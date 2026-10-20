@@ -330,29 +330,35 @@ impl MetisState {
             if self.windows.is_minimized(id) {
                 continue;
             }
+            // Leaving desk during a workspace slide: ignore pointer (exiting).
+            if self.is_workspace_slide_leaving(id) {
+                continue;
+            }
             let Some(record) = self.windows.get(id) else {
                 continue;
             };
             let Some(loc) = self.space.element_location(window) else {
                 continue;
             };
+            let slide_dx = self.workspace_slide_dx(id);
             let size = window.geometry().size;
             if size.w <= 0 || size.h <= 0 {
                 continue;
             }
 
             if record.fullscreen {
-                if let Some(geo) = self.space.element_geometry(window)
-                    && geo.contains(pos.to_i32_round())
-                {
-                    return Some((window.clone(), loc));
+                if let Some(geo) = self.space.element_geometry(window) {
+                    let hit = Point::from((x - slide_dx, y));
+                    if geo.contains(hit) {
+                        return Some((window.clone(), loc));
+                    }
                 }
                 continue;
             }
 
             if self.should_draw_metis_ssd(id) {
                 let client_frame = PixelRect {
-                    x: loc.x,
+                    x: loc.x + slide_dx,
                     y: loc.y,
                     width: size.w,
                     height: size.h,
@@ -372,24 +378,23 @@ impl MetisState {
                             return Some((window.clone(), loc));
                         }
                     }
-                } else if let Some(frame) = self.ssd_frame_for_mapped_window(id, window)
-                    && point_in_rect(x, y, frame)
-                    && !point_in_rect(x, y, app_tile_body_rect(frame))
-                {
-                    return Some((window.clone(), loc));
+                } else if let Some(mut frame) = self.ssd_frame_for_mapped_window(id, window) {
+                    frame.x += slide_dx;
+                    if point_in_rect(x, y, frame) && !point_in_rect(x, y, app_tile_body_rect(frame))
+                    {
+                        return Some((window.clone(), loc));
+                    }
                 }
             }
 
-            if let Some(geo) = self.space.element_geometry(window)
-                && x >= geo.loc.x
-                && x < geo.loc.x + geo.size.w
-                && y >= geo.loc.y
-                && y < geo.loc.y + geo.size.h
-            {
-                // Use the mapped origin, not geo.loc (which includes
-                // geometry.loc shadow offsets). surface_under expects
-                // coordinates relative to element_location.
-                return Some((window.clone(), loc));
+            if let Some(geo) = self.space.element_geometry(window) {
+                let gx = geo.loc.x + slide_dx;
+                if x >= gx && x < gx + geo.size.w && y >= geo.loc.y && y < geo.loc.y + geo.size.h {
+                    // Use the mapped origin, not geo.loc (which includes
+                    // geometry.loc shadow offsets). surface_under expects
+                    // coordinates relative to element_location.
+                    return Some((window.clone(), loc));
+                }
             }
         }
         None
@@ -434,10 +439,17 @@ impl MetisState {
         window: &smithay::desktop::Window,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
         let map_loc = self.space.element_location(window)?;
+        let slide_dx = self
+            .windows
+            .id_for_window(window)
+            .map(|id| self.workspace_slide_dx(id))
+            .unwrap_or(0);
         // Match smithay's render origin: mapped location minus the client's
-        // geometry offset (CSD shadow margins Firefox keeps while unmaximized).
+        // geometry offset (CSD shadow margins Firefox keeps while unmaximized),
+        // plus any in-flight workspace-slide visual offset.
         let geo = window.geometry();
-        let surface_origin = map_loc.to_f64() - geo.loc.to_f64();
+        let surface_origin =
+            map_loc.to_f64() - geo.loc.to_f64() + Point::from((slide_dx as f64, 0.0));
         let rel = pos - surface_origin;
         if let Some((surface, loc)) = window
             .surface_under(rel, WindowSurfaceType::ALL)

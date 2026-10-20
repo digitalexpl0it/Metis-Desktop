@@ -38,6 +38,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Workspace slide animation** — switching desks (bar dots, Super+Alt+arrows,
+  Super+N, Task View desktop pick) slides app windows horizontally by direction
+  (~280ms). Wallpaper stays fixed. Honours `bar.json` `window_animations`
+  (off in VM compatibility mode). Ephemeral remote desks still hard-cut.
 - **Password-wrapped Secret Service vault + portal Secret** — `metis-secretsd`
   stores the DEK in `vault.wrap` (Argon2id + ChaCha20Poly1305); starts locked;
   unlocks via PAM (`UnlockWithPassword` / shell prompt); migrates legacy

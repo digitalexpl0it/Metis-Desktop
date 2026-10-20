@@ -204,6 +204,9 @@ pub struct MetisState {
     titlebar_press_pending: Option<(u32, Point<f64, Logical>, smithay::utils::Serial)>,
     /// Minimize genie animations keyed by window id (window still mapped until done).
     pub(crate) minimize_genie_fx: std::collections::HashMap<u32, crate::window_fx::MinimizeGenieFx>,
+    /// Per-output workspace slide (leaving + entering windows dual-mapped).
+    pub(crate) workspace_slide_fx:
+        std::collections::HashMap<String, crate::window_fx::WorkspaceSlideFx>,
     /// XWayland windows that have been unmapped by their client, pending a debounce
     /// before we treat it as a real withdraw ("close to tray"). Electron apps
     /// (Claude Desktop) unmap/remap constantly during normal operation, so reacting
@@ -580,6 +583,7 @@ impl MetisState {
             titlebar_last_click: None,
             titlebar_press_pending: None,
             minimize_genie_fx: std::collections::HashMap::new(),
+            workspace_slide_fx: std::collections::HashMap::new(),
             x11_pending_withdraw: std::collections::HashMap::new(),
             window_state: crate::window_state::WindowStateStore::load(),
             session_restore: crate::session_restore::SessionRestoreRuntime::new(),
@@ -812,6 +816,10 @@ impl MetisState {
         }
 
         if self.tick_minimize_genie_fx() {
+            self.damaged = true;
+        }
+
+        if self.tick_workspace_slide_fx() {
             self.damaged = true;
         }
 
@@ -2755,6 +2763,7 @@ impl MetisState {
             let Some(loc) = self.space.element_location(&record.window) else {
                 continue;
             };
+            let slide_dx = self.workspace_slide_dx(id);
             let auto_hide = self.auto_hide_titlebar.contains(&id);
             let show_overlay_titlebar = auto_hide
                 && self.titlebar_reveal_window == Some(id)
@@ -2763,7 +2772,7 @@ impl MetisState {
                 continue;
             }
             let overlay_compact = auto_hide && self.window_uses_compact_overlay(id);
-            let (frame, overlay) = if auto_hide {
+            let (mut frame, overlay) = if auto_hide {
                 (
                     PixelRect {
                         x: loc.x,
@@ -2782,6 +2791,9 @@ impl MetisState {
             } else {
                 continue;
             };
+            if slide_dx != 0 {
+                frame.x += slide_dx;
+            }
             specs.push(crate::decoration::WindowDeco {
                 id,
                 frame,

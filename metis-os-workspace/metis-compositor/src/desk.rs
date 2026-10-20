@@ -397,11 +397,85 @@ impl MetisState {
     }
 
     /// True when a window belongs to the active workspace on its output and may
-    /// be mapped (minimized windows are handled separately).
+    /// be mapped (minimized windows are handled separately). Leaving windows in
+    /// an in-flight workspace slide stay mapped until the animation ends.
     pub(crate) fn window_visible_on_desktop(&self, id: u32) -> bool {
         let key = self.desk_key_for_window(id);
         let ws = self.windows.workspace(id).unwrap_or(1);
-        ws == self.active_workspace_for(&key)
+        if ws == self.active_workspace_for(&key) {
+            return true;
+        }
+        self.workspace_slide_fx
+            .get(&key)
+            .is_some_and(|fx| fx.is_leaving(id))
+    }
+
+    /// Render-time X offset for an in-flight workspace slide, if any.
+    pub(crate) fn workspace_slide_dx(&self, id: u32) -> i32 {
+        let key = self.desk_key_for_window(id);
+        self.workspace_slide_fx
+            .get(&key)
+            .and_then(|fx| fx.dx_for(id))
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn is_workspace_slide_leaving(&self, id: u32) -> bool {
+        let key = self.desk_key_for_window(id);
+        self.workspace_slide_fx
+            .get(&key)
+            .is_some_and(|fx| fx.is_leaving(id))
+    }
+
+    pub(crate) fn is_workspace_slide_window(&self, id: u32) -> bool {
+        let key = self.desk_key_for_window(id);
+        self.workspace_slide_fx
+            .get(&key)
+            .is_some_and(|fx| fx.contains(id))
+    }
+
+    /// Clip sliding workspace windows to their output (same idea as scroll columns).
+    pub(crate) fn workspace_slide_clip(
+        &self,
+        id: u32,
+        scale: impl Into<smithay::utils::Scale<f64>>,
+    ) -> Option<smithay::utils::Rectangle<i32, smithay::utils::Physical>> {
+        if !self.is_workspace_slide_window(id) {
+            return None;
+        }
+        let key = self.desk_key_for_window(id);
+        let output = self.output_by_name(&key)?;
+        let geo = self.space.output_geometry(&output)?;
+        Some(geo.to_physical_precise_round(scale))
+    }
+
+    /// Finish an in-flight slide on `output_key` immediately (unmap leaving).
+    pub(crate) fn finish_workspace_slide(&mut self, output_key: &str) {
+        let Some(fx) = self.workspace_slide_fx.remove(output_key) else {
+            return;
+        };
+        for id in fx.leaving {
+            if let Some(record) = self.windows.get(id).cloned() {
+                self.space.unmap_elem(&record.window);
+            }
+        }
+        self.damaged = true;
+        self.request_redraw();
+    }
+
+    pub(crate) fn tick_workspace_slide_fx(&mut self) -> bool {
+        let finished: Vec<String> = self
+            .workspace_slide_fx
+            .iter()
+            .filter(|(_, fx)| fx.finished())
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in &finished {
+            self.finish_workspace_slide(key);
+        }
+        if !finished.is_empty() || !self.workspace_slide_fx.is_empty() {
+            self.request_redraw();
+        }
+        !self.workspace_slide_fx.is_empty()
     }
 
     /// Best-effort client body rect for a mapped or placed window.
@@ -1437,21 +1511,30 @@ impl MetisState {
     /// Ephemeral remote desks never fan out — they exist only on the output that
     /// hosts the FreeRDP session.
     pub fn switch_workspace_routed(&mut self, requested_output: &str, target: u32) {
+        self.switch_workspace_routed_with_dir(requested_output, target, None);
+    }
+
+    fn switch_workspace_routed_with_dir(
+        &mut self,
+        requested_output: &str,
+        target: u32,
+        dir_hint: Option<i32>,
+    ) {
         if self.ephemeral_remote_workspace(requested_output) == Some(target) {
-            self.switch_workspace(requested_output, target);
+            self.switch_workspace_with_dir(requested_output, target, dir_hint);
             return;
         }
         if self.workspace_mode() == metis_config::WorkspaceMode::Linked {
             let keys: Vec<String> = self.space.outputs().map(|o| o.name()).collect();
             if keys.is_empty() {
-                self.switch_workspace(requested_output, target);
+                self.switch_workspace_with_dir(requested_output, target, dir_hint);
             } else {
                 for key in keys {
-                    self.switch_workspace(&key, target);
+                    self.switch_workspace_with_dir(&key, target, dir_hint);
                 }
             }
         } else {
-            self.switch_workspace(requested_output, target);
+            self.switch_workspace_with_dir(requested_output, target, dir_hint);
         }
     }
 
@@ -1467,7 +1550,8 @@ impl MetisState {
         } else {
             current - 1
         };
-        self.switch_workspace_routed(requested_output, target);
+        let sign = if delta >= 0 { 1 } else { -1 };
+        self.switch_workspace_routed_with_dir(requested_output, target, Some(sign));
     }
 
     /// Show a different virtual workspace on a single output. Stashes that
@@ -1475,18 +1559,44 @@ impl MetisState {
     /// target workspace's tiles and remaps its windows. Other outputs and the
     /// desk widget tiles are untouched.
     pub fn switch_workspace(&mut self, output_key: &str, target: u32) {
+        self.switch_workspace_with_dir(output_key, target, None);
+    }
+
+    fn switch_workspace_with_dir(&mut self, output_key: &str, target: u32, dir_hint: Option<i32>) {
         let target = self.clamp_workspace_for(output_key, target);
         let current = self.active_workspace_for(output_key);
         if target == current {
             return;
         }
 
-        // Always hide every window leaving this desk by registry workspace — not
-        // only app tiles. Free layout never creates tiles (`ensure_app_tile`
-        // no-ops), and true-fullscreen Metis Remote is floating, so a tile-only
-        // unmap left the session mapped on every desk (no wallpaper / edge bar,
-        // connection bar visible everywhere).
-        self.unmap_windows_on_workspace(output_key, current);
+        // Snap any in-flight slide on this output before starting another.
+        self.finish_workspace_slide(output_key);
+
+        let leaving = self.window_ids_on_workspace(output_key, current);
+        let entering = self.window_ids_on_workspace(output_key, target);
+        let width_px = self
+            .output_by_name(output_key)
+            .and_then(|o| self.space.output_geometry(&o))
+            .map(|g| g.size.w)
+            .unwrap_or(0);
+        let remote_involved = self.ephemeral_remote_workspace(output_key) == Some(current)
+            || self.ephemeral_remote_workspace(output_key) == Some(target);
+        let mut sign = dir_hint.unwrap_or(if target > current { 1 } else { -1 });
+        if sign == 0 {
+            sign = 1;
+        }
+        let animate = crate::window_fx::animations_enabled() && width_px > 0 && !remote_involved;
+
+        // Hard-cut path: unmap leaving immediately. Animated path keeps them
+        // mapped until the slide finishes (see `window_visible_on_desktop`).
+        if !animate {
+            // Always hide every window leaving this desk by registry workspace — not
+            // only app tiles. Free layout never creates tiles (`ensure_app_tile`
+            // no-ops), and true-fullscreen Metis Remote is floating, so a tile-only
+            // unmap left the session mapped on every desk (no wallpaper / edge bar,
+            // connection bar visible everywhere).
+            self.unmap_windows_on_workspace(output_key, current);
+        }
 
         if self.layout_kind_for(output_key, current) == metis_grid::LayoutKind::Free {
             self.desk_mut_or_default(output_key).active_workspace = target;
@@ -1496,10 +1606,24 @@ impl MetisState {
             // Full remap so any stray mapped client on a hidden desk is unmapped
             // (not only the ones we just walked on `target`).
             self.reposition_all_windows();
+            if animate {
+                self.workspace_slide_fx.insert(
+                    output_key.to_string(),
+                    crate::window_fx::WorkspaceSlideFx {
+                        started: std::time::Instant::now(),
+                        sign,
+                        width_px,
+                        leaving,
+                        entering,
+                    },
+                );
+            }
             self.focus_topmost_on_active_workspace();
             self.sync_edge_bar_fullscreen_visibility();
             self.emit_workspace_changed(output_key);
             self.mark_session_snapshot_dirty();
+            self.damaged = true;
+            self.request_redraw();
             return;
         }
 
@@ -1537,6 +1661,18 @@ impl MetisState {
             self.ensure_app_tile_for_window(id);
         }
         self.reposition_all_windows();
+        if animate {
+            self.workspace_slide_fx.insert(
+                output_key.to_string(),
+                crate::window_fx::WorkspaceSlideFx {
+                    started: std::time::Instant::now(),
+                    sign,
+                    width_px,
+                    leaving,
+                    entering,
+                },
+            );
+        }
         self.focus_topmost_on_active_workspace();
 
         self.damaged = true;

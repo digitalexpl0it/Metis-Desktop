@@ -534,7 +534,7 @@ fn build_hybrid_elements<'a>(
         let mut loc = (elem_loc - geo_off).to_physical_precise_round(win_scale) - render_origin;
         let mut alpha = 1.0f32;
         if let Some(id) = id {
-            let nudge = state.scroll_render_nudge(id);
+            let nudge = state.scroll_render_nudge(id) + state.workspace_slide_dx(id);
             if nudge != 0 {
                 loc = Point::from((loc.x + nudge, loc.y));
             }
@@ -552,6 +552,8 @@ fn build_hybrid_elements<'a>(
                             .to_physical_precise_round(win_scale),
                     )
                 })
+            } else if let Some(c) = state.workspace_slide_clip(id, win_scale) {
+                Some(Rectangle::new(c.loc - render_origin, c.size))
             } else {
                 state
                     .scroll_window_clip(id, win_scale)

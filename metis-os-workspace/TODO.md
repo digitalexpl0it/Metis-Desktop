@@ -368,6 +368,8 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 - [x] Edge-bar border — `bar_border` (accent gradient / solid / custom gradient + width,
       0 disables); rounded gradient via layered `background-clip`, flows along the long axis
 - [x] Workspace indicator — live virtual workspaces (click a dot or `Super`+`n` to switch)
+- [x] Workspace slide animation (2026-10-20) — directional horizontal slide on
+      switch (bar / Super+Alt / Super+N / Task View); gated by `window_animations`
 - [x] Clock popover — tabbed: calendar, world clocks, stopwatch, timer, alarms
       *(superseded by Phase 13 Notification Center)*
 - [x] World Clocks — inline searchable timezone picker (up to 3 zones)
