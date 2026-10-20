@@ -131,6 +131,9 @@ incremental splits when touching remaining areas.
 
 Background thread (~200–800 ms adaptive) with D-Bus dirty wakes for
 NetworkManager, BlueZ, and UPower; slow fallback ticks when signals are quiet.
+After session start a short (~8 s) network burst settles already-associated Wi-Fi
+without waiting for a `StateChanged` edge. Wi-Fi list reads use
+`nmcli … list --rescan no` (cache only; user refresh still triggers `rescan`).
 UPower peripheral batteries are read over zbus (no `upower` CLI). Volume/mic
 still use `pactl`. Occasional subprocess I/O remains for `nmcli`,
 `bluetoothctl` inventory (and `info` / `solaar` only when %/charging is still

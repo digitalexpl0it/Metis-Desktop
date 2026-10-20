@@ -566,6 +566,11 @@ fn vpn_uuid_active(uuid: &str) -> bool {
     })
 }
 
+/// After login the NM D-Bus watcher often sees no edge (Wi-Fi was already up at
+/// GDM). Burst network reads so the bar icon settles within ~1–2 s instead of
+/// waiting for the long heartbeat.
+const NETWORK_STARTUP_BURST: Duration = Duration::from_secs(8);
+
 fn poll_loop(
     tx: Sender<BarSnapshot>,
     audio_rx: Receiver<AudioCommand>,
@@ -578,6 +583,7 @@ fn poll_loop(
     };
     let mut last_sent = cached.clone();
     let mut wifi_scan_grace_until: Option<std::time::Instant> = None;
+    let started = Instant::now();
 
     loop {
         // A user audio action (slider/mute/scroll) forces an immediate volume
@@ -589,6 +595,7 @@ fn poll_loop(
         let network_dirty = NETWORK_DIRTY.swap(false, Ordering::Relaxed);
         let bt_dirty = BT_DIRTY.swap(false, Ordering::Relaxed);
         let power_dirty = POWER_DIRTY.swap(false, Ordering::Relaxed);
+        let in_startup_burst = started.elapsed() < NETWORK_STARTUP_BURST;
 
         // Battery/BT: D-Bus dirty or slow fallback (~48–72 s at 800 ms idle).
         if bt_dirty || power_dirty || tick.is_multiple_of(90) {
@@ -596,44 +603,17 @@ fn poll_loop(
             cached.battery_charging = read_battery_charging();
             cached.bluetooth = read_bluetooth_status();
         }
-        // Network: dirty immediate; timed heartbeat stretches when NM watcher lives.
-        let network_tick = if NM_WATCHER_ALIVE.load(Ordering::Relaxed) {
+        // Network: dirty immediate; short burst after session start; then
+        // heartbeat stretches when the NM watcher is alive.
+        let network_tick = if in_startup_burst {
+            1
+        } else if NM_WATCHER_ALIVE.load(Ordering::Relaxed) {
             20
         } else {
             5
         };
         if network_dirty || tick.is_multiple_of(network_tick) {
-            if let Some(devs) = read_nm_devices() {
-                cached.wifi_present = devs.wifi_present;
-                cached.ethernet = devs.ethernet;
-            }
-            // Radio state is only meaningful when a Wi-Fi adapter exists.
-            cached.wifi_enabled = if cached.wifi_present {
-                read_wifi_radio_enabled()
-            } else {
-                false
-            };
-            if let Some(vpn) = read_vpn_status() {
-                if let Ok(mut names) = LAST_VPN_NAMES.lock() {
-                    *names = vpn
-                        .iter()
-                        .map(|v| (v.uuid.clone(), v.name.clone()))
-                        .collect();
-                }
-                cached.vpn = vpn;
-            }
-            cached.vpn_feedback = read_vpn_feedback(&cached.vpn);
-            if cached.wifi_present && cached.wifi_enabled {
-                if let Some(networks) = read_wifi_networks() {
-                    let in_scan_grace = wifi_scan_grace_until
-                        .is_some_and(|until| std::time::Instant::now() < until);
-                    cached.wifi = stabilize_wifi_list(&cached.wifi, networks, in_scan_grace);
-                }
-                // On nmcli timeout keep the last good Wi-Fi list so the bar icon
-                // does not flash offline between poll ticks.
-            } else {
-                cached.wifi.clear();
-            }
+            refresh_network_cache(&mut cached, &mut wifi_scan_grace_until);
         }
         if tick.is_multiple_of(2) || audio_changed {
             // Keep the last good reading when pactl times out / reports nothing,
@@ -661,7 +641,10 @@ fn poll_loop(
             }
         }
         tick = tick.wrapping_add(1);
-        let sleep_ms = if audio_changed || network_dirty || bt_dirty || power_dirty {
+        let sleep_ms = if in_startup_burst {
+            // Fast settle for already-connected Wi-Fi after GDM / session start.
+            200
+        } else if audio_changed || network_dirty || bt_dirty || power_dirty {
             200
         } else if changed {
             400
@@ -669,6 +652,55 @@ fn poll_loop(
             800
         };
         thread::sleep(Duration::from_millis(sleep_ms));
+    }
+}
+
+/// Refresh Wi-Fi / ethernet / VPN fields on the shared bar snapshot.
+fn refresh_network_cache(cached: &mut BarSnapshot, wifi_scan_grace_until: &mut Option<Instant>) {
+    let active_wifi = if let Some(devs) = read_nm_devices() {
+        cached.wifi_present = devs.wifi_present;
+        cached.ethernet = devs.ethernet;
+        devs.active_wifi
+    } else {
+        None
+    };
+    // Radio state is only meaningful when a Wi-Fi adapter exists.
+    cached.wifi_enabled = if cached.wifi_present {
+        read_wifi_radio_enabled()
+    } else {
+        false
+    };
+    if let Some(vpn) = read_vpn_status() {
+        if let Ok(mut names) = LAST_VPN_NAMES.lock() {
+            *names = vpn
+                .iter()
+                .map(|v| (v.uuid.clone(), v.name.clone()))
+                .collect();
+        }
+        cached.vpn = vpn;
+    }
+    cached.vpn_feedback = read_vpn_feedback(&cached.vpn);
+    if cached.wifi_present && cached.wifi_enabled {
+        let cached_signal = cached
+            .wifi
+            .iter()
+            .find(|n| n.active || active_wifi.as_ref().is_some_and(|l| l.connection == n.ssid))
+            .map(|n| n.signal);
+        if let Some(networks) = read_wifi_networks() {
+            let in_scan_grace = wifi_scan_grace_until.is_some_and(|until| Instant::now() < until);
+            let merged = merge_active_wifi_link(networks, active_wifi.as_ref(), cached_signal);
+            cached.wifi = stabilize_wifi_list(&cached.wifi, merged, in_scan_grace);
+        } else if let Some(link) = active_wifi.as_ref() {
+            // List timed out — still show connected from device status.
+            let merged = merge_active_wifi_link(cached.wifi.clone(), Some(link), cached_signal);
+            if merged.iter().any(|n| n.active) {
+                cached.wifi = merged;
+            }
+        }
+        // On nmcli timeout keep the last good Wi-Fi list so the bar icon
+        // does not flash offline between poll ticks.
+    } else {
+        cached.wifi.clear();
     }
 }
 
@@ -1278,7 +1310,8 @@ pub fn network_snapshot_for_ui() -> (bool, bool, EthernetStatus, Vec<WifiNetwork
         false
     };
     let wifi = if devs.wifi_present && wifi_enabled {
-        read_wifi_networks().unwrap_or_default()
+        let listed = read_wifi_networks().unwrap_or_default();
+        merge_active_wifi_link(listed, devs.active_wifi.as_ref(), None)
     } else {
         Vec::new()
     };
@@ -1289,6 +1322,16 @@ pub fn network_snapshot_for_ui() -> (bool, bool, EthernetStatus, Vec<WifiNetwork
 struct NmDevices {
     wifi_present: bool,
     ethernet: EthernetStatus,
+    /// Connected Wi-Fi iface + profile/SSID from `device status` (fast path).
+    active_wifi: Option<ActiveWifiLink>,
+}
+
+/// Already-associated Wi-Fi from NetworkManager device status (no scan needed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveWifiLink {
+    device: String,
+    /// Connection profile name (usually matches SSID).
+    connection: String,
 }
 
 fn is_wifi_device_type(dtype: &str) -> bool {
@@ -1300,12 +1343,23 @@ fn is_ethernet_device_type(dtype: &str) -> bool {
     matches!(dtype, "ethernet" | "802-3-ethernet")
 }
 
-/// Single `nmcli device status` pass for Wi-Fi presence + first ethernet NIC.
+/// Cap / scrub labels from nmcli before they reach GTK (hostile SSIDs).
+fn sanitize_nm_label(raw: &str) -> String {
+    let cleaned: String = raw.chars().filter(|c| !c.is_control()).take(128).collect();
+    cleaned
+}
+
+/// Single `nmcli device status` pass for Wi-Fi presence, active link, and
+/// first ethernet NIC. Cheap (~ms) and accurate for "already connected at login".
 fn read_nm_devices() -> Option<NmDevices> {
     let mut cmd = std::process::Command::new("nmcli");
     cmd.args(["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev", "status"]);
     let output = run_command(&mut cmd)?;
     let text = String::from_utf8_lossy(&output.stdout);
+    Some(parse_nm_devices_status(&text))
+}
+
+fn parse_nm_devices_status(text: &str) -> NmDevices {
     let mut out = NmDevices::default();
     let mut eth_found = false;
     for line in text.lines() {
@@ -1313,21 +1367,33 @@ fn read_nm_devices() -> Option<NmDevices> {
         if fields.len() < 4 {
             continue;
         }
+        let device = fields[0].as_str();
         let dtype = fields[1].as_str();
+        let state = fields[2].as_str();
+        let connection = fields[3].as_str();
         if is_wifi_device_type(dtype) {
             out.wifi_present = true;
+            if out.active_wifi.is_none()
+                && state.starts_with("connected")
+                && !connection.is_empty()
+                && connection != "--"
+            {
+                out.active_wifi = Some(ActiveWifiLink {
+                    device: sanitize_nm_label(device),
+                    connection: sanitize_nm_label(connection),
+                });
+            }
         }
         if eth_found || !is_ethernet_device_type(dtype) {
             continue;
         }
         eth_found = true;
-        let connected = fields[2].starts_with("connected");
+        let connected = state.starts_with("connected");
         let label = if connected {
-            let conn = fields[3].clone();
-            if conn.is_empty() || conn == "--" {
+            if connection.is_empty() || connection == "--" {
                 "Connected".to_string()
             } else {
-                conn
+                sanitize_nm_label(connection)
             }
         } else {
             "Not connected".to_string()
@@ -1338,7 +1404,7 @@ fn read_nm_devices() -> Option<NmDevices> {
             label,
         };
     }
-    Some(out)
+    out
 }
 
 fn read_wifi_radio_enabled() -> bool {
@@ -1356,10 +1422,26 @@ fn read_wifi_radio_enabled() -> bool {
 }
 
 fn read_wifi_networks() -> Option<Vec<WifiNetwork>> {
+    // `--rescan no` uses NM's cache — avoids waiting on a scan (seconds) and is
+    // what we want for the bar heartbeat. Explicit user refresh still runs
+    // `dev wifi rescan` via [`wifi_scan`].
     let mut cmd = std::process::Command::new("nmcli");
-    cmd.args(["-t", "-f", "ACTIVE,SSID,SIGNAL,SECURITY", "dev", "wifi"]);
-    let output = run_command_with_timeout(&mut cmd, Duration::from_millis(2_000))?;
+    cmd.args([
+        "-t",
+        "-f",
+        "ACTIVE,SSID,SIGNAL,SECURITY",
+        "dev",
+        "wifi",
+        "list",
+        "--rescan",
+        "no",
+    ]);
+    let output = run_command_with_timeout(&mut cmd, Duration::from_millis(1_200))?;
     let text = String::from_utf8_lossy(&output.stdout);
+    Some(parse_wifi_network_list(&text))
+}
+
+fn parse_wifi_network_list(text: &str) -> Vec<WifiNetwork> {
     let mut nets: Vec<WifiNetwork> = Vec::new();
     for line in text.lines() {
         let fields = nmcli_split(line);
@@ -1367,7 +1449,7 @@ fn read_wifi_networks() -> Option<Vec<WifiNetwork>> {
             continue;
         }
         let active = fields[0] == "yes";
-        let ssid = fields[1].clone();
+        let ssid = sanitize_nm_label(&fields[1]);
         if ssid.is_empty() {
             continue;
         }
@@ -1391,7 +1473,89 @@ fn read_wifi_networks() -> Option<Vec<WifiNetwork>> {
         });
     }
     nets.sort_by(|a, b| b.active.cmp(&a.active).then(b.signal.cmp(&a.signal)));
-    Some(nets)
+    nets
+}
+
+/// Ensure the bar knows about an already-associated AP even when the wifi list
+/// is empty/stale (common right after GDM → session when no StateChanged fires).
+fn merge_active_wifi_link(
+    networks: Vec<WifiNetwork>,
+    link: Option<&ActiveWifiLink>,
+    cached_signal: Option<u8>,
+) -> Vec<WifiNetwork> {
+    let Some(link) = link else {
+        return networks;
+    };
+    if link.connection.is_empty() || networks.iter().any(|n| n.active) {
+        return networks;
+    }
+    let known = networks
+        .iter()
+        .find(|n| n.ssid == link.connection)
+        .map(|n| n.signal)
+        .filter(|s| *s > 0);
+    let signal = known
+        .or_else(|| cached_signal.filter(|s| *s > 0))
+        .or_else(|| read_wifi_device_signal(&link.device))
+        .unwrap_or(0);
+    merge_active_wifi_link_with_signal(networks, link, signal)
+}
+
+fn merge_active_wifi_link_with_signal(
+    mut networks: Vec<WifiNetwork>,
+    link: &ActiveWifiLink,
+    signal: u8,
+) -> Vec<WifiNetwork> {
+    if link.connection.is_empty() || networks.iter().any(|n| n.active) {
+        return networks;
+    }
+    if let Some(existing) = networks.iter_mut().find(|n| n.ssid == link.connection) {
+        existing.active = true;
+        if existing.signal == 0 && signal > 0 {
+            existing.signal = signal;
+        }
+    } else {
+        networks.push(WifiNetwork {
+            ssid: link.connection.clone(),
+            signal,
+            secured: true,
+            active: true,
+        });
+    }
+    networks.sort_by(|a, b| b.active.cmp(&a.active).then(b.signal.cmp(&a.signal)));
+    networks
+}
+
+/// Best-effort signal % for an associated iface (no scan, no secrets).
+fn read_wifi_device_signal(device: &str) -> Option<u8> {
+    if device.is_empty() || device.contains('/') || device.contains('\0') {
+        return None;
+    }
+    let mut cmd = std::process::Command::new("nmcli");
+    // Field name is stable on NM 1.4+; timeout stays short — icon can use 0.
+    cmd.args([
+        "-t",
+        "-f",
+        "GENERAL.DEVICE,WIRELESS.SIGNAL",
+        "device",
+        "show",
+        device,
+    ]);
+    let output = run_command_with_timeout(&mut cmd, Duration::from_millis(400))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_wifi_device_signal(&text)
+}
+
+fn parse_wifi_device_signal(text: &str) -> Option<u8> {
+    for line in text.lines() {
+        let line = line.trim();
+        // `nmcli -t -f WIRELESS.SIGNAL` → `WIRELESS.SIGNAL:72` or bare `72`.
+        let value = line.rsplit_once(':').map(|(_, v)| v.trim()).unwrap_or(line);
+        if let Ok(pct) = value.parse::<u8>() {
+            return Some(pct.min(100));
+        }
+    }
+    None
 }
 
 /// During an nmcli rescan the active SSID can briefly disappear or report 0 signal.
@@ -2130,6 +2294,80 @@ mod tests {
             active: false,
         }];
         assert_eq!(stabilize_wifi_list(&previous, raw.clone(), false), raw);
+    }
+
+    #[test]
+    fn parse_nm_devices_status_captures_active_wifi() {
+        let text = "\
+wlan0:wifi:connected:HomeNet\n\
+eth0:ethernet:connected:Wired\n\
+lo:loopback:unmanaged:--\n";
+        let devs = parse_nm_devices_status(text);
+        assert!(devs.wifi_present);
+        assert_eq!(
+            devs.active_wifi,
+            Some(ActiveWifiLink {
+                device: "wlan0".into(),
+                connection: "HomeNet".into(),
+            })
+        );
+        assert!(devs.ethernet.present && devs.ethernet.connected);
+        assert_eq!(devs.ethernet.label, "Wired");
+    }
+
+    #[test]
+    fn merge_active_wifi_link_marks_or_inserts() {
+        let link = ActiveWifiLink {
+            device: "wlan0".into(),
+            connection: "Home".into(),
+        };
+        let listed = vec![WifiNetwork {
+            ssid: "Home".into(),
+            signal: 55,
+            secured: true,
+            active: false,
+        }];
+        let merged = merge_active_wifi_link_with_signal(listed, &link, 0);
+        assert!(
+            merged
+                .iter()
+                .any(|n| n.ssid == "Home" && n.active && n.signal == 55)
+        );
+
+        let empty = merge_active_wifi_link_with_signal(vec![], &link, 70);
+        let home = empty.iter().find(|n| n.ssid == "Home").unwrap();
+        assert!(home.active);
+        assert_eq!(home.signal, 70);
+
+        // Already-active list is left alone.
+        let already = vec![WifiNetwork {
+            ssid: "Other".into(),
+            signal: 90,
+            secured: false,
+            active: true,
+        }];
+        assert_eq!(
+            merge_active_wifi_link_with_signal(already.clone(), &link, 10),
+            already
+        );
+    }
+
+    #[test]
+    fn sanitize_nm_label_strips_controls_and_caps() {
+        assert_eq!(sanitize_nm_label("ok"), "ok");
+        assert_eq!(sanitize_nm_label("a\0b\nc"), "abc");
+        let long = "x".repeat(200);
+        assert_eq!(sanitize_nm_label(&long).len(), 128);
+    }
+
+    #[test]
+    fn parse_wifi_device_signal_reads_pct() {
+        assert_eq!(
+            parse_wifi_device_signal("WIRELESS.SIGNAL:72\nGENERAL.DEVICE:wlan0\n"),
+            Some(72)
+        );
+        assert_eq!(parse_wifi_device_signal("88\n"), Some(88));
+        assert_eq!(parse_wifi_device_signal("bogus\n"), None);
     }
 
     #[test]

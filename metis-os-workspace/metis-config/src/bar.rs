@@ -856,17 +856,27 @@ fn migrate_bar_config(cfg: &mut BarConfig, allow_persist: bool) {
     // Do not treat `margin_top == 0` as legacy — Settings "distance" 0 is valid
     // (flush to the screen edge). Resetting it to the default made bottom bars
     // look permanently inset and undid maximize reserve math.
-    let needs_layout_refresh = cfg.widgets == legacy
-        || cfg.widgets == center_notif
-        || cfg.margin_h >= 48
-        || cfg.height < 36;
-    if needs_layout_refresh {
+    //
+    // Only exact pre-pill widget layouts rewrite `widgets`. Never couple that
+    // wipe to `margin_h` / `height` — those are independent user settings and
+    // resetting widgets with them undid status-icon order on every login.
+    let needs_widget_refresh = cfg.widgets == legacy || cfg.widgets == center_notif;
+    if needs_widget_refresh {
         cfg.widgets = default_widgets();
-        cfg.height = default_height();
         cfg.margin_top = default_margin_top();
         cfg.margin_h = default_margin_h();
+        cfg.height = default_height();
         cfg.full_width = default_full_width();
         dirty = true;
+    } else {
+        if cfg.margin_h >= 48 {
+            cfg.margin_h = default_margin_h();
+            dirty = true;
+        }
+        if cfg.height < 36 {
+            cfg.height = default_height();
+            dirty = true;
+        }
     }
     if cfg.clock.time_format == "%H:%M" {
         cfg.clock.time_format = default_time_format();
@@ -968,6 +978,22 @@ mod tests {
         let once = migrated(input.clone());
         assert_eq!(once, input);
         assert_eq!(migrated(once.clone()), once);
+    }
+
+    #[test]
+    fn migrate_margin_or_height_does_not_wipe_status_order() {
+        use BarWidgetId::*;
+        let widgets = vec![Workspaces, Tasks, Spacer, Volume, Network, Bluetooth, Clock];
+        let mut cfg = BarConfig {
+            widgets: widgets.clone(),
+            margin_h: 64,
+            height: 32,
+            ..BarConfig::default()
+        };
+        migrate_bar_config(&mut cfg, false);
+        assert_eq!(cfg.widgets, widgets);
+        assert!(cfg.margin_h < 48);
+        assert!(cfg.height >= 36);
     }
 
     #[test]

@@ -7,8 +7,39 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-10-11]
 
+### Added
+
+- **Icons & default apps** — Settings → Desktop → **Icons** picks Freedesktop
+  icon themes (live across status bar, menu, and pins), installs/removes user
+  packs under `~/.local/share/icons`, and supports Metis brand PNGs plus
+  per-app icon overrides (`icons.json`). Settings → System → **Default
+  applications** sets browser / files / terminal / mail / media / PDF via
+  `xdg-mime` / `xdg-settings`, aligned with Metis Menu quick launchers.
+
 ### Fixed
 
+- **Settings Icons page light mode** — theme list uses Metis tokens (no Adwaita
+  dark `boxed-list`), zebra rows, and section padding; cursor-only packs (DMZ)
+  are hidden; incomplete icon themes fall back for common status glyphs.
+- **Edge bar status icon order not persisting** — on-bar drag now saves from
+  widget sibling order (stale geometry after drop no longer left `bar.json`
+  unchanged); migrate no longer wipes custom status order when height/margin
+  differ from legacy defaults. Settings arrows already reload the bar live.
+- **Updater progress UX** — removed the Show log panel; the main bar tracks
+  completed/total selected packages (advancing as each finishes) with the
+  current package name underneath; each row shows a striped accent mini
+  progress bar while installing, then an **Installed** pill; per-row Install
+  remains; Update all applies in list order and the list scrolls to the active
+  package (PackageKit size/count noise no longer hijacks the current-item label).
+- **Automatic update checks stalling after login** — distro soft checks
+  (`apt list`) had no timeout, so a locked package manager could hang the
+  background worker for the whole session and drop further auto-checks; soft
+  checks now time out, fall back when `pkcon` fails, queue while busy, and
+  retry a few times after login when the list is still empty.
+- **Wi-Fi bar icon slow after login** — already-connected networks (e.g. from GDM)
+  no longer wait on a quiet NM D-Bus heartbeat; the poller bursts for a few
+  seconds after start, reads association from `device status`, and lists APs with
+  `--rescan no` so the signal icon appears within ~1–2 s.
 - **Edge bar status icons UX** — Settings order list rows have proper padding;
   on-bar drag shows a live accent drop gap while neighbours shift; drop no longer
   blanks icons (poller state rehydrates after rebuild); migrate no longer undoes

@@ -605,6 +605,7 @@ pub const BAR_RUNTIME_VERBS: &[&str] = &[
     "reload-calendars",
     "reload-gaming",
     "reload-locale",
+    "reload-icons",
     "optimize-gaming",
     "show-onboarding",
     "show-updater",
@@ -628,6 +629,7 @@ pub const WIDGETS_RUNTIME_VERBS: &[&str] = &[
     "reload-desktop-widgets",
     "reload-theme",
     "reload-locale",
+    "reload-icons",
     "reload-weather",
     // Hide/show layer-shell desktop widgets (optional output name argument).
     "hide-desktop-widgets",
@@ -931,6 +933,8 @@ mod tests {
                 .verb,
             "reload-theme"
         );
+        assert!(parse_runtime_command("reload-icons", BAR_RUNTIME_VERBS).is_ok());
+        assert!(parse_runtime_command("reload-icons", WIDGETS_RUNTIME_VERBS).is_ok());
         assert!(parse_runtime_command("close-popovers", WIDGETS_RUNTIME_VERBS).is_ok());
         assert!(parse_runtime_command("toggle-menu", WIDGETS_RUNTIME_VERBS).is_err());
         assert!(write_runtime_command("not-a-verb").is_err());

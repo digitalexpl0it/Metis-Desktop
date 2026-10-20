@@ -464,6 +464,7 @@ fn build_page_stack(window: &gtk::ApplicationWindow, launch: &PageLaunch) -> gtk
         Some("appearance"),
         "Appearance",
     );
+    stack.add_titled(&pages::icons::build(), Some("icons"), "Icons");
     stack.add_titled(
         &pages::background::build(),
         Some("background"),
@@ -512,6 +513,11 @@ fn build_page_stack(window: &gtk::ApplicationWindow, launch: &PageLaunch) -> gtk
     stack.add_titled(&pages::sound::build(), Some("sound"), "Sound");
     stack.add_titled(&pages::power::build(), Some("power"), "Power");
     stack.add_titled(&pages::locale::build(), Some("locale"), "Language & region");
+    stack.add_titled(
+        &pages::defaults::build(),
+        Some("defaults"),
+        "Default applications",
+    );
     stack.add_titled(&pages::users::build(), Some("users"), "Users");
     stack.add_titled(&pages::date_time::build(), Some("date_time"), "Date & Time");
     stack.add_titled(&pages::startup::build(), Some("startup"), "Startup");

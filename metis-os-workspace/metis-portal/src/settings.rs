@@ -9,7 +9,8 @@ use ashpd::{
 };
 use async_trait::async_trait;
 use metis_config::{
-    SESSION_GTK_DECORATION_LAYOUT, SESSION_WM_BUTTON_LAYOUT, ThemeMode, load_theme_preference,
+    SESSION_GTK_DECORATION_LAYOUT, SESSION_WM_BUTTON_LAYOUT, ThemeMode, load_icons_config,
+    load_theme_preference,
 };
 
 const NS_WM: &str = "org.gnome.desktop.wm.preferences";
@@ -17,6 +18,7 @@ const KEY_BUTTON_LAYOUT: &str = "button-layout";
 const NS_INTERFACE: &str = "org.gnome.desktop.interface";
 const KEY_DECO_LAYOUT: &str = "gtk-decoration-layout";
 const KEY_GTK_THEME: &str = "gtk-theme";
+const KEY_ICON_THEME: &str = "icon-theme";
 /// Portal / GTK decoration layout for client-side decorations.
 ///
 /// Metis only draws server-side chrome for classified terminal/SSD apps; GTK
@@ -29,6 +31,7 @@ static THEME_WATCH_STARTED: OnceLock<()> = OnceLock::new();
 struct Snapshot {
     color_scheme: ColorScheme,
     gtk_theme: String,
+    icon_theme: Option<String>,
     mode: ThemeMode,
 }
 
@@ -38,6 +41,7 @@ impl Snapshot {
         Self {
             color_scheme: color_scheme_for(&mode),
             gtk_theme: gtk_theme_for(&mode),
+            icon_theme: load_icons_config().theme.filter(|t| !t.is_empty()),
             mode,
         }
     }
@@ -102,6 +106,9 @@ fn interface_namespace(snapshot: &Snapshot) -> Namespace {
         owned_string(SESSION_GTK_DECORATION_LAYOUT),
     );
     map.insert(KEY_GTK_THEME.to_owned(), owned_string(&snapshot.gtk_theme));
+    if let Some(icon) = snapshot.icon_theme.as_deref() {
+        map.insert(KEY_ICON_THEME.to_owned(), owned_string(icon));
+    }
     map
 }
 
@@ -120,6 +127,13 @@ fn read_key(snapshot: &Snapshot, namespace: &str, key: &str) -> Result<OwnedValu
         (NS_WM, KEY_BUTTON_LAYOUT) => Ok(owned_string(SESSION_WM_BUTTON_LAYOUT)),
         (NS_INTERFACE, KEY_DECO_LAYOUT) => Ok(owned_string(SESSION_GTK_DECORATION_LAYOUT)),
         (NS_INTERFACE, KEY_GTK_THEME) => Ok(owned_string(&snapshot.gtk_theme)),
+        (NS_INTERFACE, KEY_ICON_THEME) => snapshot
+            .icon_theme
+            .as_deref()
+            .map(owned_string)
+            .ok_or_else(|| {
+                PortalError::NotFound(format!("unknown namespace/key: {namespace}/{key}"))
+            }),
         _ => Err(PortalError::NotFound(format!(
             "unknown namespace/key: {namespace}/{key}"
         ))),
@@ -187,6 +201,13 @@ async fn emit_appearance(snapshot: &Snapshot) {
     {
         tracing::warn!(%err, "portal: emit gtk-decoration-layout failed");
     }
+    if let Some(icon) = snapshot.icon_theme.as_deref()
+        && let Err(err) = emitter
+            .emit_changed(NS_INTERFACE, KEY_ICON_THEME, Value::from(icon))
+            .await
+    {
+        tracing::warn!(%err, "portal: emit icon-theme failed");
+    }
 }
 
 fn ensure_theme_watch() {
@@ -196,7 +217,8 @@ fn ensure_theme_watch() {
     tokio::spawn(async {
         // Session start: push gsettings so early GTK apps see Metis dark/light.
         metis_config::sync_session_appearance_from_config();
-        let mut last = load_theme_preference().unwrap_or(ThemeMode::Dark);
+        let mut last_mode = load_theme_preference().unwrap_or(ThemeMode::Dark);
+        let mut last_icon = load_icons_config().theme;
         // Emit once so portal clients that subscribe after connect get a baseline.
         emit_appearance(&Snapshot::from_config()).await;
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -204,12 +226,17 @@ fn ensure_theme_watch() {
         loop {
             interval.tick().await;
             let mode = load_theme_preference().unwrap_or(ThemeMode::Dark);
-            if mode == last {
+            let icon = load_icons_config().theme;
+            if mode == last_mode && icon == last_icon {
                 continue;
             }
-            last = mode;
+            last_mode = mode;
+            last_icon = icon;
             let snapshot = Snapshot::from_config();
             metis_config::apply_session_appearance_gsettings(snapshot.mode);
+            if let Some(theme) = snapshot.icon_theme.as_deref() {
+                metis_config::apply_session_icon_theme(theme);
+            }
             emit_appearance(&snapshot).await;
             tracing::info!(?mode, "portal: appearance updated from config");
         }

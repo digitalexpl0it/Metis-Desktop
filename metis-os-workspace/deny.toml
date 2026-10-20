@@ -26,6 +26,7 @@ ignore = [
     { id = "RUSTSEC-2026-0150", reason = "audiopus_sys via opus 0.3; track opus/sys fork" },
     { id = "RUSTSEC-2024-0384", reason = "instant via reed-solomon-erasure parking_lot 0.11" },
     { id = "RUSTSEC-2026-0253", reason = "lru@0.7 unsound via reed-solomon-erasure; panic=abort mitigates unwind UAF" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via zbus 5/oo7; migrate with zbus 6 when ready" },
 ]
 
 [licenses]

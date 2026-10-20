@@ -376,10 +376,10 @@ pub fn build() -> gtk::Widget {
         ui::section_with_icon(&tr("Status icons"), "view-list-symbolic");
     let status_hint = gtk::Label::new(Some(&tr(
         "Enable icons here, then drag them on the edge bar (past the drag \
-         threshold) or use the arrows below to reorder. Icons also hide \
-         automatically when unused (no VPN profiles, no Bluetooth adapter, \
-         weather unavailable, and so on). Workspaces, running apps, and the \
-         clock stay on the bar.",
+         threshold) or use the arrows below to reorder — both update the bar \
+         live and persist in bar.json. Icons also hide automatically when \
+         unused (no VPN profiles, no Bluetooth adapter, weather unavailable, \
+         and so on). Workspaces, running apps, and the clock stay on the bar.",
     )));
     status_hint.set_xalign(0.0);
     status_hint.set_wrap(true);

@@ -146,13 +146,6 @@ fn axis_center_in(widget: &gtk::Widget, target: &impl IsA<gtk::Widget>, horizont
     }
 }
 
-fn axis_center(widget: &gtk::Widget, horizontal: bool) -> f64 {
-    let Some(root) = widget.root() else {
-        return 0.0;
-    };
-    axis_center_in(widget, &root, horizontal)
-}
-
 fn ensure_drop_slot(slot_cell: &RefCell<Option<gtk::Box>>, horizontal: bool) -> gtk::Box {
     if let Some(slot) = slot_cell.borrow().clone() {
         return slot;
@@ -252,21 +245,37 @@ fn commit_drop(dragged: &gtk::Widget, slot_cell: &RefCell<Option<gtk::Box>>) {
 /// relative place from the previous config. Does **not** send `reload-bar`
 /// (avoids double rebuild blanking icons); the file monitor rebuilds once and
 /// rehydrate restores poller state.
-fn persist_order_from_peers(peers: &[(BarWidgetId, gtk::Widget)], horizontal: bool) {
+fn persist_order_from_peers(peers: &[(BarWidgetId, gtk::Widget)], _horizontal: bool) {
     let mut cfg = load_bar_config();
     let (_, old_status, _) = split_bar_widget_layout(&cfg.widgets);
 
-    let mut visible: Vec<(BarWidgetId, gtk::Widget)> = peers
-        .iter()
-        .filter(|(_, w)| w.is_visible())
-        .cloned()
-        .collect();
-    visible.sort_by(|a, b| {
-        axis_center(&a.1, horizontal)
-            .partial_cmp(&axis_center(&b.1, horizontal))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let visible_ids: Vec<BarWidgetId> = visible.into_iter().map(|(id, _)| id).collect();
+    // Walk the parent box's children — not geometry. Right after
+    // `reorder_child_after`, `compute_bounds` is often still stale, so sorting
+    // by axis made drag look correct until logout (disk never updated).
+    let Some((_, first)) = peers.first() else {
+        return;
+    };
+    let Some(parent) = first.parent().and_then(|p| p.downcast::<gtk::Box>().ok()) else {
+        return;
+    };
+    let peer_ptrs: HashSet<usize> = peers.iter().map(|(_, w)| w.as_ptr() as usize).collect();
+    let mut visible_ids = Vec::new();
+    let mut child = parent.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        let ptr = widget.as_ptr() as usize;
+        if !peer_ptrs.contains(&ptr) {
+            continue;
+        }
+        if let Some((id, _)) = peers.iter().find(|(_, w)| w.as_ptr() as usize == ptr)
+            && widget.is_visible()
+        {
+            visible_ids.push(*id);
+        }
+    }
+    if visible_ids.is_empty() {
+        return;
+    }
     let visible_set: HashSet<BarWidgetId> = visible_ids.iter().copied().collect();
 
     let mut vis_iter = visible_ids.into_iter();

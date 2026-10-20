@@ -52,6 +52,14 @@ pub fn install() {
 pub fn reapply() {
     // Keep session gsettings / portal FileChooser in sync with on-disk Appearance.
     metis_config::sync_session_appearance_from_config();
+    if let Some(theme) = metis_config::load_icons_config()
+        .theme
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        && let Some(settings) = gtk::Settings::default()
+    {
+        settings.set_gtk_icon_theme_name(Some(theme));
+    }
     let resolved = resolve_active();
     reapply_tokens(&resolved.tokens, resolved.is_dark);
 }

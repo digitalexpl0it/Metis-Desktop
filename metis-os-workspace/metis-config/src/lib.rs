@@ -10,12 +10,14 @@ pub mod css;
 pub mod dashboard;
 pub mod datetime;
 pub mod decorations;
+pub mod defaults;
 pub mod desktop_widgets;
 pub mod game_rules;
 pub mod gaming;
 pub mod gaming_paths;
 pub mod gpu_offload;
 pub mod graphics;
+pub mod icons;
 pub mod input;
 pub mod keybinds;
 pub mod kitty;
@@ -39,6 +41,17 @@ pub mod wallpaper;
 pub mod weather;
 pub mod widget_ext;
 pub mod xwayland_policy;
+
+pub use defaults::{
+    DefaultAppRole, candidate_apps_for_role, query_default_app, set_default_app,
+    sync_default_from_menu_executable,
+};
+pub use icons::{
+    IconThemeInfo, IconsConfig, apply_session_icon_theme, discover_icon_themes,
+    install_icon_theme_archive, load_icons_config, remove_user_icon_theme,
+    resolve_app_icon_override, resolve_brand_launcher_path, resolve_brand_settings_path,
+    save_icons_config, sync_session_icon_theme_from_config,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -346,6 +359,7 @@ pub fn apply_session_appearance_gsettings(mode: ThemeMode) {
 pub fn sync_session_appearance_from_config() {
     let mode = load_theme_preference().unwrap_or(ThemeMode::Dark);
     apply_session_appearance_gsettings(mode);
+    crate::icons::sync_session_icon_theme_from_config();
 }
 
 pub fn mark_onboarding_complete() -> std::io::Result<()> {

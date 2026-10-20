@@ -57,7 +57,7 @@ pub const CATEGORIES: &[Category] = &[
         title: "Desktop",
         icon: "preferences-desktop-wallpaper-symbolic",
         hue: NavHue::Purple,
-        blurb: "Appearance, wallpaper, edge bar, windows, and briefing",
+        blurb: "Appearance, icons, wallpaper, edge bar, windows, and briefing",
     },
     Category {
         id: "connectivity",
@@ -78,7 +78,7 @@ pub const CATEGORIES: &[Category] = &[
         title: "System",
         icon: "preferences-system-symbolic",
         hue: NavHue::Green,
-        blurb: "Users, date & time, updates, sound, power, locale, remote access, reset, about, and more",
+        blurb: "Users, defaults, date & time, updates, sound, power, locale, remote access, reset, about, and more",
     },
 ];
 
@@ -124,6 +124,14 @@ pub const NAV: &[NavItem] = &[
         icon: Some("preferences-desktop-appearance-symbolic"),
         hue: Some(NavHue::Pink),
         subtitle: Some("Theme mode, accent colours, and interface font"),
+        category: Some("desktop"),
+    },
+    NavItem {
+        page_id: Some("icons"),
+        title: "Icons",
+        icon: Some("preferences-desktop-icons-symbolic"),
+        hue: Some(NavHue::Purple),
+        subtitle: Some("Icon theme packs, Metis brand icons, and per-app overrides"),
         category: Some("desktop"),
     },
     NavItem {
@@ -284,6 +292,14 @@ pub const NAV: &[NavItem] = &[
         icon: Some("preferences-desktop-locale-symbolic"),
         hue: Some(NavHue::Blue),
         subtitle: Some("Session language and number/date formats"),
+        category: Some("system"),
+    },
+    NavItem {
+        page_id: Some("defaults"),
+        title: "Default applications",
+        icon: Some("preferences-desktop-default-applications-symbolic"),
+        hue: Some(NavHue::Teal),
+        subtitle: Some("Browser, files, terminal, mail, media, and PDF handlers"),
         category: Some("system"),
     },
     NavItem {

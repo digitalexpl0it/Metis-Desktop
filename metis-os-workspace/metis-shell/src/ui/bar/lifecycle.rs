@@ -166,6 +166,10 @@ pub(crate) fn watch_compositor_dismiss() {
                     gtk::Widget::set_default_direction(dir);
                     rebuild_for_locale();
                 }
+                "reload-icons" => {
+                    crate::ui::theme::apply_icon_theme_from_config();
+                    rebuild_for_locale();
+                }
                 "optimize-gaming" => {
                     // Require explicit `yes` (Settings confirm / metis-cmd --yes).
                     if arg.trim() == "yes"

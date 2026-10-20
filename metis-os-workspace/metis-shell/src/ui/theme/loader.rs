@@ -30,9 +30,22 @@ struct ThemeState {
 pub fn init_theme() -> ThemeTokens {
     // Keep org.gnome.desktop.interface in sync for Nautilus / other GTK apps.
     metis_config::sync_session_appearance_from_config();
+    apply_icon_theme_from_config();
     let tokens = load_active_theme();
     apply_tokens(&tokens);
     tokens
+}
+
+/// Apply Freedesktop icon theme from `icons.json` to this process's GTK settings.
+pub fn apply_icon_theme_from_config() {
+    let cfg = metis_config::load_icons_config();
+    let Some(theme) = cfg.theme.as_deref().filter(|t| !t.is_empty()) else {
+        return;
+    };
+    if let Some(settings) = gtk::Settings::default() {
+        settings.set_gtk_icon_theme_name(Some(theme));
+    }
+    metis_config::apply_session_icon_theme(theme);
 }
 
 pub fn active_tokens() -> ThemeTokens {

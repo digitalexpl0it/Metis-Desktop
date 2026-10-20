@@ -133,6 +133,14 @@ pub fn spawn_updates_service() {
 
     glib::timeout_add_local_once(FIRST_AUTO_CHECK_DELAY, || {
         maybe_auto_check();
+        // Login retries: first soft check often races apt/PackageKit locks or a
+        // still-coming-up network. Re-probe while the list is still empty/error
+        // instead of waiting a full `check_interval_hours`.
+        for secs in [3 * 60_u64, 10 * 60, 20 * 60] {
+            glib::timeout_add_local_once(Duration::from_secs(secs), || {
+                maybe_auto_check_login_retry();
+            });
+        }
         glib::timeout_add_local(AUTO_CHECK_POLL, || {
             maybe_auto_check();
             glib::ControlFlow::Continue
@@ -154,6 +162,20 @@ fn maybe_auto_check() {
     let empty_cache =
         SNAPSHOT.with(|s| s.borrow().total_count() == 0) && LAST_CHECK_AT.get().is_none();
     if due || empty_cache {
+        request_check(false);
+    }
+}
+
+/// Post-login soft re-check while we still have nothing useful.
+fn maybe_auto_check_login_retry() {
+    let cfg = load_updates_config();
+    if !cfg.enabled {
+        return;
+    }
+    let empty = SNAPSHOT.with(|s| s.borrow().total_count() == 0);
+    let errored = cfg.last_error.as_ref().is_some_and(|e| !e.is_empty());
+    if empty || errored {
+        tracing::info!(empty, errored, "updates: login retry soft check");
         request_check(false);
     }
 }
@@ -182,11 +204,11 @@ fn run_check(manual: bool, force: bool) {
         return;
     }
     if CHECK_IN_FLIGHT.get() {
-        if force {
-            RECHECK_QUEUED.set(true);
-            if manual {
-                RECHECK_QUEUED_FULL.set(true);
-            }
+        // Always queue — dropping soft checks while apt/pkcon is wedged left the
+        // session with no auto updates until the next logout.
+        RECHECK_QUEUED.set(true);
+        if manual {
+            RECHECK_QUEUED_FULL.set(true);
         }
         return;
     }
@@ -242,10 +264,23 @@ fn run_check(manual: bool, force: bool) {
             let count = snap.total_count();
             // Reload: Settings may have changed updates.json during the check.
             let mut cfg = load_updates_config();
-            cfg.last_check = Some(chrono::Local::now());
+            // Do not advance the 6h interval after a failed/empty soft probe —
+            // login retries and the next poll must be allowed to try again.
+            let soft_failed = !manual && snap.error.is_some() && count == 0;
+            if !soft_failed {
+                cfg.last_check = Some(chrono::Local::now());
+            }
             cfg.last_error = snap.error.clone();
             if let Err(err) = save_updates_config(&cfg) {
                 tracing::warn!(%err, "could not save updates.json");
+            }
+            if soft_failed {
+                tracing::warn!(
+                    err = snap.error.as_deref().unwrap_or(""),
+                    "updates: soft check failed; will retry"
+                );
+            } else {
+                tracing::info!(count, manual, "updates: check finished");
             }
             maybe_notify(&cfg, count);
             set_snapshot(snap);

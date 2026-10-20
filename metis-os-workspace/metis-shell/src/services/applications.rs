@@ -356,6 +356,9 @@ pub const FALLBACK_ICON_NAME: &str = "application-x-executable-symbolic";
 /// Paint the best available icon for `entry` onto `image` at `size` pixels.
 pub fn set_app_icon(image: &gtk::Image, entry: &AppEntry, size: i32) {
     image.set_pixel_size(size);
+    if paint_app_icon_override(image, &entry.id, size) {
+        return;
+    }
     if let Some(icon) = &entry.icon
         && paint_gicon(image, icon, size)
     {
@@ -371,6 +374,16 @@ pub fn set_app_icon(image: &gtk::Image, entry: &AppEntry, size: i32) {
         return;
     }
     image.set_icon_name(Some(FALLBACK_ICON_NAME));
+}
+
+fn paint_app_icon_override(image: &gtk::Image, desktop_id: &str, size: i32) -> bool {
+    let Some(override_icon) = metis_config::resolve_app_icon_override(desktop_id) else {
+        return false;
+    };
+    if std::path::Path::new(&override_icon).is_absolute() {
+        return paint_file_icon(image, Some(std::path::PathBuf::from(override_icon)));
+    }
+    paint_themed_names(image, &[override_icon], size)
 }
 
 fn paint_gicon(image: &gtk::Image, icon: &gio::Icon, size: i32) -> bool {
@@ -451,6 +464,14 @@ pub fn resolve_entry_for_app_id(app_id: &str) -> Option<AppEntry> {
 /// Resolve a window's `app_id` to a displayable icon, falling back to a generic
 /// application glyph when no match (or no `app_id`) is found.
 pub fn resolve_icon_for_app_id(app_id: Option<&str>) -> gio::Icon {
+    if let Some(id) = app_id
+        && let Some(over) = metis_config::resolve_app_icon_override(id)
+    {
+        if std::path::Path::new(&over).is_absolute() {
+            return gio::FileIcon::new(&gio::File::for_path(over)).upcast();
+        }
+        return gio::ThemedIcon::new(&over).upcast();
+    }
     app_id
         .and_then(resolve_entry_for_app_id)
         .and_then(|e| e.icon)
@@ -466,6 +487,9 @@ pub fn resolve_icon_for_app_id(app_id: Option<&str>) -> gio::Icon {
 }
 
 fn metis_settings_icon_path() -> Option<std::path::PathBuf> {
+    if let Some(brand) = metis_config::resolve_brand_settings_path() {
+        return Some(brand);
+    }
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
         candidates.push(

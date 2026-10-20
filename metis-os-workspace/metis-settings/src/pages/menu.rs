@@ -270,8 +270,12 @@ pub fn build() -> gtk::Widget {
         cfg.terminal.clone(),
         |val| {
             let mut c = metis_config::load_menu_config();
-            c.terminal = val;
+            c.terminal = val.clone();
             persist(&c);
+            metis_config::sync_default_from_menu_executable(
+                metis_config::DefaultAppRole::Terminal,
+                val.as_deref(),
+            );
         },
     ));
 
@@ -282,8 +286,12 @@ pub fn build() -> gtk::Widget {
         cfg.file_manager.clone(),
         |val| {
             let mut c = metis_config::load_menu_config();
-            c.file_manager = val;
+            c.file_manager = val.clone();
             persist(&c);
+            metis_config::sync_default_from_menu_executable(
+                metis_config::DefaultAppRole::FileManager,
+                val.as_deref(),
+            );
         },
     ));
 

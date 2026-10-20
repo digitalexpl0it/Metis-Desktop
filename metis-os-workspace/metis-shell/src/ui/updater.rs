@@ -5,7 +5,7 @@
 //! window can stay mapped while Authentication Required is shown on top.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gtk::gdk;
@@ -25,8 +25,6 @@ const LIST_MAX_HEIGHT: i32 = 280;
 const LIST_ROW_HEIGHT: i32 = 58;
 const LIST_SECTION_HEIGHT: i32 = 32;
 const LIST_PAD: i32 = 8;
-/// Log panel height while revealed.
-const LOG_HEIGHT: i32 = 140;
 
 thread_local! {
     static WINDOW: RefCell<Option<Rc<UpdaterState>>> = const { RefCell::new(None) };
@@ -45,9 +43,6 @@ struct UpdaterState {
     /// Current package / app under the progress bar during install.
     progress_item: gtk::Label,
     status: gtk::Label,
-    log_view: gtk::TextView,
-    log_revealer: gtk::Revealer,
-    log_toggle: gtk::ToggleButton,
     reboot_banner: gtk::Box,
     install_btn: gtk::Button,
     later_btn: gtk::Button,
@@ -58,6 +53,18 @@ struct UpdaterState {
     item_total: Rc<Cell<usize>>,
     /// Suppress select-all ↔ row sync feedback loops.
     syncing: Rc<Cell<bool>>,
+    /// Per-package row status widgets (mini progress → Installed pill).
+    row_status: Rc<RefCell<HashMap<String, RowStatusWidgets>>>,
+}
+
+/// Right-side status chrome for one update row.
+#[derive(Clone)]
+struct RowStatusWidgets {
+    row: gtk::ListBoxRow,
+    install_btn: gtk::Button,
+    progress: gtk::ProgressBar,
+    installed: gtk::Label,
+    security: Option<gtk::Label>,
 }
 
 /// Stable per-row key. Ordinal keeps PackageKit duplicate IDs selectable
@@ -127,8 +134,8 @@ pub fn on_theme_changed() {
 }
 
 /// Resize the toplevel to the child's natural height. GTK will grow a mapped
-/// window for new content, but it will not shrink it when a Revealer collapses —
-/// without an explicit size, Hide log left a tall empty window.
+/// window for new content, but it will not shrink when the list shortens —
+/// without an explicit size, finishing an install can leave a tall empty window.
 fn fit_window_to_content(window: &gtk::Window) {
     if window.is_maximized() {
         window.unmaximize();
@@ -147,7 +154,7 @@ fn fit_window_to_content(window: &gtk::Window) {
 
 fn schedule_fit_window(window: &gtk::Window) {
     let window = window.clone();
-    // After the current layout pass so ListBox / Revealer report real sizes.
+    // After the current layout pass so ListBox rows report real sizes.
     glib::idle_add_local_once(move || {
         fit_window_to_content(&window);
     });
@@ -252,6 +259,7 @@ fn ensure_opaque_css() {
         window.metis-updater button.metis-updater-row-btn {{
             background-color: rgba({text_rgb}, 0.08);
             border: 1px solid rgba({text_rgb}, 0.18);
+            min-width: 72px;
         }}
         window.metis-updater button.metis-updater-btn:not(.metis-updater-btn-primary) {{
             background-color: rgb({surface_rgb});
@@ -273,32 +281,55 @@ fn ensure_opaque_css() {
             box-shadow: none;
             background-image: none;
         }}
-        window.metis-updater button.metis-updater-log-toggle,
-        window.metis-updater button.metis-updater-log-toggle:checked,
-        window.metis-updater button.metis-updater-log-toggle:hover,
-        window.metis-updater button.metis-updater-log-toggle:checked:hover {{
-            background-color: rgba({text_rgb}, 0.06);
-            background-image: none;
-            color: {text};
-            border: 1px solid rgba({text_rgb}, 0.16);
-            box-shadow: none;
+        window.metis-updater label.metis-updater-badge {{
+            color: {accent};
+            font-size: 0.85em;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background-color: rgba({text_rgb}, 0.08);
+            border: 1px solid rgba({text_rgb}, 0.14);
         }}
-        window.metis-updater button.metis-updater-log-toggle label,
-        window.metis-updater button.metis-updater-log-toggle:checked label,
-        window.metis-updater button.metis-updater-log-toggle:hover label {{
-            color: {text};
+        window.metis-updater label.metis-updater-installed {{
+            color: #ffffff;
+            font-size: 0.8em;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 999px;
+            background-color: {accent};
+            border: 1px solid {accent};
         }}
-        window.metis-updater textview.metis-updater-log,
-        window.metis-updater textview.metis-updater-log text,
-        window.metis-updater textview.metis-updater-log > border,
-        window.metis-updater .metis-updater-log {{
-            background-color: rgb({surface_rgb});
-            color: {text};
-            caret-color: {text};
+        @keyframes metis-updater-stripe {{
+            from {{ background-position: 0 0; }}
+            to {{ background-position: 24px 0; }}
         }}
-        window.metis-updater textview.metis-updater-log text {{
-            background-color: rgb({surface_rgb});
-            color: {text};
+        window.metis-updater progressbar.metis-updater-row-progress {{
+            min-width: 88px;
+            min-height: 12px;
+        }}
+        window.metis-updater progressbar.metis-updater-row-progress trough {{
+            min-height: 12px;
+            border-radius: 999px;
+            background-color: rgba({text_rgb}, 0.12);
+        }}
+        window.metis-updater progressbar.metis-updater-row-progress progress {{
+            min-height: 12px;
+            border-radius: 999px;
+            background-color: {accent};
+        }}
+        window.metis-updater progressbar.metis-updater-row-progress-active progress {{
+            min-height: 12px;
+            border-radius: 999px;
+            background-color: {accent};
+            background-image: repeating-linear-gradient(
+                -45deg,
+                {accent},
+                {accent} 5px,
+                #ffffff 5px,
+                #ffffff 10px
+            );
+            background-size: 20px 20px;
+            animation: metis-updater-stripe 0.55s linear infinite;
         }}
         "#
     );
@@ -470,59 +501,6 @@ fn build() -> UpdaterState {
     progress_item.set_visible(false);
     root.append(&progress_item);
 
-    let log_toggle = gtk::ToggleButton::with_label(&metis_i18n::tr("Show log"));
-    log_toggle.set_halign(gtk::Align::Start);
-    log_toggle.add_css_class("metis-updater-log-toggle");
-    root.append(&log_toggle);
-
-    let log_revealer = gtk::Revealer::builder()
-        .transition_type(gtk::RevealerTransitionType::SlideDown)
-        .transition_duration(160)
-        .reveal_child(false)
-        .vexpand(false)
-        .hexpand(true)
-        .build();
-    let log_scroll = gtk::ScrolledWindow::builder()
-        .min_content_height(LOG_HEIGHT)
-        .max_content_height(LOG_HEIGHT)
-        .propagate_natural_height(true)
-        .vexpand(false)
-        .hexpand(true)
-        .build();
-    log_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
-    let log_view = gtk::TextView::builder()
-        .editable(false)
-        .cursor_visible(false)
-        .monospace(true)
-        .wrap_mode(gtk::WrapMode::WordChar)
-        .build();
-    log_view.add_css_class("metis-updater-log");
-    log_scroll.set_child(Some(&log_view));
-    log_revealer.set_child(Some(&log_scroll));
-    root.append(&log_revealer);
-
-    {
-        let revealer = log_revealer.clone();
-        let window = window.clone();
-        log_toggle.connect_toggled(move |btn| {
-            let open = btn.is_active();
-            revealer.set_reveal_child(open);
-            btn.set_label(&if open {
-                metis_i18n::tr("Hide log")
-            } else {
-                metis_i18n::tr("Show log")
-            });
-            if open {
-                // Grow with the reveal animation.
-                schedule_fit_window_after(&window, std::time::Duration::from_millis(180));
-            } else {
-                // Shrink only after the slide-up finishes — resizing mid-transition
-                // left the tall empty gap under Hide log.
-                schedule_fit_window_after(&window, std::time::Duration::from_millis(200));
-            }
-        });
-    }
-
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     actions.add_css_class("metis-updater-actions");
     actions.set_halign(gtk::Align::End);
@@ -561,8 +539,9 @@ fn build() -> UpdaterState {
         let handles_slot = state_for_install.clone();
         let selected = selected.clone();
         let parent = window.clone();
+        let list = list.clone();
         install_btn.connect_clicked(move |btn| {
-            let scope = scope_from_selection(&selected.borrow());
+            let scope = scope_from_list(&list, &selected.borrow());
             begin_apply(&applying, btn, &handles_slot, &parent, scope);
         });
     }
@@ -574,6 +553,7 @@ fn build() -> UpdaterState {
         glib::Propagation::Stop
     });
 
+    let row_status = Rc::new(RefCell::new(HashMap::new()));
     let state = UpdaterState {
         window,
         hero_title,
@@ -585,9 +565,6 @@ fn build() -> UpdaterState {
         progress,
         progress_item,
         status,
-        log_view,
-        log_revealer: log_revealer.clone(),
-        log_toggle: log_toggle.clone(),
         reboot_banner,
         install_btn: install_btn.clone(),
         later_btn,
@@ -595,16 +572,17 @@ fn build() -> UpdaterState {
         selected,
         item_total: Rc::new(Cell::new(0)),
         syncing: syncing.clone(),
+        row_status: row_status.clone(),
     };
 
     *state_for_install.borrow_mut() = Some(UpdaterHandles {
         progress: state.progress.clone(),
         progress_item: state.progress_item.clone(),
         status: state.status.clone(),
-        log_buffer: state.log_view.buffer(),
-        log_revealer: state.log_revealer.clone(),
-        log_toggle: state.log_toggle.clone(),
         reboot_banner: state.reboot_banner.clone(),
+        row_status,
+        list: state.list.clone(),
+        scroller: state.scroller.clone(),
     });
 
     {
@@ -688,10 +666,22 @@ fn begin_apply(
         btn.set_sensitive(true);
         return;
     };
+
+    let apply_total = scope_item_count(&scope).max(1);
+    let completed = Rc::new(Cell::new(0usize));
+    // Short names in list order — used to mark earlier rows Installed when
+    // PackageKit reports a later package (dependency order ≠ A→Z).
+    let apply_order = Rc::new(apply_order_names(
+        &handles.list,
+        &handles.row_status.borrow(),
+        &scope,
+    ));
+    prepare_selected_rows(&handles.row_status.borrow(), &scope);
+
     handles.progress.set_visible(true);
     handles.progress.set_fraction(0.0);
     handles.progress.set_show_text(true);
-    handles.progress.set_text(Some(&metis_i18n::tr("Waiting…")));
+    set_count_progress(&handles, 0, apply_total);
     handles.progress_item.set_visible(true);
     handles.progress_item.set_text("");
     handles.status.set_visible(true);
@@ -710,24 +700,26 @@ fn begin_apply(
     } else {
         metis_i18n::tr("Updating Flatpak apps…")
     });
-    handles.log_buffer.set_text("");
-    // Keep log collapsed — TextView inserts during install thrash the
-    // main loop and make the pointer unusable.
-    handles.log_revealer.set_reveal_child(false);
-    handles.log_toggle.set_active(false);
 
     // Polkit auth is a layer-shell Overlay above this xdg window — leave the
     // updater visible so progress resumes in place after authentication.
 
-    // Pulse while PackageKit is silent (auth + CR-only progress before first %).
+    // Pulse the main bar only until the first package starts (auth wait).
     let pulse_stop = Rc::new(Cell::new(false));
-    let saw_percent = Rc::new(Cell::new(false));
+    let saw_item = Rc::new(Cell::new(false));
     let conffile_pending = Rc::new(Cell::new(false));
-    let current_item: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let track = ApplyTrack {
+        current_item: Rc::new(RefCell::new(None)),
+        completed,
+        apply_total,
+        saw_item: saw_item.clone(),
+        pulse_stop: pulse_stop.clone(),
+        apply_order,
+    };
     {
         let progress = handles.progress.clone();
         let stop = pulse_stop.clone();
-        let saw = saw_percent.clone();
+        let saw = saw_item.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
             if stop.get() {
                 return glib::ControlFlow::Break;
@@ -742,68 +734,43 @@ fn begin_apply(
     let applying_cb = applying.clone();
     let install_btn = btn.clone();
     let parent_win = parent.clone();
-    let pending_log: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    let scope_for_events = scope.clone();
     let on_event: Rc<dyn Fn(UpdateProgressEvent)> = Rc::new(move |ev| {
         match ev {
-            UpdateProgressEvent::Log { line } => {
-                // Only buffer; flush when the user has the log open.
-                if handles.log_revealer.reveals_child() {
-                    pending_log.borrow_mut().push_str(&line);
-                    pending_log.borrow_mut().push('\n');
-                    if pending_log.borrow().len() >= 1024 {
-                        flush_log(&handles.log_buffer, &pending_log);
-                    }
-                }
+            UpdateProgressEvent::Log { .. } => {
+                // Log UI removed — events are still emitted by the worker.
             }
             UpdateProgressEvent::Progress { percent, item } => {
-                if handles.log_revealer.reveals_child() {
-                    flush_log(&handles.log_buffer, &pending_log);
-                }
                 if let Some(name) = item {
-                    *current_item.borrow_mut() = Some(name.clone());
-                    handles.progress_item.set_visible(true);
-                    handles.progress_item.set_text(&name);
-                }
-                let item_label = current_item.borrow().clone();
-                if percent > 0 {
-                    saw_percent.set(true);
-                    let pct = percent.clamp(0, 100);
-                    handles.progress.set_fraction(f64::from(pct) / 100.0);
-                    handles
-                        .progress
-                        .set_text(Some(&match item_label.as_deref() {
-                            Some(name) => format!("{name} — {pct}%"),
-                            None => format!("{pct}%"),
-                        }));
-                } else if let Some(name) = item_label.as_deref() {
-                    handles.progress.set_text(Some(name));
+                    // Ignore size/count tokens that slipped through, and names
+                    // that are not in this apply set.
+                    if find_row_status(&handles.row_status.borrow(), &name).is_some() {
+                        advance_current_item(&handles, &track, &name);
+                        row_set_active(&handles.row_status.borrow(), &name, percent);
+                        scroll_row_into_view(&handles, &name);
+                    } else if let Some(cur) = track.current_item.borrow().as_deref() {
+                        row_set_active(&handles.row_status.borrow(), cur, percent);
+                    }
+                } else if let Some(name) = track.current_item.borrow().as_deref() {
+                    row_set_active(&handles.row_status.borrow(), name, percent);
                 }
             }
             UpdateProgressEvent::Phase { name } => {
-                if handles.log_revealer.reveals_child() {
-                    flush_log(&handles.log_buffer, &pending_log);
-                }
                 handles.status.set_text(&name);
-                if !saw_percent.get() {
-                    match current_item.borrow().as_deref() {
-                        Some(pkg) => handles.progress.set_text(Some(pkg)),
-                        None => handles.progress.set_text(Some(&metis_i18n::tr("Working…"))),
-                    }
+                if !track.saw_item.get() {
+                    set_count_progress(&handles, track.completed.get(), track.apply_total);
                 }
             }
             UpdateProgressEvent::ConffileConflict {
                 package,
                 config_path,
             } => {
-                if handles.log_revealer.reveals_child() {
-                    flush_log(&handles.log_buffer, &pending_log);
-                }
                 conffile_pending.set(true);
-                pulse_stop.set(true);
+                track.pulse_stop.set(true);
                 handles.status.set_text(&metis_i18n::tr(
                     "Configuration file conflict — choose an option…",
                 ));
-                handles.progress.set_text(Some("…"));
+                set_count_progress(&handles, track.completed.get(), track.apply_total);
                 let applying = applying_cb.clone();
                 let install_btn = install_btn.clone();
                 let handles = handles.clone();
@@ -838,8 +805,8 @@ fn begin_apply(
                                 install_btn.set_sensitive(true);
                                 match result {
                                     Ok(()) => {
-                                        handles.progress.set_fraction(1.0);
-                                        handles.progress.set_text(Some("100%"));
+                                        set_count_progress(&handles, apply_total, apply_total);
+                                        handles.progress_item.set_visible(false);
                                         handles
                                             .status
                                             .set_text(&metis_i18n::tr("Updates installed"));
@@ -865,19 +832,20 @@ fn begin_apply(
                 error,
                 reboot_required,
             } => {
-                if handles.log_revealer.reveals_child() {
-                    flush_log(&handles.log_buffer, &pending_log);
-                }
                 // Conffile dialog owns the rest of the lifecycle.
                 if conffile_pending.get() {
                     return;
                 }
-                pulse_stop.set(true);
+                track.pulse_stop.set(true);
                 applying_cb.set(false);
                 install_btn.set_sensitive(true);
                 if ok {
-                    handles.progress.set_fraction(1.0);
-                    handles.progress.set_text(Some("100%"));
+                    if let Some(prev) = track.current_item.borrow_mut().take() {
+                        row_set_installed(&handles.row_status.borrow(), &prev);
+                    }
+                    mark_scope_installed(&handles.row_status.borrow(), &scope_for_events);
+                    track.completed.set(track.apply_total);
+                    set_count_progress(&handles, track.apply_total, track.apply_total);
                     handles.progress_item.set_text("");
                     handles.progress_item.set_visible(false);
                     handles
@@ -890,6 +858,7 @@ fn begin_apply(
                 }
                 let status_msg = handles.status.text().to_string();
                 let progress_frac = handles.progress.fraction();
+                let progress_text = handles.progress.text().map(|s| s.to_string());
                 handles.reboot_banner.set_visible(reboot_required);
                 WINDOW.with(|cell| {
                     if let Some(state) = cell.borrow().as_ref() {
@@ -900,8 +869,8 @@ fn begin_apply(
                         state.progress.set_fraction(progress_frac);
                         state.progress.set_show_text(true);
                         state.progress_item.set_visible(false);
-                        if ok {
-                            state.progress.set_text(Some("100%"));
+                        if let Some(text) = progress_text.as_deref() {
+                            state.progress.set_text(Some(text));
                         }
                         state
                             .reboot_banner
@@ -912,6 +881,323 @@ fn begin_apply(
         }
     });
     services::updates_start_apply_scope(scope, on_event);
+}
+
+fn scope_item_count(scope: &UpdateApplyScope) -> usize {
+    match scope {
+        UpdateApplyScope::All => services::updates_pending_count(),
+        UpdateApplyScope::Selected {
+            packages,
+            flatpaks,
+            firmware,
+        } => packages.len() + flatpaks.len() + firmware.len(),
+    }
+}
+
+fn set_count_progress(handles: &UpdaterHandles, completed: usize, total: usize) {
+    let total = total.max(1);
+    let done = completed.min(total);
+    handles.progress.set_fraction(done as f64 / total as f64);
+    handles
+        .progress
+        .set_text(Some(&format!("{done} / {total}")));
+}
+
+struct ApplyTrack {
+    current_item: Rc<RefCell<Option<String>>>,
+    completed: Rc<Cell<usize>>,
+    apply_total: usize,
+    saw_item: Rc<Cell<bool>>,
+    pulse_stop: Rc<Cell<bool>>,
+    apply_order: Rc<Vec<String>>,
+}
+
+fn advance_current_item(handles: &UpdaterHandles, track: &ApplyTrack, name: &str) {
+    track.saw_item.set(true);
+    track.pulse_stop.set(true);
+    let map = handles.row_status.borrow();
+    let mut slot = track.current_item.borrow_mut();
+    if slot.as_deref() == Some(name) {
+        return;
+    }
+    // Mark every listed package before this one as done (PackageKit may skip
+    // reporting some names when it jumps ahead for deps).
+    if let Some(idx) = track
+        .apply_order
+        .iter()
+        .position(|p| p.eq_ignore_ascii_case(name))
+    {
+        for prev in track.apply_order.iter().take(idx) {
+            row_set_installed_widgets(map.get(prev));
+        }
+        track.completed.set(idx.min(track.apply_total));
+    } else if let Some(prev) = slot.as_deref() {
+        row_set_installed(&map, prev);
+        track.completed.set(
+            track
+                .completed
+                .get()
+                .saturating_add(1)
+                .min(track.apply_total),
+        );
+    }
+    *slot = Some(name.to_string());
+    drop(slot);
+    drop(map);
+    handles.progress_item.set_visible(true);
+    handles.progress_item.set_text(name);
+    set_count_progress(handles, track.completed.get(), track.apply_total);
+}
+
+fn apply_order_names(
+    list: &gtk::ListBox,
+    map: &HashMap<String, RowStatusWidgets>,
+    scope: &UpdateApplyScope,
+) -> Vec<String> {
+    let mut ordered = Vec::new();
+    let mut seen = HashSet::new();
+    let push_id = |ordered: &mut Vec<String>, seen: &mut HashSet<String>, id: &str| {
+        let key = id.trim().to_ascii_lowercase();
+        let short = key.split(';').next().unwrap_or(&key).to_string();
+        let flatpak = key.split('/').nth(1).map(str::to_string);
+        for candidate in [short, key].into_iter().chain(flatpak) {
+            if map.contains_key(&candidate) && seen.insert(candidate.clone()) {
+                ordered.push(candidate);
+                return;
+            }
+        }
+    };
+    match scope {
+        UpdateApplyScope::All => {
+            // Visual top→bottom order from the list.
+            let mut child = list.first_child();
+            while let Some(widget) = child {
+                child = widget.next_sibling();
+                let Ok(row) = widget.downcast::<gtk::ListBoxRow>() else {
+                    continue;
+                };
+                let Some(key) = row_key(&row) else {
+                    continue;
+                };
+                if let Some((_, id)) = package_id_from_key(&key) {
+                    push_id(&mut ordered, &mut seen, id);
+                }
+            }
+        }
+        UpdateApplyScope::Selected {
+            packages,
+            flatpaks,
+            firmware,
+        } => {
+            // Scope vectors are already list-ordered from `scope_from_list`.
+            for id in packages
+                .iter()
+                .chain(flatpaks.iter())
+                .chain(firmware.iter())
+            {
+                push_id(&mut ordered, &mut seen, id);
+            }
+        }
+    }
+    ordered
+}
+
+fn row_match_keys(item: &UpdateItem) -> Vec<String> {
+    let mut keys = Vec::new();
+    let push = |keys: &mut Vec<String>, raw: &str| {
+        let k = raw.trim().to_ascii_lowercase();
+        if !k.is_empty() && !keys.iter().any(|e| e == &k) {
+            keys.push(k);
+        }
+    };
+    push(&mut keys, &item.name);
+    push(&mut keys, &item.id);
+    if let Some(base) = item.id.split(';').next() {
+        push(&mut keys, base);
+    }
+    // Flatpak refs: app/org.Foo.Bar/x86_64/stable → org.foo.bar
+    if let Some(app_id) = item.id.split('/').nth(1) {
+        push(&mut keys, app_id);
+    }
+    keys
+}
+
+fn find_row_status<'a>(
+    map: &'a HashMap<String, RowStatusWidgets>,
+    hint: &str,
+) -> Option<&'a RowStatusWidgets> {
+    let hint = hint.trim().to_ascii_lowercase();
+    if hint.len() < 2 {
+        return None;
+    }
+    if let Some(row) = map.get(&hint) {
+        return Some(row);
+    }
+    let short = hint.split(';').next().unwrap_or(&hint);
+    if short != hint
+        && let Some(row) = map.get(short)
+    {
+        return Some(row);
+    }
+    if let Some(app_id) = hint.split('/').nth(1)
+        && let Some(row) = map.get(app_id)
+    {
+        return Some(row);
+    }
+    None
+}
+
+fn row_set_idle(row: &RowStatusWidgets) {
+    row.progress.set_visible(false);
+    row.installed.set_visible(false);
+    row.install_btn.set_visible(true);
+    row.install_btn.set_sensitive(true);
+    if let Some(badge) = &row.security {
+        badge.set_visible(true);
+    }
+}
+
+fn row_set_waiting(row: &RowStatusWidgets) {
+    if let Some(badge) = &row.security {
+        badge.set_visible(false);
+    }
+    row.install_btn.set_visible(false);
+    row.installed.set_visible(false);
+    row.progress.set_visible(true);
+    row.progress.set_fraction(0.12);
+    row.progress
+        .add_css_class("metis-updater-row-progress-active");
+}
+
+fn row_set_active(map: &HashMap<String, RowStatusWidgets>, hint: &str, percent: u32) {
+    let Some(row) = find_row_status(map, hint) else {
+        return;
+    };
+    if let Some(badge) = &row.security {
+        badge.set_visible(false);
+    }
+    row.install_btn.set_visible(false);
+    row.installed.set_visible(false);
+    row.progress.set_visible(true);
+    row.progress
+        .add_css_class("metis-updater-row-progress-active");
+    // PackageKit often reports a global %, not per-package — keep a visible
+    // stripe even when percent is 0, and clamp so the bar never looks empty.
+    let frac = if percent == 0 {
+        0.45
+    } else {
+        (f64::from(percent.clamp(12, 100)) / 100.0).clamp(0.2, 1.0)
+    };
+    row.progress.set_fraction(frac);
+}
+
+fn row_set_installed(map: &HashMap<String, RowStatusWidgets>, hint: &str) {
+    row_set_installed_widgets(find_row_status(map, hint));
+}
+
+fn row_set_installed_widgets(row: Option<&RowStatusWidgets>) {
+    let Some(row) = row else {
+        return;
+    };
+    if let Some(badge) = &row.security {
+        badge.set_visible(false);
+    }
+    row.install_btn.set_visible(false);
+    row.progress.set_visible(false);
+    row.progress
+        .remove_css_class("metis-updater-row-progress-active");
+    row.installed.set_visible(true);
+}
+
+fn prepare_selected_rows(map: &HashMap<String, RowStatusWidgets>, scope: &UpdateApplyScope) {
+    // Reset everything to idle first, then arm the selected set.
+    let mut seen = HashSet::new();
+    for row in map.values() {
+        let ptr = row.row.as_ptr() as usize;
+        if seen.insert(ptr) {
+            row_set_idle(row);
+        }
+    }
+    match scope {
+        UpdateApplyScope::All => {
+            seen.clear();
+            for row in map.values() {
+                let ptr = row.row.as_ptr() as usize;
+                if seen.insert(ptr) {
+                    row_set_waiting(row);
+                }
+            }
+        }
+        UpdateApplyScope::Selected {
+            packages,
+            flatpaks,
+            firmware,
+        } => {
+            for id in packages
+                .iter()
+                .chain(flatpaks.iter())
+                .chain(firmware.iter())
+            {
+                if let Some(row) = find_row_status(map, id) {
+                    row_set_waiting(row);
+                }
+            }
+        }
+    }
+}
+
+fn mark_scope_installed(map: &HashMap<String, RowStatusWidgets>, scope: &UpdateApplyScope) {
+    match scope {
+        UpdateApplyScope::All => {
+            let mut seen = HashSet::new();
+            for row in map.values() {
+                let ptr = row.row.as_ptr() as usize;
+                if seen.insert(ptr) {
+                    row_set_installed_widgets(Some(row));
+                }
+            }
+        }
+        UpdateApplyScope::Selected {
+            packages,
+            flatpaks,
+            firmware,
+        } => {
+            for id in packages
+                .iter()
+                .chain(flatpaks.iter())
+                .chain(firmware.iter())
+            {
+                row_set_installed(map, id);
+            }
+        }
+    }
+}
+
+fn scroll_row_into_view(handles: &UpdaterHandles, hint: &str) {
+    let map = handles.row_status.borrow();
+    let Some(widgets) = find_row_status(&map, hint) else {
+        return;
+    };
+    let row = widgets.row.clone();
+    let list = handles.list.clone();
+    let scroller = handles.scroller.clone();
+    drop(map);
+    // After the row is allocated so compute_bounds is meaningful.
+    glib::idle_add_local_once(move || {
+        let Some(bounds) = row.compute_bounds(&list) else {
+            return;
+        };
+        let adj = scroller.vadjustment();
+        let row_top = f64::from(bounds.y());
+        let row_bottom = row_top + f64::from(bounds.height());
+        let view_top = adj.value();
+        let view_bottom = view_top + adj.page_size();
+        if row_top < view_top {
+            adj.set_value(row_top.max(0.0));
+        } else if row_bottom > view_bottom {
+            adj.set_value((row_bottom - adj.page_size()).max(0.0));
+        }
+    });
 }
 
 fn present_conffile_dialog(
@@ -956,35 +1242,36 @@ fn present_conffile_dialog(
     );
 }
 
-fn flush_log(buffer: &gtk::TextBuffer, pending: &Rc<RefCell<String>>) {
-    let chunk = {
-        let mut p = pending.borrow_mut();
-        if p.is_empty() {
-            return;
-        }
-        std::mem::take(&mut *p)
-    };
-    let mut end = buffer.end_iter();
-    buffer.insert(&mut end, &chunk);
-}
-
 #[derive(Clone)]
 struct UpdaterHandles {
     progress: gtk::ProgressBar,
     progress_item: gtk::Label,
     status: gtk::Label,
-    log_buffer: gtk::TextBuffer,
-    log_revealer: gtk::Revealer,
-    log_toggle: gtk::ToggleButton,
     reboot_banner: gtk::Box,
+    row_status: Rc<RefCell<HashMap<String, RowStatusWidgets>>>,
+    list: gtk::ListBox,
+    scroller: gtk::ScrolledWindow,
 }
 
-fn scope_from_selection(selected: &HashSet<String>) -> UpdateApplyScope {
+/// Build apply scope by walking the list top→bottom so PackageKit gets ids in
+/// on-screen order (deps may still reorder, but we prefer list order).
+fn scope_from_list(list: &gtk::ListBox, selected: &HashSet<String>) -> UpdateApplyScope {
     let mut packages = Vec::new();
     let mut flatpaks = Vec::new();
     let mut firmware = Vec::new();
-    for key in selected {
-        let Some((src, id)) = package_id_from_key(key) else {
+    let mut child = list.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        let Ok(row) = widget.downcast::<gtk::ListBoxRow>() else {
+            continue;
+        };
+        let Some(key) = row_key(&row) else {
+            continue;
+        };
+        if !selected.contains(&key) {
+            continue;
+        }
+        let Some((src, id)) = package_id_from_key(&key) else {
             continue;
         };
         match src {
@@ -994,18 +1281,19 @@ fn scope_from_selection(selected: &HashSet<String>) -> UpdateApplyScope {
             _ => {}
         }
     }
-    // Duplicate PackageKit IDs can appear as separate rows; apply once each.
-    packages.sort();
-    packages.dedup();
-    flatpaks.sort();
-    flatpaks.dedup();
-    firmware.sort();
-    firmware.dedup();
+    dedup_preserve(&mut packages);
+    dedup_preserve(&mut flatpaks);
+    dedup_preserve(&mut firmware);
     UpdateApplyScope::Selected {
         packages,
         flatpaks,
         firmware,
     }
+}
+
+fn dedup_preserve(ids: &mut Vec<String>) {
+    let mut seen = HashSet::new();
+    ids.retain(|id| seen.insert(id.clone()));
 }
 
 fn scope_for_item(item: &UpdateItem) -> UpdateApplyScope {
@@ -1062,6 +1350,7 @@ fn refresh_content(state: &UpdaterState) {
     while let Some(row) = state.list.first_child() {
         state.list.remove(&row);
     }
+    state.row_status.borrow_mut().clear();
 
     // Drop keys that are no longer pending; newly seen items default to selected.
     {
@@ -1262,18 +1551,35 @@ fn append_section(
         }
         row_box.append(&text);
 
-        if item.security {
+        let security = if item.security {
             let badge = gtk::Label::new(Some(&metis_i18n::tr("Security")));
             badge.add_css_class("metis-updater-badge");
             badge.set_valign(gtk::Align::Center);
             row_box.append(&badge);
-        }
+            Some(badge)
+        } else {
+            None
+        };
 
         let row_install = gtk::Button::with_label(&metis_i18n::tr("Install"));
         row_install.add_css_class("metis-updater-row-btn");
         row_install.set_valign(gtk::Align::Center);
         row_install.set_sensitive(!state.applying.get());
         row_box.append(&row_install);
+
+        let mini = gtk::ProgressBar::new();
+        mini.add_css_class("metis-updater-row-progress");
+        mini.set_valign(gtk::Align::Center);
+        mini.set_show_text(false);
+        mini.set_fraction(0.0);
+        mini.set_visible(false);
+        row_box.append(&mini);
+
+        let installed = gtk::Label::new(Some(&metis_i18n::tr("Installed")));
+        installed.add_css_class("metis-updater-installed");
+        installed.set_valign(gtk::Align::Center);
+        installed.set_visible(false);
+        row_box.append(&installed);
 
         let row = gtk::ListBoxRow::new();
         row.set_activatable(false);
@@ -1287,6 +1593,20 @@ fn append_section(
         check.set_widget_name(&key.replace('\0', "::"));
         row.set_child(Some(&row_box));
 
+        let widgets = RowStatusWidgets {
+            row: row.clone(),
+            install_btn: row_install.clone(),
+            progress: mini,
+            installed,
+            security,
+        };
+        {
+            let mut map = state.row_status.borrow_mut();
+            for match_key in row_match_keys(item) {
+                map.insert(match_key, widgets.clone());
+            }
+        }
+
         {
             let selected = state.selected.clone();
             let syncing = state.syncing.clone();
@@ -1294,6 +1614,7 @@ fn append_section(
             let install_btn = state.install_btn.clone();
             let select_hint = state.select_hint.clone();
             let item_total = state.item_total.clone();
+            let applying = state.applying.clone();
             let key_c = key.clone();
             check.connect_toggled(move |btn| {
                 if syncing.get() {
@@ -1314,11 +1635,14 @@ fn append_section(
                 syncing.set(false);
                 if total > 0 && n == total {
                     install_btn.set_label(&metis_i18n::tr("Update all"));
-                    install_btn.set_sensitive(true);
+                    install_btn.set_sensitive(!applying.get());
                     select_hint
                         .set_text(&metis_i18n::tr("%1 selected").replace("%1", &n.to_string()));
                 } else {
                     update_selection_chrome(&install_btn, &select_hint, &selected.borrow(), true);
+                    if applying.get() {
+                        install_btn.set_sensitive(false);
+                    }
                 }
             });
         }
@@ -1329,10 +1653,10 @@ fn append_section(
                 progress: state.progress.clone(),
                 progress_item: state.progress_item.clone(),
                 status: state.status.clone(),
-                log_buffer: state.log_view.buffer(),
-                log_revealer: state.log_revealer.clone(),
-                log_toggle: state.log_toggle.clone(),
                 reboot_banner: state.reboot_banner.clone(),
+                row_status: state.row_status.clone(),
+                list: state.list.clone(),
+                scroller: state.scroller.clone(),
             })));
             let primary = state.install_btn.clone();
             let parent = state.window.clone();

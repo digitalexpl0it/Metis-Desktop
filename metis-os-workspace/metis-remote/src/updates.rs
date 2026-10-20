@@ -144,46 +144,82 @@ pub enum UpdatesError {
 }
 
 fn command_exists(bin: &str) -> bool {
-    Command::new("sh")
-        .args(["-c", &format!("command -v {bin} >/dev/null 2>&1")])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    resolve_command_path(bin).is_some()
 }
 
-/// Soft list commands must not hang the machine; `fwupdmgr` / `flatpak` can
-/// block on D-Bus for minutes and stall pointer motion system-wide.
+/// Soft list commands must not hang the machine; `fwupdmgr` / `flatpak` / `apt`
+/// can block on locks or D-Bus for minutes and stall the update worker.
 const CHECK_TIMEOUT_SECS: u64 = 25;
 
 fn command_output(bin: &str, args: &[&str]) -> Result<std::process::Output, UpdatesError> {
+    command_output_env(bin, args, &[])
+}
+
+fn command_output_env(
+    bin: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<std::process::Output, UpdatesError> {
+    // Resolve to an absolute path so `timeout` (including uutils) does not fail
+    // with ENOENT when PATH differs from the shell that found the basename.
+    let resolved = resolve_command_path(bin)
+        .ok_or_else(|| UpdatesError::Message(format!("{bin}: not found on PATH")))?;
     let output = if command_exists("timeout") {
         let mut argv = Vec::with_capacity(args.len() + 2);
         argv.push(CHECK_TIMEOUT_SECS.to_string());
-        argv.push(bin.to_string());
+        argv.push(resolved.to_string_lossy().into_owned());
         argv.extend(args.iter().map(|s| (*s).to_string()));
-        Command::new("timeout")
-            .args(&argv)
+        let mut cmd = Command::new("timeout");
+        cmd.args(&argv)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
+            .stderr(Stdio::piped());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.output()
             .map_err(|e| UpdatesError::Message(format!("timeout {bin}: {e}")))?
     } else {
-        Command::new(bin)
-            .args(args)
+        let mut cmd = Command::new(&resolved);
+        cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
+            .stderr(Stdio::piped());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.output()
             .map_err(|e| UpdatesError::Message(format!("{bin}: {e}")))?
     };
-    // GNU timeout exits 124 when the child is killed for exceeding the limit.
+    // GNU / uutils timeout exits 124 when the child is killed for exceeding the limit.
     if output.status.code() == Some(124) {
         return Err(UpdatesError::Message(format!(
             "{bin} timed out after {CHECK_TIMEOUT_SECS}s"
         )));
     }
     Ok(output)
+}
+
+fn resolve_command_path(bin: &str) -> Option<std::path::PathBuf> {
+    if bin.contains('/') {
+        let p = std::path::PathBuf::from(bin);
+        return p.is_file().then_some(p);
+    }
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(bin);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    // Common FHS fallbacks when the session PATH is minimal.
+    for dir in ["/usr/bin", "/bin", "/usr/local/bin"] {
+        let candidate = std::path::Path::new(dir).join(bin);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn packagekit_available() -> bool {
@@ -289,8 +325,14 @@ fn check_packagekit() -> Result<(Vec<UpdateItem>, String), UpdatesError> {
         return Err(UpdatesError::Busy);
     }
     if packagekit_available() {
-        let items = pkcon_get_updates()?;
-        return Ok((items, "packagekit".into()));
+        match pkcon_get_updates() {
+            Ok(items) => return Ok((items, "packagekit".into())),
+            Err(err) => {
+                // `timeout pkcon` can fail (missing helper, uutils quirks) even
+                // when apt/dnf still work — fall through instead of reporting empty.
+                tracing::debug!(%err, "pkcon get-updates failed; trying distro CLI");
+            }
+        }
     }
     let items = distro_list_updates()?;
     Ok((items, format!("distro:{}", distro_id())))
@@ -414,14 +456,13 @@ fn distro_list_updates() -> Result<Vec<UpdateItem>, UpdatesError> {
 }
 
 fn apt_list_upgradable() -> Result<Vec<UpdateItem>, UpdatesError> {
-    let output = Command::new("apt")
-        .args(["list", "--upgradable"])
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|e| UpdatesError::Message(format!("apt: {e}")))?;
+    // Must use the shared timeout — untimed `apt` blocks forever on dpkg locks
+    // and used to wedge the shell's soft-check worker for the whole session.
+    let output = command_output_env(
+        "apt",
+        &["list", "--upgradable"],
+        &[("DEBIAN_FRONTEND", "noninteractive")],
+    )?;
     let mut items = Vec::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         // name/suite version arch [upgradable from: …]
@@ -446,14 +487,8 @@ fn apt_list_upgradable() -> Result<Vec<UpdateItem>, UpdatesError> {
 }
 
 fn dnf_check_update() -> Result<Vec<UpdateItem>, UpdatesError> {
-    let output = Command::new("dnf")
-        .args(["check-update", "-q"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|e| UpdatesError::Message(format!("dnf: {e}")))?;
-    // exit 100 = updates available
+    let output = command_output("dnf", &["check-update", "-q"])?;
+    // exit 100 = updates available (timeout wrapper still returns stdout)
     let mut items = Vec::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let line = line.trim();
@@ -481,12 +516,7 @@ fn pacman_checkupdates() -> Result<Vec<UpdateItem>, UpdatesError> {
     } else {
         return Ok(Vec::new());
     };
-    let output = Command::new(bin)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|e| UpdatesError::Message(format!("{bin}: {e}")))?;
+    let output = command_output(bin, &[])?;
     let mut items = Vec::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let mut parts = line.split_whitespace();
@@ -1146,8 +1176,8 @@ fn extract_item_name(line: &str) -> Option<String> {
         .or_else(|| line.strip_prefix("package:"))
     {
         let id = rest.split_whitespace().next().unwrap_or("").trim();
-        if !id.is_empty() {
-            return Some(short_package_id(id));
+        if let Some(name) = plausible_package_name(id) {
+            return Some(name);
         }
     }
     // apt Status-Fd: "pmstatus:alsa-ucm-conf:42.0:Installing alsa-ucm-conf"
@@ -1159,11 +1189,12 @@ fn extract_item_name(line: &str) -> Option<String> {
         let mut parts = line.splitn(4, ':');
         let _kind = parts.next()?;
         let pkg = parts.next()?.trim();
-        if !pkg.is_empty() && pkg != "…" && pkg != "..." {
-            return Some(short_package_id(pkg));
+        if let Some(name) = plausible_package_name(pkg) {
+            return Some(name);
         }
     }
     // Human lines — space or tab after the verb (PackageKit uses tabs).
+    // Reject size/count noise: "Downloading 177 MB", "Installing 5 packages".
     for prefix in [
         "Updating ",
         "Downloading ",
@@ -1171,13 +1202,12 @@ fn extract_item_name(line: &str) -> Option<String> {
         "Updating\t",
         "Downloading\t",
         "Installing\t",
-        "Waiting for ",
     ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             let name = rest.split_whitespace().next()?;
             let clean = name.trim_matches(|c| c == ':' || c == '.' || c == '…');
-            if !clean.is_empty() && clean != "packages" && clean != "software" && clean != "cache" {
-                return Some(short_package_id(clean));
+            if let Some(name) = plausible_package_name(clean) {
+                return Some(name);
             }
         }
     }
@@ -1187,6 +1217,37 @@ fn extract_item_name(line: &str) -> Option<String> {
 /// `name;version;arch;distro` → `name`, else leave as-is.
 fn short_package_id(id: &str) -> String {
     id.split(';').next().unwrap_or(id).trim().to_string()
+}
+
+/// Drop PackageKit progress tokens that are sizes/counts, not package ids.
+fn plausible_package_name(raw: &str) -> Option<String> {
+    let name = short_package_id(raw);
+    if name.len() < 2 {
+        return None;
+    }
+    if name == "…" || name == "..." {
+        return None;
+    }
+    // Pure numbers / decimals ("177", "42.5").
+    if name
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == ',')
+    {
+        return None;
+    }
+    if !name.chars().any(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let lower = name.to_ascii_lowercase();
+    match lower.as_str() {
+        "mb" | "mib" | "kb" | "kib" | "gb" | "gib" | "tb" | "tib" | "bytes" | "byte" | "files"
+        | "file" | "packages" | "package" | "software" | "cache" | "metadata" | "repo"
+        | "repository" | "updates" | "update" | "of" | "the" | "and" | "items" | "item" => {
+            return None;
+        }
+        _ => {}
+    }
+    Some(name)
 }
 
 /// Root: refresh package indexes for the host distro.
@@ -1488,6 +1549,11 @@ mod tests {
             Some("alsa-ucm-conf")
         );
         assert_eq!(extract_item_name("Downloading packages"), None);
+        // Size / count noise must not become the "current package".
+        assert_eq!(extract_item_name("Downloading 177 MB"), None);
+        assert_eq!(extract_item_name("Downloading\t177 MB of files"), None);
+        assert_eq!(extract_item_name("Installing 5 packages"), None);
+        assert_eq!(extract_item_name("Waiting for authentication"), None);
     }
 
     #[test]

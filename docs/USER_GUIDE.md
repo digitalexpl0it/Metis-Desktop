@@ -119,16 +119,20 @@ Widgets appear in the order set by `bar.json#widgets`. The defaults:
 | **Notifications** | *(optional)* Legacy bell — opens the same Notification Center as the clock. Removed from the default bar layout in Phase 13. |
 | **Clock** | Date/time with unread badge. Click opens the **Notification Center** (right panel): notifications, calendar events, and calendar/tools (world clocks, stopwatch, timer, alarms). **Esc** closes. |
 
-**Software updates.** After you log in, the shell runs a soft PackageKit check
-about **90 seconds** later, then again on the schedule under Settings → System →
-Updates (default **every 6 hours**). Checks are unprivileged (no password) —
-like GNOME Software, authentication is only required when you **Install**.
-**Settings → Check now** runs a full check (PackageKit + Flatpak + fwupd) and
-shares the result with the edge-bar Updates icon and the updater window via
+**Software updates.** After you log in, the shell runs a soft PackageKit/distro
+check about **90 seconds** later (with a few follow-up retries if the package
+manager was still busy), then again on the schedule under Settings → System →
+Updates (default **every 6 hours**). Soft checks are unprivileged and time-bounded
+so a stuck `apt`/`pkcon` cannot block later probes. **Settings → Check now** runs
+a full check (PackageKit/distro + Flatpak + fwupd) and shares the result with the
+edge-bar Updates icon and the updater window via
 `~/.cache/metis/updates-snapshot.json`. When updates are found you get a
 notification with **Install** / **Later**, and the Updates icon appears on the
-edge bar. The updater lists packages with select-all / per-item Install, zebra
-rows, progress (with live log), and a restart banner when
+edge bar. Authentication is only required when you **Install**. The updater lists
+packages with select-all / per-item **Install**, zebra rows, a count-based
+overall progress bar (and current package name), per-row striped mini progress
+that becomes an **Installed** pill when each package finishes (the list scrolls
+to follow the active package), and a restart banner when
 `/var/run/reboot-required` (or PackageKit) says so. Metis’s PolicyKit dialog
 slides down as a top-center overlay above other windows. If a package hits a
 modified config file under `/etc`, the updater asks **Keep my version** or
@@ -909,6 +913,18 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   colors; font. Edits write `themes/dark.json` / `themes/light.json` and survive
   logout (stock themes are only seeded when those files are missing). Wallpaper,
   edge bar, and window chrome live on their own pages below.
+- **Icons** — pick a Freedesktop / GTK icon theme (Papirus, Breeze, Tela, …) from
+  themes installed under `/usr/share/icons` or `~/.local/share/icons` (cursor-only
+  packs like DMZ are omitted). The choice applies live to edge-bar status icons,
+  Metis Menu apps, and pinned taskbar icons (the Metis brand mark stays until you
+  set a custom launcher PNG). Incomplete packs fall back to Adwaita for missing
+  status glyphs. Install a zip/tar pack into your user icons folder, or remove
+  user-installed themes only. Optional brand PNGs and per-app icon overrides live
+  in `icons.json`.
+- **Default applications** (System) — browser, file manager, terminal, mail,
+  images, audio, video, and PDF handlers via FreeDesktop (`xdg-mime` /
+  `xdg-settings`). Terminal and file manager stay in sync with Metis Menu quick
+  launchers.
 - **Background** — picture / solid colour / gradient, applied live and remembered
   in `wallpaper.json`, with optional per-output picture overrides. Changes
   **crossfade** (~280 ms) from the previous background — the desktop never goes
@@ -930,9 +946,10 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   vs scrolling). **Status icons** — toggle Weather, tray, network, volume, and
   other optional icons in Settings (workspaces, running apps, and the clock stay
   on); drag an icon on the bar past the drag threshold to reorder, or use the
-  arrows under Status icons. Enabled icons still **auto-hide** when unused (no
-  battery, no VPN profiles, no Bluetooth adapter, no Wi‑Fi/ethernet, weather
-  unavailable, empty tray volumes / no updates).
+  arrows under Status icons — both update the bar live and persist in `bar.json`
+  across logout. Enabled icons still **auto-hide** when unused (no battery, no
+  VPN profiles, no Bluetooth adapter, no Wi‑Fi/ethernet, weather unavailable,
+  empty tray volumes / no updates).
 - **Windows** — titlebar opacity, the title pill
   border, the window frame border, and **window padding** around maximized /
   snapped windows.

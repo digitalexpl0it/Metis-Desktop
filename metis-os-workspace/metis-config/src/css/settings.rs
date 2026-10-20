@@ -534,6 +534,18 @@ pub fn build_settings_chrome_stylesheet(theme: &ThemeTokens) -> String {
         .metis-settings-section-body > .metis-settings-list {{
             margin: 0 12px 12px;
         }}
+        .metis-settings-section-body > .metis-settings-list-scroll {{
+            margin: 0 16px 12px;
+            border-radius: {rl}px;
+            border: 1px solid {border};
+            background-color: {raised};
+        }}
+        .metis-settings-section-body > .metis-settings-list-scroll > .metis-settings-list {{
+            margin: 0;
+            border: none;
+            border-radius: 0;
+            background-color: transparent;
+        }}
         .metis-settings-section-body > .metis-settings-inset {{
             margin: 4px 16px 12px;
         }}
@@ -552,6 +564,13 @@ pub fn build_settings_chrome_stylesheet(theme: &ThemeTokens) -> String {
         .metis-settings-section-body > .metis-settings-hint,
         .metis-settings-section-body > label.metis-settings-hint {{
             padding: 4px 16px 10px;
+        }}
+        .metis-settings-section-body > entry.metis-settings-inset,
+        .metis-settings-section-body > searchentry.metis-settings-inset {{
+            margin: 4px 16px 10px;
+        }}
+        .metis-settings-icon-preview {{
+            padding: 4px 0;
         }}
         .metis-settings-section-body > label.metis-settings-error {{
             padding: 10px 16px 8px;
@@ -746,35 +765,46 @@ pub fn build_settings_chrome_stylesheet(theme: &ThemeTokens) -> String {
         .metis-settings-list label {{ color: {text}; }}
         .metis-settings-list row:hover {{ background-color: {surface}; }}
 
-        /* Zebra lists (Wi-Fi scan, Bluetooth devices) — text-mix works in light + dark. */
+        /* Zebra lists (Wi-Fi, Bluetooth, Icons theme) — text-mix works in light + dark. */
         .metis-settings-zebra-list,
         .metis-settings-wifi-list {{
             padding: 6px;
+            background-color: {raised};
+            color: {text};
         }}
         .metis-settings-zebra-list > box.metis-settings-zebra-row,
+        .metis-settings-zebra-list > row.metis-settings-zebra-row,
         .metis-settings-wifi-list > box.metis-settings-wifi-row {{
             padding: 8px 10px;
             border-radius: {rs}px;
             border-top: none;
             background-color: transparent;
             min-height: 36px;
+            color: {text};
         }}
         .metis-settings-zebra-list > box.metis-settings-zebra-row-alt,
+        .metis-settings-zebra-list > row.metis-settings-zebra-row-alt,
         .metis-settings-wifi-list > box.metis-settings-wifi-row-alt {{
             background-color: color-mix(in srgb, {text} 7%, {raised});
         }}
         .metis-settings-zebra-list > box.metis-settings-zebra-row:hover,
+        .metis-settings-zebra-list > row.metis-settings-zebra-row:hover,
         .metis-settings-wifi-list > box.metis-settings-wifi-row:hover {{
             background-color: color-mix(in srgb, {accent} 14%, {raised});
         }}
         .metis-settings-zebra-list > box.metis-settings-zebra-row label,
+        .metis-settings-zebra-list > row.metis-settings-zebra-row label,
         .metis-settings-wifi-list > box.metis-settings-wifi-row label {{
             color: {text};
         }}
         .metis-settings-zebra-list > box.metis-settings-zebra-row .metis-settings-hint,
+        .metis-settings-zebra-list > row.metis-settings-zebra-row .metis-settings-hint,
         .metis-settings-wifi-list > box.metis-settings-wifi-row .metis-settings-hint {{
             color: {muted};
             padding: 0;
+        }}
+        .metis-settings-zebra-list > row.metis-settings-selected {{
+            background-color: color-mix(in srgb, {accent} 18%, {raised});
         }}
 
         /* Users page account list */

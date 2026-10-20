@@ -45,6 +45,18 @@ impl LauncherWidget {
 }
 
 fn load_icon() -> Option<gdk::Texture> {
+    if let Some(path) = metis_config::resolve_brand_launcher_path() {
+        match gdk::Texture::from_filename(&path) {
+            Ok(texture) => return Some(texture),
+            Err(err) => {
+                tracing::warn!(
+                    %err,
+                    path = %path.display(),
+                    "failed to load custom launcher brand icon"
+                );
+            }
+        }
+    }
     let bytes = glib::Bytes::from_static(ICON_BYTES);
     match gdk::Texture::from_bytes(&bytes) {
         Ok(texture) => Some(texture),

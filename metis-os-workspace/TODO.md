@@ -104,28 +104,21 @@ other DEs. KDE “breeze” / oxygen-style themes that ship a valid `index.theme
 hicolor layout work the same way; reject or warn only on broken archives, not
 on “wrong DE”.
 
-- [ ] **Icon / theme manager** — Settings page to **select**, **install**
-      (zip/tar → `~/.local/share/icons/<Name>/`, require `index.theme`, path-safe
-      extract), and **remove** (user-installed only; never delete system themes).
-      Persist active theme; live-reload shell + Settings. Cursor themes optional
-      follow-up on the same page. Keep separate from Metis colour tokens
-      (`themes/light.json` / `dark.json`).
-- [ ] **Default programs** — Settings → Apps (or System) **Default applications**
-      for browser, file manager, terminal, mail, images, audio, video, PDF via
-      `mimeapps.list` / `xdg-settings` where appropriate. Align Metis Menu
-      terminal + file-manager prefs with the same defaults (single source of
-      truth).
-- [ ] **Custom app icons** — per-`desktop_id` override (path or icon name) in
-      config; `resolve_icon_for_app_id` / menu / taskbar honour override before
-      `.desktop` Icon=. Optional: write user hicolor + desktop override under
-      `~/.local/share/` so non-Metis apps see it too.
-- [ ] **Custom Metis DE / brand icons** — configurable paths for edge-bar
-      launcher brand (replace baked-in `metis_icon.png`), Settings app icon, and
-      other first-party chrome; fallback to packaged assets. Store under
-      `~/.config/metis/icons/` or a small branding config.
+- [x] **Icon / theme manager** (2026-10-19) — Settings → Desktop → **Icons**:
+      select Freedesktop themes, install zip/tar/tar.gz into
+      `~/.local/share/icons/<Name>/` (path-safe, requires `index.theme`), remove
+      user installs only. Persist in `icons.json`; live `reload-icons`. Cursor
+      themes still optional follow-up. Colour tokens stay in `themes/*.json`.
+- [x] **Default programs** (2026-10-19) — Settings → System → **Default
+      applications** (browser, files, terminal, mail, images, audio, video, PDF)
+      via `xdg-mime` / `xdg-settings`; Menu terminal / file manager stay aligned.
+- [x] **Custom app icons** (2026-10-19) — per-`desktop_id` overrides in
+      `icons.json`; menu / taskbar honour before `.desktop` Icon=.
+- [x] **Custom Metis DE / brand icons** (2026-10-19) — launcher + Settings PNG
+      paths in `icons.json` (home/XDG only); fallback to packaged assets.
 
-**Suggested order:** icon theme select → default programs → brand + per-app
-overrides → install/remove packs.
+**Landed order:** icon theme select → default programs → brand + per-app
+overrides → install/remove packs. Cursor themes optional next.
 
 ---
 

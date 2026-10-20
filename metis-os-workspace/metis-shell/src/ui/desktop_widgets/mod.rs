@@ -953,6 +953,10 @@ fn watch_widgets_commands() {
                                     let _ = crate::ui::theme::init_theme();
                                 }
                                 "reload-locale" => apply_locale_reload(),
+                                "reload-icons" => {
+                                    crate::ui::theme::apply_icon_theme_from_config();
+                                    reload();
+                                }
                                 "reload-weather" => crate::services::weather::weather_refresh(),
                                 "hide-desktop-widgets" => {
                                     set_hosts_visible(false, parsed.arg);
