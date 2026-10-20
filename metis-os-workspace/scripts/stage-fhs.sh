@@ -169,6 +169,9 @@ if [[ -d "$ASSETS_DIR/widgets" ]]; then
       "$STAGE/usr/share/metis/widgets/$name/manifest.json"
     [[ -f "$local_pack/widget.json" ]] && install -Dm644 "$local_pack/widget.json" \
       "$STAGE/usr/share/metis/widgets/$name/widget.json"
+    # api:2 guest module (not executable; do not rely on the +x helper loop below)
+    [[ -f "$local_pack/module.wasm" ]] && install -Dm644 "$local_pack/module.wasm" \
+      "$STAGE/usr/share/metis/widgets/$name/module.wasm"
     [[ -f "$local_pack/helper" ]] && install -Dm755 "$local_pack/helper" \
       "$STAGE/usr/share/metis/widgets/$name/helper"
     for bin in "$local_pack"/*; do
