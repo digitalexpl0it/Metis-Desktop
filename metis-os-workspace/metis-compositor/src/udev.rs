@@ -16,7 +16,7 @@ use input::DeviceCapability;
 use smithay::{
     backend::{
         allocator::{
-            Fourcc,
+            Fourcc, Modifier,
             format::FormatSet,
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
         },
@@ -714,14 +714,61 @@ fn open_device(
     })
 }
 
+/// Keep only formats GBM can allocate with `SCANOUT|RENDERING` on this device.
+///
+/// DRM plane format lists often include BGR-order fourccs (e.g. `Abgr8888` /
+/// Chromium `RGBA_8888`) that the primary plane advertises but client GBM
+/// cannot allocate as scanout on Intel. Chromium then probes those formats,
+/// hits `ENOMEM`, and crash-loops its GPU process — multi-second launches for
+/// GitHub Desktop / Chrome that work fine under GNOME (Mutter filters harder).
+fn filter_scanout_formats_for_client_gbm(
+    gbm: &GbmDevice<DrmDeviceFd>,
+    formats: FormatSet,
+) -> FormatSet {
+    let mut allocator = GbmAllocator::new(
+        gbm.clone(),
+        GbmBufferFlags::SCANOUT | GbmBufferFlags::RENDERING,
+    );
+    let flags = GbmBufferFlags::SCANOUT | GbmBufferFlags::RENDERING;
+    let mut ok_codes = std::collections::HashSet::new();
+    for fmt in formats.iter() {
+        if ok_codes.contains(&fmt.code) {
+            continue;
+        }
+        let modifiers = [fmt.modifier, Modifier::Invalid];
+        let alloc_ok = allocator
+            .create_buffer_with_flags(64, 64, fmt.code, &modifiers[..1], flags)
+            .is_ok()
+            || allocator
+                .create_buffer_with_flags(64, 64, fmt.code, &[Modifier::Invalid], flags)
+                .is_ok();
+        if alloc_ok {
+            ok_codes.insert(fmt.code);
+        } else {
+            tracing::debug!(
+                ?fmt.code,
+                ?fmt.modifier,
+                "scanout feedback: GBM cannot SCANOUT format — omitted"
+            );
+        }
+    }
+    formats
+        .iter()
+        .copied()
+        .filter(|f| ok_codes.contains(&f.code))
+        .collect()
+}
+
 /// Build the render + scanout dmabuf feedbacks for a display surface. The
 /// scanout tranche advertises the plane formats the display can scan out
-/// directly, limited to formats we can also render from so there is always a
-/// fallback path when a client buffer can't be promoted to a plane.
+/// directly, limited to formats we can also render from *and* allocate via
+/// client GBM with SCANOUT, so Chromium/Electron do not probe unusable
+/// fourccs into an ENOMEM crash loop.
 fn build_surface_dmabuf_feedback(
     render_node: DrmNode,
     render_formats: FormatSet,
     surface: &DrmSurface,
+    gbm: &GbmDevice<DrmDeviceFd>,
 ) -> Option<SurfaceDmabufFeedback> {
     let planes = surface.planes().clone();
     let planes_formats = surface
@@ -734,6 +781,7 @@ fn build_surface_dmabuf_feedback(
         .intersection(&render_formats)
         .copied()
         .collect::<FormatSet>();
+    let planes_formats = filter_scanout_formats_for_client_gbm(gbm, planes_formats);
 
     let builder = DmabufFeedbackBuilder::new(render_node.dev_id(), render_formats);
     let render_feedback = builder.clone().build().ok()?;
@@ -1087,17 +1135,19 @@ impl MetisState {
                         .ok()
                         .map(|renderer| renderer.dmabuf_formats())
                 });
-                render_node
-                    .zip(render_formats)
-                    .and_then(|(render_node, formats)| {
+                let gbm = udev.backends.get(&node).map(|backend| backend.gbm.clone());
+                render_node.zip(render_formats).zip(gbm).and_then(
+                    |((render_node, formats), gbm)| {
                         drm_output.with_compositor(|compositor| {
                             build_surface_dmabuf_feedback(
                                 render_node,
                                 formats,
                                 compositor.surface(),
+                                &gbm,
                             )
                         })
-                    })
+                    },
+                )
             }
             None => {
                 tracing::warn!(%name, "dmabuf feedback: udev state missing");

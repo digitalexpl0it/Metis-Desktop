@@ -1003,7 +1003,7 @@ impl MetisState {
         if self.metis_bar_ui_hit(location) {
             return true;
         }
-        // Web browsers (windowed WebGL / canvas games): full-rate absolute motion.
+        // Web browsers: full-rate absolute motion.
         // The GTK throttle made in-tab games feel sluggish without fullscreen.
         if self.pointer_over_web_browser(location) {
             self.last_pointer_forward = Some((std::time::Instant::now(), location));

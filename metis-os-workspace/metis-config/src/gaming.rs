@@ -251,11 +251,59 @@ pub fn command_prefers_dgpu(program: &str) -> bool {
     NEEDLES.iter().any(|n| p.contains(n))
 }
 
+/// Chromium/Electron/Ozone desktop shells (GitHub Desktop, Cursor, VS Code, …).
+///
+/// These speak Wayland dmabuf feedback for device selection. Forcing
+/// `DRI_PRIME` / NVIDIA PRIME offload onto a different GPU than the compositor
+/// causes GBM `SCANOUT` failures and Intel `ENOMEM` GPU-process crash loops
+/// (multi-second / multi-minute launches under Metis that work fine on GNOME).
+pub fn command_is_ozone_client(program: &str) -> bool {
+    let p = program.to_ascii_lowercase();
+    if p.contains("chromedriver") {
+        return false;
+    }
+    const NEEDLES: &[&str] = &[
+        "github-desktop",
+        "github desktop",
+        "/electron",
+        "electron ",
+        "electron-",
+        "/cursor",
+        "cursor-",
+        "code -",
+        "/code ",
+        "code-insiders",
+        "slack",
+        "discord",
+        "figma",
+        "spotify",
+        "1password",
+        "obsidian",
+        "notion",
+        "signal-desktop",
+        "element-desktop",
+        "teams",
+        "zoom",
+    ];
+    if NEEDLES.iter().any(|n| p.contains(n)) {
+        return true;
+    }
+    // Chromium / Chrome / Edge / Brave / Opera / Vivaldi — Ozone Wayland.
+    command_is_web_browser(program)
+        && (p.contains("chrom")
+            || p.contains("brave")
+            || p.contains("msedge")
+            || p.contains("microsoft-edge")
+            || p.contains("opera")
+            || p.contains("vivaldi"))
+}
+
 /// Whether `program` looks like a web browser (Chrome / Firefox / Edge / …).
 ///
-/// Browsers are steered onto the dGPU in Auto mode (when on AC) so WebGL / canvas
-/// games are not stuck on a weak iGPU. They do **not** count as a "game session"
-/// for GameMode / performance-profile hooks.
+/// Browsers stay on the compositor GPU in Auto mode (Wayland dmabuf). Steering
+/// them onto a discrete GPU while Metis scans out on the iGPU causes cross-GPU
+/// buffer pressure and slow / crashing launches. They do **not** count as a
+/// "game session" for GameMode / performance-profile hooks.
 pub fn command_is_web_browser(program: &str) -> bool {
     let p = program.to_ascii_lowercase();
     if p.contains("chromedriver")
@@ -266,6 +314,7 @@ pub fn command_is_web_browser(program: &str) -> bool {
         || p.contains("/code ")
         || p.contains("slack")
         || p.contains("discord")
+        || p.contains("github-desktop")
     {
         return false;
     }
@@ -306,6 +355,12 @@ pub fn command_is_web_browser(program: &str) -> bool {
 
 /// Resolve whether a compositor spawn should prefer the discrete GPU.
 pub fn prefer_dgpu_for_launch(program: &str, cfg: &GamingConfig) -> bool {
+    // Chromium / Electron must share the compositor's GPU for Wayland dmabuf
+    // import — never steer them onto a discrete card (breaks even with
+    // AlwaysDgpu / METIS_GAME_GPU=dgpu).
+    if command_is_ozone_client(program) {
+        return false;
+    }
     if let Ok(v) = std::env::var("METIS_GAME_GPU") {
         return match v.as_str() {
             "dgpu" => true,
@@ -321,7 +376,8 @@ fn resolve_graphics_mode(program: &str, cfg: &GamingConfig) -> bool {
         GraphicsMode::Off | GraphicsMode::AlwaysIgpu => false,
         GraphicsMode::AlwaysDgpu => true,
         GraphicsMode::Auto | GraphicsMode::DesktopIgpuGamesDgpu => {
-            let wants_dgpu = command_prefers_dgpu(program) || command_is_web_browser(program);
+            // Games / launchers only (browsers stay on the compositor GPU).
+            let wants_dgpu = command_prefers_dgpu(program);
             if !wants_dgpu {
                 return false;
             }
@@ -370,17 +426,28 @@ mod tests {
     }
 
     #[test]
-    fn browsers_prefer_dgpu_in_auto() {
+    fn ozone_and_browsers_stay_on_compositor_gpu_in_auto() {
         let cfg = GamingConfig {
             graphics_mode: GraphicsMode::Auto,
             on_battery_prefer_igpu: false,
             ..GamingConfig::default()
         };
-        assert!(prefer_dgpu_for_launch("firefox", &cfg));
-        assert!(prefer_dgpu_for_launch("google-chrome-stable", &cfg));
+        assert!(command_is_ozone_client("github-desktop"));
+        assert!(command_is_ozone_client("/usr/share/cursor/cursor"));
+        assert!(command_is_ozone_client("/snap/bin/chromium"));
+        assert!(!prefer_dgpu_for_launch("github-desktop", &cfg));
+        assert!(!prefer_dgpu_for_launch("google-chrome-stable", &cfg));
+        assert!(!prefer_dgpu_for_launch("firefox", &cfg));
         assert!(!prefer_dgpu_for_launch("gedit", &cfg));
         // Games still prefer dGPU.
         assert!(prefer_dgpu_for_launch("steam", &cfg));
+        // AlwaysDgpu must still leave Ozone on the compositor GPU.
+        let always = GamingConfig {
+            graphics_mode: GraphicsMode::AlwaysDgpu,
+            ..GamingConfig::default()
+        };
+        assert!(!prefer_dgpu_for_launch("github-desktop", &always));
+        assert!(prefer_dgpu_for_launch("steam", &always));
     }
 
     #[test]

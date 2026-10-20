@@ -7,6 +7,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-10-20]
 
+### Fixed
+
+- **Chromium / Electron launch hangs on hybrid GPUs** — Auto mode no longer
+  steers browsers onto the dGPU; Ozone clients (GitHub Desktop, Chrome, Cursor,
+  VS Code, …) skip `DRI_PRIME` / NVIDIA PRIME env so they follow Wayland dmabuf
+  feedback on the compositor GPU. Scanout dmabuf feedback only advertises
+  formats GBM can allocate with `SCANOUT|RENDERING`, avoiding Intel `ENOMEM`
+  GPU-process crash loops from advertised-but-unusable `RGBA_8888` scanout.
+
 ### Changed
 
 - **HDR encode EETF fidelity (Urgent #2 close-out)** — Mixed float scene-linear

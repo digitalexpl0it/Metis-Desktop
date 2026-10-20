@@ -456,10 +456,13 @@ The card is chosen by the compositor (override with `METIS_DRM_DEVICE`, see dev
 docs) and forwarded as `DRI_PRIME` (Mesa GL) and `MESA_VK_DEVICE_SELECT` (Mesa
 Vulkan). On hybrid laptops where the panel is driven by the integrated GPU but a
 discrete GPU is present, Metis also **auto-offloads game and Steam launches** onto
-the dGPU (NVIDIA PRIME offload or Mesa `DRI_PRIME` for the dGPU render node), and
-**web browsers** when on AC power (so windowed WebGL / canvas games are not stuck
-on a weak iGPU). Lightweight editors and other desktop apps stay on the
-power-efficient iGPU. Override session-wide with `METIS_GAME_GPU=igpu|dgpu|off`.
+the dGPU (NVIDIA PRIME offload or Mesa `DRI_PRIME` for the dGPU render node).
+**Chromium / Electron apps** (Chrome, GitHub Desktop, VS Code, Cursor, …) are
+**not** steered with `DRI_PRIME` or NVIDIA offload — they pick the GPU from
+Wayland dmabuf feedback so they share the compositor’s card (cross-GPU Ozone
+launches crash the GPU process on hybrid Intel). Other lightweight desktop apps
+stay on the power-efficient iGPU. Override session-wide with
+`METIS_GAME_GPU=igpu|dgpu|off` (Ozone clients still ignore dGPU steering).
 To run a *specific* title on the discrete GPU
 instead, set a per-game launch option in Steam (*Properties → Launch Options*) —
 these still win because Metis only sets the vars when they are unset:

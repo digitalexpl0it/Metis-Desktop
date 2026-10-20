@@ -288,7 +288,6 @@ fn apply_spawned_client_env(
     cmd.env("WAYLAND_DISPLAY", socket);
     cmd.env("METIS_SESSION", "1");
     // Phase 18 D: gaming X11 class is independent of GPU offload / battery.
-    // Browsers may still get dGPU without moving onto the gaming X server.
     let display = if use_gaming_xwayland {
         xdisplay_gaming.or(xdisplay)
     } else {
@@ -410,7 +409,13 @@ fn apply_spawned_client_env(
     //     is a harmless fallback (single-GPU systems).
     //   * Everything else stays on the compositor's (display) GPU, which is the
     //     power-efficient iGPU on a hybrid laptop.
-    if std::env::var_os("METIS_NO_CLIENT_GPU").is_none() {
+    //   * Chromium / Electron / Ozone shells get *no* DRI_PRIME / NVIDIA offload
+    //     vars: they pick the GPU from Wayland dmabuf feedback. Forcing a card
+    //     (even the iGPU) races their GBM SCANOUT probe and can crash the GPU
+    //     process (GitHub Desktop / Chrome multi-second hangs on hybrid Intel).
+    if std::env::var_os("METIS_NO_CLIENT_GPU").is_none()
+        && !metis_config::command_is_ozone_client(program)
+    {
         match (prefer_dgpu, dgpu_offload) {
             (true, Some(dgpu)) => dgpu.apply(cmd),
             _ => {

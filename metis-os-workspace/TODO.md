@@ -552,6 +552,9 @@ decorations so it (and every app) gets a real titlebar.
       `ELECTRON_OZONE_PLATFORM_HINT=auto` + `CLAUDE_USE_WAYLAND=1`, since Electron's
       XWayland launch juggling is unstable under Metis (Claude Desktop "opened then
       closed"). Overridable per app (2026-07-02).
+- [x] **Ozone / Chromium hybrid GPU speed** — skip `DRI_PRIME`/PRIME offload for
+      Ozone clients; Auto dGPU is games-only; GBM-filter scanout dmabuf feedback
+      (fixes GitHub Desktop / Chrome GPU crash-loops on Intel+NVIDIA) (2026-10-20).
 - [x] **Client xdg fullscreen** — Chromium / Firefox video fullscreen and other
       `xdg_toplevel.set_fullscreen` requests map the window to the output under
       the cursor (`fullscreen_request` / `unfullscreen_request` wired 2026-07-01).

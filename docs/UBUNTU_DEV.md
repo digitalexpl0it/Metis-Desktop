@@ -476,9 +476,12 @@ NVIDIA offload) still win. Set `METIS_NO_CLIENT_GPU=1` to disable forwarding, or
 `METIS_DRM_DEVICE` to change which card the whole session (and thus clients) use.
 When a discrete GPU is present but the panel is driven by the integrated GPU,
 Metis also auto-offloads **game and Steam launches** onto the dGPU
-(`DgpuOffload::detect`). Override with `METIS_GAME_GPU=igpu|dgpu|off`. This is
-inert under the nested winit backend, where the host compositor owns device
-selection.
+(`DgpuOffload::detect`). Chromium / Electron / Ozone clients skip all client GPU
+env (`command_is_ozone_client`) so Mesa follows dmabuf feedback; the scanout
+feedback tranche is GBM-probed so unusable plane fourccs (e.g. Intel
+`Abgr8888` SCANOUT) are not advertised. Override with
+`METIS_GAME_GPU=igpu|dgpu|off`. This is inert under the nested winit backend,
+where the host compositor owns device selection.
 
 On first run, Metis writes defaults to `~/.config/metis/`:
 
