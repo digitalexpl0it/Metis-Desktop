@@ -13,8 +13,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   steers browsers onto the dGPU; Ozone clients (GitHub Desktop, Chrome, Cursor,
   VS Code, …) skip `DRI_PRIME` / NVIDIA PRIME env so they follow Wayland dmabuf
   feedback on the compositor GPU. Scanout dmabuf feedback only advertises
-  formats GBM can allocate with `SCANOUT|RENDERING`, avoiding Intel `ENOMEM`
-  GPU-process crash loops from advertised-but-unusable `RGBA_8888` scanout.
+  formats GBM can allocate with `SCANOUT|RENDERING`. Older Electron (GitHub
+  Desktop / Electron 32) also gets `--render-node-override=/dev/dri/renderD*`
+  for the compositor’s Intel node, and GitHub Desktop is launched on **XWayland**
+  (`ELECTRON_OZONE_PLATFORM_HINT=x11`) because its native Wayland GPU path still
+  crash-loops on `RGBA_8888` SCANOUT / Intel `ENOMEM`. Cursor (Electron 42)
+  stays on native Wayland and self-applies render-node override from dmabuf
+  feedback.
 
 ### Changed
 

@@ -460,9 +460,13 @@ the dGPU (NVIDIA PRIME offload or Mesa `DRI_PRIME` for the dGPU render node).
 **Chromium / Electron apps** (Chrome, GitHub Desktop, VS Code, Cursor, …) are
 **not** steered with `DRI_PRIME` or NVIDIA offload — they pick the GPU from
 Wayland dmabuf feedback so they share the compositor’s card (cross-GPU Ozone
-launches crash the GPU process on hybrid Intel). Other lightweight desktop apps
-stay on the power-efficient iGPU. Override session-wide with
-`METIS_GAME_GPU=igpu|dgpu|off` (Ozone clients still ignore dGPU steering).
+launches crash the GPU process on hybrid Intel). Metis also passes
+`--render-node-override` for the compositor render node. **GitHub Desktop**
+(Electron 32) is started on XWayland — its native Wayland GPU path still
+crash-loops under Metis; Cursor and other modern Electron apps stay on Wayland.
+Other lightweight desktop apps stay on the power-efficient iGPU. Override
+session-wide with `METIS_GAME_GPU=igpu|dgpu|off` (Ozone clients still ignore
+dGPU steering).
 To run a *specific* title on the discrete GPU
 instead, set a per-game launch option in Steam (*Properties → Launch Options*) —
 these still win because Metis only sets the vars when they are unset:

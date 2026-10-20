@@ -479,7 +479,10 @@ Metis also auto-offloads **game and Steam launches** onto the dGPU
 (`DgpuOffload::detect`). Chromium / Electron / Ozone clients skip all client GPU
 env (`command_is_ozone_client`) so Mesa follows dmabuf feedback; the scanout
 feedback tranche is GBM-probed so unusable plane fourccs (e.g. Intel
-`Abgr8888` SCANOUT) are not advertised. Override with
+`Abgr8888` SCANOUT) are not advertised; Ozone spawns also get
+`--render-node-override` for the compositor `/dev/dri/renderD*`; GitHub Desktop
+is forced to XWayland (`command_prefers_x11_ozone`) because Electron 32’s
+Wayland GBM SCANOUT path still crash-loops on Intel. Override with
 `METIS_GAME_GPU=igpu|dgpu|off`. This is inert under the nested winit backend,
 where the host compositor owns device selection.
 

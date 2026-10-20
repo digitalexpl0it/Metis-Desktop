@@ -486,10 +486,10 @@ pub use game_rules::{
 };
 pub use gaming::{
     GameScopeProfile, GamingConfig, GamingFlatpakState, GraphicsMode, command_is_ozone_client,
-    command_is_web_browser, command_prefers_dgpu, gaming_config_path, gaming_flatpak_state_path,
-    load_gaming_config, load_gaming_flatpak_state, on_battery, prefer_dgpu_for_launch,
-    sanitize_gamescope_args, save_default_gaming_config, save_gaming_config,
-    save_gaming_flatpak_state,
+    command_is_web_browser, command_prefers_dgpu, command_prefers_x11_ozone, gaming_config_path,
+    gaming_flatpak_state_path, load_gaming_config, load_gaming_flatpak_state, on_battery,
+    prefer_dgpu_for_launch, sanitize_gamescope_args, save_default_gaming_config,
+    save_gaming_config, save_gaming_flatpak_state,
 };
 pub use gaming_paths::{
     OFFLOAD_ENV_KEY_ALLOWLIST, flatpak_env_arg, sanitize_offload_env, sanitize_offload_env_pair,

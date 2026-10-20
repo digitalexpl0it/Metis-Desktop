@@ -251,6 +251,21 @@ pub fn command_prefers_dgpu(program: &str) -> bool {
     NEEDLES.iter().any(|n| p.contains(n))
 }
 
+/// Older Electron shells whose native Wayland GPU path crash-loops on Metis
+/// (Electron 32 / Chrome 128: `RGBA_8888` SCANOUT → Intel `ENOMEM` → GPU exit
+/// 134). Newer Electron (Cursor 42) is fine on Wayland. Prefer XWayland for
+/// these so they open as quickly as under GNOME.
+pub fn command_prefers_x11_ozone(program: &str) -> bool {
+    let p = program.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "github-desktop",
+        "github desktop",
+        // Shift / old Slack Electron builds share the same SCANOUT bug class.
+        "github.com.desktop",
+    ];
+    NEEDLES.iter().any(|n| p.contains(n))
+}
+
 /// Chromium/Electron/Ozone desktop shells (GitHub Desktop, Cursor, VS Code, …).
 ///
 /// These speak Wayland dmabuf feedback for device selection. Forcing
@@ -433,6 +448,8 @@ mod tests {
             ..GamingConfig::default()
         };
         assert!(command_is_ozone_client("github-desktop"));
+        assert!(command_prefers_x11_ozone("github-desktop"));
+        assert!(!command_prefers_x11_ozone("/usr/share/cursor/cursor"));
         assert!(command_is_ozone_client("/usr/share/cursor/cursor"));
         assert!(command_is_ozone_client("/snap/bin/chromium"));
         assert!(!prefer_dgpu_for_launch("github-desktop", &cfg));

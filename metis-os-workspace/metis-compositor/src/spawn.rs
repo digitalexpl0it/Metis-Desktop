@@ -105,13 +105,22 @@ pub(crate) struct ClientGpuHint {
     /// Mesa Vulkan default-device selector, e.g. `1002:73df`
     /// (`MESA_VK_DEVICE_SELECT`).
     vk_select: Option<String>,
+    /// Compositor render node (`/dev/dri/renderD*`) for Chromium/Electron
+    /// `--render-node-override`. Newer Electron (Cursor) inherits this from
+    /// dmabuf feedback; Electron 32 / GitHub Desktop does not and opens the
+    /// wrong GBM device → SCANOUT `ENOMEM` GPU crash-loops.
+    render_node_path: Option<std::path::PathBuf>,
 }
 
 impl ClientGpuHint {
-    /// Resolve the PCI identity of a DRM render node from sysfs. Returns `None`
-    /// when the node has no PCI parent (e.g. virtual/vgem devices) or sysfs is
-    /// unreadable, in which case no GPU env is exported.
+    /// Resolve the PCI identity + render-node path of a DRM render node.
+    /// Returns `None` only when neither PCI identity nor a device path can be
+    /// resolved (virtual/vgem with no `/dev/dri` path).
     pub(crate) fn from_render_node(node: &smithay::backend::drm::DrmNode) -> Option<Self> {
+        let render_node_path = {
+            let path = crate::rudp_host::render_node_device_path(node);
+            path.exists().then_some(path)
+        };
         let base = format!("/sys/dev/char/{}:{}/device", node.major(), node.minor());
         // The PCI address is the basename of the resolved `device` symlink,
         // e.g. `/sys/.../0000:03:00.0` -> `0000:03:00.0`.
@@ -129,13 +138,19 @@ impl ClientGpuHint {
             (Some(v), Some(d)) => Some(format!("{v}:{d}")),
             _ => None,
         };
-        if dri_prime.is_none() && vk_select.is_none() {
+        if dri_prime.is_none() && vk_select.is_none() && render_node_path.is_none() {
             return None;
         }
         Some(Self {
             dri_prime,
             vk_select,
+            render_node_path,
         })
+    }
+
+    /// `/dev/dri/renderD*` for Chromium `--render-node-override`, if known.
+    pub(crate) fn render_node_path(&self) -> Option<&std::path::Path> {
+        self.render_node_path.as_deref()
     }
 
     /// Apply the hint to a spawned command, only for keys the surrounding
@@ -152,6 +167,50 @@ impl ClientGpuHint {
         {
             cmd.env("MESA_VK_DEVICE_SELECT", sel);
         }
+    }
+}
+
+/// Append Chromium/Electron argv so the GPU process opens the compositor's
+/// render node (same as Cursor's self-applied `--render-node-override`).
+fn append_ozone_render_node_override(argv: &mut Vec<String>, render_node: &std::path::Path) {
+    if argv
+        .iter()
+        .any(|a| a == "--render-node-override" || a.starts_with("--render-node-override="))
+    {
+        return;
+    }
+    argv.push(format!("--render-node-override={}", render_node.display()));
+}
+
+/// Force `--ozone-platform=x11` when the argv does not already pin a platform.
+fn append_ozone_platform_x11(argv: &mut Vec<String>) {
+    if argv
+        .iter()
+        .any(|a| a == "--ozone-platform" || a.starts_with("--ozone-platform="))
+    {
+        return;
+    }
+    argv.push("--ozone-platform=x11".into());
+}
+
+#[cfg(test)]
+mod ozone_render_node_tests {
+    use super::append_ozone_render_node_override;
+    use std::path::Path;
+
+    #[test]
+    fn appends_render_node_override_once() {
+        let mut argv = vec!["github-desktop".to_string()];
+        append_ozone_render_node_override(&mut argv, Path::new("/dev/dri/renderD129"));
+        assert_eq!(
+            argv,
+            vec![
+                "github-desktop".to_string(),
+                "--render-node-override=/dev/dri/renderD129".to_string(),
+            ]
+        );
+        append_ozone_render_node_override(&mut argv, Path::new("/dev/dri/renderD128"));
+        assert_eq!(argv.len(), 2, "must not duplicate the flag");
     }
 }
 
@@ -376,8 +435,16 @@ fn apply_spawned_client_env(
     // apps honor; Claude Desktop's launcher force-passes `--ozone-platform=x11`
     // and only switches to Wayland via `CLAUDE_USE_WAYLAND=1`. Both defer to a
     // value the surrounding session already set, so a user can force XWayland.
+    //
+    // Exception: GitHub Desktop (Electron 32) crash-loops its GPU process on
+    // native Wayland under Metis (`RGBA_8888` SCANOUT → Intel ENOMEM). Prefer
+    // XWayland for those apps — same path that is fast under GNOME.
     if std::env::var_os("ELECTRON_OZONE_PLATFORM_HINT").is_none() {
-        cmd.env("ELECTRON_OZONE_PLATFORM_HINT", "auto");
+        if metis_config::command_prefers_x11_ozone(program) {
+            cmd.env("ELECTRON_OZONE_PLATFORM_HINT", "x11");
+        } else {
+            cmd.env("ELECTRON_OZONE_PLATFORM_HINT", "auto");
+        }
     }
     if std::env::var_os("CLAUDE_USE_WAYLAND").is_none() {
         cmd.env("CLAUDE_USE_WAYLAND", "1");
@@ -550,8 +617,23 @@ impl MetisState {
 
         // Metis-owned Steam tweaks (MangoHud / Gamescope) — never Steam VDF writes.
         let tweaks = metis_config::apply_steam_launch_tweaks(&argv, &self.gaming_config);
-        let argv = tweaks.argv;
+        let mut argv = tweaks.argv;
         let tweak_env = tweaks.env;
+        let program_joined = argv.join(" ");
+        // Older Electron (GitHub Desktop / Electron 32) does not inherit the
+        // compositor render node from dmabuf feedback the way Cursor (Electron
+        // 42) does. Pin `--render-node-override` so Wayland GPU processes open
+        // the same `/dev/dri/renderD*` Metis scans out on.
+        if metis_config::command_is_ozone_client(&program_joined)
+            && let Some(path) = self.client_gpu.as_ref().and_then(|h| h.render_node_path())
+        {
+            append_ozone_render_node_override(&mut argv, path);
+        }
+        // GitHub Desktop: native Wayland GPU crash-loops on this stack — pin
+        // XWayland (argv + ELECTRON_OZONE_PLATFORM_HINT in apply_spawned_client_env).
+        if metis_config::command_prefers_x11_ozone(&program_joined) {
+            append_ozone_platform_x11(&mut argv);
+        }
         let program_joined = argv.join(" ");
         let app_cfg = metis_config::load_app_config();
         let use_gaming_xwayland = app_cfg.xwayland_mode == metis_config::XwaylandMode::Isolated
