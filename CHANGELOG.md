@@ -5,7 +5,7 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2026-10-11]
+## [2026-10-19]
 
 ### Added
 
@@ -40,6 +40,18 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   no longer wait on a quiet NM D-Bus heartbeat; the poller bursts for a few
   seconds after start, reads association from `device status`, and lists APs with
   `--rescan no` so the signal icon appears within ~1–2 s.
+
+## [2026-10-18]
+
+### Added
+
+- **Edge bar status icons** — Settings → Edge bar → **Status icons** toggles
+  optional icons (Weather, tray, network, …) without migrate force-restoring
+  them; drag on the bar (past the DnD threshold) or use ↑/↓ to reorder. Workspaces,
+  running apps, and the clock stay required.
+
+### Fixed
+
 - **Edge bar status icons UX** — Settings order list rows have proper padding;
   on-bar drag shows a live accent drop gap while neighbours shift; drop no longer
   blanks icons (poller state rehydrates after rebuild); migrate no longer undoes
@@ -48,6 +60,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **Edge bar custom gradient at translucent opacity** — bar fill no longer
   collapses to the first gradient stop when opacity is below 1.0; each stop uses
   the opacity slider’s alpha.
+
+## [2026-10-11]
+
+### Fixed
+
 - **Metis Remote stuck on every desktop** — true-fullscreen / floating session
   windows (especially on Free layout, which never creates app tiles) were not
   unmapped when leaving the ephemeral desk, so Super+Alt left the Viewer on all
@@ -63,10 +80,6 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
-- **Edge bar status icons** — Settings → Edge bar → **Status icons** toggles
-  optional icons (Weather, tray, network, …) without migrate force-restoring
-  them; drag on the bar (past the DnD threshold) or use ↑/↓ to reorder. Workspaces,
-  running apps, and the clock stay required.
 - **Desktop widgets default layout** — first enable (onboarding or Settings) with
   an empty layout seeds a resolution-aware pack (Folders left; System / Clock /
   Weather right; Equalizer bottom-right on larger desks). **Add widget** places
