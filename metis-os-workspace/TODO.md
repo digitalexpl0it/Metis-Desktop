@@ -29,10 +29,12 @@ individual phase sections for deferred follow-ups.
 
 ---
 
-## Urgent priorities (updated 2026-09-27)
+## Urgent priorities (updated 2026-10-20)
 
 Active front-of-queue work. Phase history stays in the sections below.
 Security items from the **2026-09-27 code review** sit above product stretch.
+**Desktop maturity** backlog (crash recovery, colour protocol, interop, widgets)
+is tracked under **Product backlog — Desktop maturity** below.
 
 ### Security — do first
 
@@ -119,6 +121,65 @@ on “wrong DE”.
 
 **Landed order:** icon theme select → default programs → brand + per-app
 overrides → install/remove packs. Cursor themes optional next.
+
+### Product backlog — Desktop maturity (2026-10-20)
+
+Track-and-build list from the 2026-10 maturity review. Several Gemini suggestions
+were **already landed** (MultiRenderer Wave A/B/C; `metis-rdp-host`); those are
+called out as residuals only. Prefer working top→bottom.
+
+#### Reliability
+
+- [ ] **M1. Compositor session restore / crash recovery** — serialize enough
+      window/workspace/output state that a restarted `metis-compositor` can
+      reattach clients or relaunch the session without a full logout. Shell and
+      desktop-widgets are already separate processes; compositor death still ends
+      the session. Design: state file under `$XDG_RUNTIME_DIR` or
+      `$XDG_STATE_HOME`, restore policy on greeter relaunch, document limits
+      (XWayland, exclusive fullscreen).
+      → New; complements Phase 16 panic triage.
+
+#### Colour & display protocols
+
+- [ ] **M2. Default-on `wp_color_management_v1`** — unblock upstream wayland-rs
+      server/sys ObjectData UAF ([docs/upstream/](../docs/upstream/README.md),
+      wayland-rs#949), then flip from `METIS_COLOR_MGMT=1` opt-in to default-on
+      with a safe kill-switch. Same item as Wave **3b** / Urgent **#2** residual.
+- [ ] **M3. Fractional-scale protocol polish** — compositor already uses
+      fractional output scale in render/output paths; audit
+      `wp_fractional_scale_v1` / preferred-buffer-scale completeness for
+      mixed-DPI multi-monitor clients (not a greenfield feature).
+      → Phase 5 / output prefs follow-up.
+
+#### Interop & ecosystem
+
+- [ ] **M4. `ext-foreign-toplevel-list-v1` (and related)** — export toplevels for
+      third-party docks/task tools while keeping Metis’s own taskbar/IPC as
+      source of truth. Evaluate against existing compositor↔shell window
+      contracts before duplicating state.
+- [ ] **M5. MetisNative RDP GA residuals** — packaging/QA + multi-monitor parity
+      for `metis-rdp-host` (still single surface); criteria before flipping
+      Remote access default off GRD.
+      → Wave **4c** / [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
+      *(host binary already shipped; not a greenfield “build RDP host” item)*
+
+#### Graphics residuals
+
+- [ ] **M6. MultiRenderer edge polish** — Wave A/B/C landed (2026-10-03); track
+      hybrid stutter cases when dragging heavy surfaces across GPU-bound
+      outputs, tighten `cross_gpu` fail-fallback, document known limits.
+      → Wave **3a** residual (not a rewrite).
+
+#### Widget extensibility
+
+- [ ] **M7. Sandboxed widget scripts (WASM and/or Rhai)** — Extension API v1 stays
+      declarative JSON; evaluate a heavily sandboxed in-process runtime for
+      interactive third-party widgets without loading arbitrary `.so`s.
+      Explicitly deferred today (Wave **2** / Phase 14 §E.2). Revisit with a
+      security design note before enabling.
+
+**Suggested order:** **M1** (trust) → **M2** when upstream allows → **M5** for
+remote GA → **M3**/**M4** interop → **M6** as hybrid reports arrive → **M7** last.
 
 ---
 
@@ -227,7 +288,7 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 
 ### Wave 2 — Widget §E.2 helpers
 - [x] Pack `helper` manifest + argv-only spawn + `{helper.*}` + example pack
-- [ ] In-process scripts / WASM (explicitly deferred)
+- [ ] In-process scripts / WASM (explicitly deferred) — see maturity **M7**
 
 ### Wave 3 — Graphics
 - [x] **3a** Primary→secondary transfer for hybrid outputs (CPU readback path;
@@ -236,7 +297,7 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       with SSD/blur/HDR/LUT; `cross_gpu` fail-fallback only.
 - [ ] **3b** Default-on `wp_color_management_v1` — **blocked** on upstream
       wayland-rs server/sys ObjectData UAF; keep `METIS_COLOR_MGMT=1` opt-in
-      ([docs/upstream/](../docs/upstream/README.md))
+      ([docs/upstream/](../docs/upstream/README.md)) — see maturity **M2**
 - [x] **3c** Per-surface HDR **pass-through** into encode path (PQ/HLG hints;
       mixed SDR+HDR approximate). **Partial (2026-09-27 / 2026-10-03 /
       2026-10-10):** per-window PQ/HLG decode (scroll/genie crop) + float
@@ -253,7 +314,8 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 - [x] **4c** Wayland/portal-backed FreeRDP host — `metis-rdp-host` (ScreenCast +
       PipeWire + FreeRDP) landed 2026-10-03; Viewer polish 2026-09-27; RUDP
       Phases 1–8 + residuals. GRD stays default; GA default-flip criteria remain
-      in [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
+      in [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md)
+      — residuals tracked as maturity **M5**.
 
 ### Wave 5 — Session startup
 - [x] `startup.json` — global enable + ordered desktop ids + per-entry enable/delay

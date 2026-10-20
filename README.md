@@ -1,16 +1,12 @@
 # Metis
 
-> **Beta** — Metis is under active development. Expect rough edges: session setup,
-> window management, and configuration formats may change between releases. Bug
-> reports and feedback are welcome. For daily use, Flatpaks and screen-sharing
-> tools talk to Metis through a first-party **xdg-desktop-portal** backend
-> ([`metis-portal`](#xdg-integrations-daily-driver)).
-
 > **Metis** is a next-generation Wayland desktop environment built in Rust. The
 > **Metis compositor** owns the Wayland session, the window grid, and the
 > wallpaper; it spawns the **Metis shell** (GTK4 layer-shell edge bar plus
 > on-demand popovers, Notification Center, and Control Center) and, when enabled,
 > a separate **desktop-widgets** process so a hung widget cannot freeze the bar.
+> Flatpaks and capture tools use the first-party **xdg-desktop-portal** backend
+> ([`metis-portal`](#xdg-integrations-daily-driver)).
 
 New to Metis? Start with the **[User Guide](docs/USER_GUIDE.md)**.
 

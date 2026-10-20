@@ -7,6 +7,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-10-20]
 
+### Changed
+
+- **README** — dropped the “Beta” callout; Metis is presented as an active
+  Wayland desktop with first-party portals (roadmap maturity items live in
+  `metis-os-workspace/TODO.md`).
+
 ### Fixed
 
 - **CI `cargo deny`** — bumped `rustls` to 0.23.46 and `zip` to 9.0.5 so
