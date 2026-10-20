@@ -1015,8 +1015,10 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   (**Mosaic**, **Chip**, **Plaza**, **Crest**) show icon tiles; **Plaza** adds
   a profile/power footer; **Crest** centers a large avatar header. Selecting
   **Settings** restores and focuses the existing Settings window (including when
-  minimized) instead of opening a duplicate. Saved to `menu.json` (layout
-  changes reload the edge bar live).
+  minimized) instead of opening a duplicate. **Log Out**, **Restart**, and
+  **Shut Down** open a centered confirm overlay (Cancel or confirm; Escape /
+  click outside cancels) so an accidental click does not end the session.
+  Saved to `menu.json` (layout changes reload the edge bar live).
 - **Users** — profile picture and display name (synced with Metis Menu **and**
   AccountsService so GDM / other greeters update), password change, and local
   account management (add/remove, Administrator / `sudo` toggle). The **Other

@@ -7,6 +7,7 @@ pub mod notification_center;
 pub mod onboarding;
 pub mod osd;
 pub mod screenshot;
+pub mod session_confirm;
 pub mod splash;
 pub mod task_view;
 pub mod theme;

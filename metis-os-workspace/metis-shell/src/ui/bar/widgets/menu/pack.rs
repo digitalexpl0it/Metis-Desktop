@@ -13,7 +13,7 @@ use crate::services::{AppEntry, applications};
 use super::chrome::{
     CHIP_ICON_SIZE, GRID_ICON_SIZE, activate_or_launch_settings, app_image, app_row,
     attach_pin_target, build_user_header, clear_box, rail_button, refresh_user_header,
-    restore_search_focus, run_detached, wire_vertical_scroll,
+    restore_search_focus, wire_vertical_scroll,
 };
 use super::pin::PinContext;
 use super::register_menu_popover;
@@ -397,8 +397,7 @@ pub(crate) fn build_plaza_footer(
         "system-shutdown-symbolic",
         &metis_i18n::tr("Shut Down"),
         || {
-            run_detached("systemctl", &["poweroff"]);
-            crate::ui::bar::dropdown::request_close_all();
+            crate::ui::session_confirm::ask(crate::ui::session_confirm::SessionAction::ShutDown);
         },
     ));
     (footer, avatar, name)

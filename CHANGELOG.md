@@ -9,6 +9,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Session power confirm** — Metis Menu **Log Out**, **Restart**, and
+  **Shut Down** show a centered layer-shell overlay (Cancel / confirm; Escape
+  or click outside dismisses) before ending the session.
 - **Compositor crash recovery (M1)** — `metis-session` supervises the DRM
   compositor so an unclean exit keeps you logged in, restarts the desktop, and
   (when enabled) relaunches open apps from

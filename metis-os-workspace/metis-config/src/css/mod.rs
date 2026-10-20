@@ -15,6 +15,7 @@ mod notifications;
 mod onboarding;
 mod osd_network;
 mod screenshot_overlay;
+mod session_confirm;
 mod settings;
 mod task_view;
 mod toasts;
@@ -34,6 +35,7 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
     out.push_str(&notifications::stylesheet(&v));
     out.push_str(&toasts::stylesheet(&v));
     out.push_str(&osd_network::stylesheet(&v));
+    out.push_str(&session_confirm::stylesheet(&v));
     out.push_str(&clocks::stylesheet(&v));
     out.push_str(&onboarding::stylesheet(&v));
     out.push_str(&appearance_preview::stylesheet(&v));

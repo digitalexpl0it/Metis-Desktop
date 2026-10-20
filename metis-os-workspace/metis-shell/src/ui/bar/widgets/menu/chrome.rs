@@ -131,15 +131,7 @@ pub(crate) fn build_rail(overlay: &gtk::Overlay, tip: &gtk::Label) -> gtk::Box {
         "system-log-out-symbolic",
         &tr("Log Out"),
         || {
-            if let Err(err) = crate::compositor::end_session() {
-                tracing::warn!(%err, "compositor end_session failed — falling back to loginctl");
-                if std::env::var_os("XDG_SESSION_ID").is_some() {
-                    run_detached("loginctl", &["terminate-session", "self"]);
-                } else if let Ok(user) = std::env::var("USER") {
-                    run_detached("loginctl", &["terminate-user", &user]);
-                }
-            }
-            crate::ui::bar::dropdown::request_close_all();
+            crate::ui::session_confirm::ask(crate::ui::session_confirm::SessionAction::LogOut);
         },
     ));
     rail.append(&rail_button(
@@ -148,8 +140,7 @@ pub(crate) fn build_rail(overlay: &gtk::Overlay, tip: &gtk::Label) -> gtk::Box {
         "system-reboot-symbolic",
         &tr("Restart"),
         || {
-            run_detached("systemctl", &["reboot"]);
-            crate::ui::bar::dropdown::request_close_all();
+            crate::ui::session_confirm::ask(crate::ui::session_confirm::SessionAction::Restart);
         },
     ));
     rail.append(&rail_button(
@@ -158,8 +149,7 @@ pub(crate) fn build_rail(overlay: &gtk::Overlay, tip: &gtk::Label) -> gtk::Box {
         "system-shutdown-symbolic",
         &tr("Shut Down"),
         || {
-            run_detached("systemctl", &["poweroff"]);
-            crate::ui::bar::dropdown::request_close_all();
+            crate::ui::session_confirm::ask(crate::ui::session_confirm::SessionAction::ShutDown);
         },
     ));
 
