@@ -9,6 +9,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- **Config load race under parallel tests** — `calendars.json` / `clock.json`
+  first-run seed now uses the resolved path with `create_new` (never clobbers a
+  corrupt file when `XDG_CONFIG_HOME` flips mid-load). Shared test env lock for
+  XDG mutations.
 - **Chromium / Electron launch hangs on hybrid GPUs** — Auto mode no longer
   steers browsers onto the dGPU; Ozone clients (GitHub Desktop, Chrome, Cursor,
   VS Code, …) skip `DRI_PRIME` / NVIDIA PRIME env so they follow Wayland dmabuf

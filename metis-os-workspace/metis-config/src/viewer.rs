@@ -610,14 +610,18 @@ pub fn take_viewer_pending_placement() -> ViewerPlacement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn remember_and_remove_recent_roundtrip() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!("metis-viewer-test-{}", std::process::id()));
+        let _guard = crate::test_env::lock();
+        let dir = std::env::temp_dir().join(format!(
+            "metis-viewer-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("metis")).unwrap();
         // SAFETY: serialized test; restored before unlock.
@@ -765,9 +769,15 @@ mod tests {
 
     #[test]
     fn pending_placement_stamp_roundtrip() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir =
-            std::env::temp_dir().join(format!("metis-viewer-placement-{}", std::process::id()));
+        let _guard = crate::test_env::lock();
+        let dir = std::env::temp_dir().join(format!(
+            "metis-viewer-placement-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // SAFETY: serialized test; restored before unlock.

@@ -80,23 +80,28 @@ pub fn default_local_dir() -> std::path::PathBuf {
 
 pub fn load_calendars_config() -> CalendarsConfig {
     let path = calendars_config_path();
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            match serde_json::from_str::<CalendarsConfig>(&text) {
-                Ok(cfg) => return cfg,
-                Err(err) => {
-                    // Match bar.json: never rewrite a corrupt file (watcher loops).
-                    tracing::warn!(%err, "calendars.json parse failed — using defaults (not rewriting disk)");
-                    return CalendarsConfig::default();
-                }
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<CalendarsConfig>(&text) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                // Match bar.json: never rewrite a corrupt file (watcher loops).
+                tracing::warn!(%err, "calendars.json parse failed — using defaults (not rewriting disk)");
+                CalendarsConfig::default()
             }
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let cfg = CalendarsConfig::default();
+            // Seed with the *same* `path` via create_new — never re-resolve
+            // `calendars_config_path()` (XDG races) or overwrite a corrupt file.
+            let _ = super::ensure_config_dirs();
+            let _ = crate::persist::write_json_create_new(&path, &cfg);
+            cfg
         }
-        tracing::warn!("calendars.json unreadable — using defaults (not rewriting disk)");
-        return CalendarsConfig::default();
+        Err(err) => {
+            tracing::warn!(%err, "calendars.json unreadable — using defaults (not rewriting disk)");
+            CalendarsConfig::default()
+        }
     }
-    let cfg = CalendarsConfig::default();
-    let _ = save_calendars_config(&cfg);
-    cfg
 }
 
 pub fn save_calendars_config(config: &CalendarsConfig) -> std::io::Result<()> {
@@ -108,14 +113,10 @@ pub fn save_calendars_config(config: &CalendarsConfig) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::Mutex;
-
-    // Serialise env mutations — other modules also touch XDG_CONFIG_HOME.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parse_fail_does_not_rewrite_disk() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = crate::test_env::lock();
         let dir = std::env::temp_dir().join(format!(
             "metis-calendars-test-{}-{}",
             std::process::id(),

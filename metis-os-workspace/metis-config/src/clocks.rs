@@ -93,23 +93,27 @@ pub fn load_clocks_config(seed_timezones: &[String]) -> ClocksConfig {
             .collect(),
         alarms: Vec::new(),
     };
-    if path.exists() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            match serde_json::from_str::<ClocksConfig>(&text) {
-                Ok(cfg) => return cfg,
-                Err(err) => {
-                    // Match bar.json: never rewrite a corrupt file (watcher loops).
-                    tracing::warn!(%err, "clock.json parse failed — using defaults (not rewriting disk)");
-                    return seeded();
-                }
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<ClocksConfig>(&text) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                // Match bar.json: never rewrite a corrupt file (watcher loops).
+                tracing::warn!(%err, "clock.json parse failed — using defaults (not rewriting disk)");
+                seeded()
             }
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let seeded = seeded();
+            // Same path + create_new — see `load_calendars_config`.
+            let _ = super::ensure_config_dirs();
+            let _ = crate::persist::write_json_create_new(&path, &seeded);
+            seeded
         }
-        tracing::warn!("clock.json unreadable — using defaults (not rewriting disk)");
-        return seeded();
+        Err(err) => {
+            tracing::warn!(%err, "clock.json unreadable — using defaults (not rewriting disk)");
+            seeded()
+        }
     }
-    let seeded = seeded();
-    let _ = save_clocks_config(&seeded);
-    seeded
 }
 
 pub fn save_clocks_config(config: &ClocksConfig) -> std::io::Result<()> {
@@ -121,13 +125,10 @@ pub fn save_clocks_config(config: &ClocksConfig) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parse_fail_does_not_rewrite_disk() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = crate::test_env::lock();
         let dir = std::env::temp_dir().join(format!(
             "metis-clocks-test-{}-{}",
             std::process::id(),

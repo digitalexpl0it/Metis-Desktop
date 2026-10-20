@@ -156,6 +156,22 @@ pub fn config_dir() -> std::path::PathBuf {
         })
 }
 
+/// Process-wide lock for tests that mutate `XDG_*` / `HOME` env vars.
+///
+/// Per-module `Mutex`es are not enough: `calendars` / `clocks` / `viewer` tests
+/// must not interleave `set_var("XDG_CONFIG_HOME", …)` or load/save can resolve
+/// different paths mid-call.
+#[cfg(test)]
+pub mod test_env {
+    use std::sync::{Mutex, MutexGuard};
+
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    pub fn lock() -> MutexGuard<'static, ()> {
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 pub fn ensure_config_dirs() -> std::io::Result<()> {
     std::fs::create_dir_all(config_dir())?;
     std::fs::create_dir_all(config_dir().join("themes"))?;
