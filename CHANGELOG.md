@@ -34,6 +34,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **Hybrid MultiRenderer polish (M6)** — documented known hybrid present limits;
+  session lock skips MultiRenderer (no fail-counter churn); Multi→transfer and
+  transfer→local paths emit rate-limited warnings with `CrossGpuStats`. Full-frame
+  `cross_gpu` transfer remains fail-fallback only.
 - **Fractional Display scale (M3 residual)** — `wl_output` / integer
   `preferred_buffer_scale` now advertise `floor(scale)` instead of ceil, so a
   125% UI scale no longer forces integer-only clients to 2×. Clients that

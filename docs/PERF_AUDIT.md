@@ -108,6 +108,24 @@ session; watch portal logs for `dmabuf` vs MemFd negotiation.
 primary GLES post-pass then single-element present. `cross_gpu::try_transfer_frame`
 is **fail-fallback only** (GBM dmabuf preferred; ExportMem/ImportMem still
 available). `CrossGpuStats` counts dmabuf / ExportMem / MultiRenderer ok|fail.
+**(M6 2026-10-20)** session lock skips Multi (no `multi_fail` churn); Multi→transfer
+and transfer→local emit rate-limited `warn`s with stats snapshots.
+
+#### Known hybrid limits
+
+| Path | Behaviour |
+|------|-----------|
+| Primary | `hybrid_multi` MultiRenderer (SSD, blur, HDR decode, LUT/HDR encode) |
+| Fail-fallback | `cross_gpu` full-frame transfer (GBM dmabuf preferred; else ExportMem/ImportMem CPU readback) |
+| Hard fallback | Local `single_renderer` on the output GPU with **blur off** |
+| Session lock | Multi skipped; transfer or local only |
+| Context switch | Wallpaper / hybrid ImportMem / decoration GL caches invalidated when the render GPU for an output changes |
+
+Dragging a heavy surface across GPU-bound outputs can invalidate those caches and
+cost a frame or two of rebuild; that is expected, not a separate present path.
+Triage stutter with `RUST_LOG=metis_compositor=debug` (or the rate-limited
+`warn`s) and inspect `CrossGpuStats` (`multi_ok` / `multi_fail` / `dmabuf_ok` /
+`export_mem_fallback` / `transfer_fail`).
 
 ### P1 — Fullscreen direct scanout (hybrid PRIME)
 

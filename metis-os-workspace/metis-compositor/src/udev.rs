@@ -4,10 +4,10 @@
 //! [`GpuManager`] and one [`BackendData`] per DRM device, so every seat GPU owns
 //! its scanner, output manager, render node, notifier, and CRTC surfaces. Metis's
 //! GLES-only custom elements are rendered by the output GPU's GLES renderer.
-//! Cross-GPU outputs prefer Wave A [`crate::hybrid_multi`] (`GpuManager::renderer`)
-//! when blur/HDR/LUT are idle; otherwise primary→secondary transfer
-//! ([`crate::cross_gpu`]) so the full GLES stack (blur/HDR) composites on the
-//! primary GPU. On both failures we fall back to the local renderer with blur off.
+//! Cross-GPU outputs prefer Wave C [`crate::hybrid_multi`] (`GpuManager::renderer`
+//! MultiRenderer, including blur/HDR/LUT). On Multi hard-fail we try
+//! primary→secondary transfer ([`crate::cross_gpu`]), then fall back to the
+//! local renderer with blur off.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -1128,7 +1128,7 @@ impl MetisState {
                 output = %name,
                 primary_gpu = ?self.udev.as_ref().map(|udev| udev.render_node),
                 ?render_node,
-                "cross-GPU output: will try primary→secondary transfer (local+no-blur fallback)"
+                "cross-GPU output: MultiRenderer then transfer then local+no-blur"
             );
         }
         let Some(backend) = self
@@ -1508,13 +1508,22 @@ impl MetisState {
                 }
                 Ok(None) => Ok(None),
                 Err(multi_err) => {
-                    tracing::debug!(
-                        %multi_err,
-                        ?primary_gpu,
-                        ?render_node,
-                        output = %output.name(),
-                        "hybrid MultiRenderer failed; trying full-frame transfer"
-                    );
+                    let locked_skip = multi_err == crate::cross_gpu::SESSION_LOCKED_SKIP_MULTI;
+                    if !locked_skip {
+                        crate::cross_gpu::warn_hybrid_fallback(
+                            output.name().as_str(),
+                            crate::cross_gpu::HybridFallbackKind::MultiToTransfer,
+                            &multi_err,
+                            false,
+                        );
+                    } else {
+                        tracing::debug!(
+                            ?primary_gpu,
+                            ?render_node,
+                            output = %output.name(),
+                            "session locked — skipping MultiRenderer; trying transfer"
+                        );
+                    }
                     match crate::cross_gpu::try_transfer_frame(
                         self,
                         &mut gpus,
@@ -1548,12 +1557,13 @@ impl MetisState {
                     )
                 }
                 Err(err) => {
-                    tracing::warn!(
-                        %err,
-                        ?primary_gpu,
-                        ?render_node,
-                        output = %output.name(),
-                        "cross-GPU MultiRenderer+transfer failed; falling back to local renderer (blur off)"
+                    let stats = crate::cross_gpu::CrossGpuStats::snapshot();
+                    let used_export_mem = stats.export_mem_fallback > 0;
+                    crate::cross_gpu::warn_hybrid_fallback(
+                        output.name().as_str(),
+                        crate::cross_gpu::HybridFallbackKind::TransferToLocal,
+                        &err,
+                        used_export_mem,
                     );
                     render_local_output_frame(
                         self,

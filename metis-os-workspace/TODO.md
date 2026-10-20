@@ -169,10 +169,11 @@ called out as residuals only. Prefer working top→bottom.
 
 #### Graphics residuals
 
-- [ ] **M6. MultiRenderer edge polish** — Wave A/B/C landed (2026-10-03); track
-      hybrid stutter cases when dragging heavy surfaces across GPU-bound
-      outputs, tighten `cross_gpu` fail-fallback, document known limits.
-      → Wave **3a** residual (not a rewrite).
+- [x] **M6. MultiRenderer edge polish** (2026-10-20) — Wave A/B/C residual:
+      documented known hybrid limits (PERF_AUDIT / USER_GUIDE); skip Multi while
+      locked; rate-limited Multi→transfer→local warns with `CrossGpuStats`;
+      stale README/udev Wave C wording fixed. Not a rewrite.
+      → Wave **3a** residual.
 
 #### Widget extensibility
 
@@ -182,8 +183,8 @@ called out as residuals only. Prefer working top→bottom.
       Explicitly deferred today (Wave **2** / Phase 14 §E.2). Revisit with a
       security design note before enabling.
 
-**Suggested order:** **M1**/**M3**/**M4**/**M5** landed → **M2** when upstream
-allows → **M6** as hybrid reports arrive → **M7** last.
+**Suggested order:** **M1**/**M3**/**M4**/**M5**/**M6** landed → **M2** when
+upstream allows → **M7** last.
 
 ---
 

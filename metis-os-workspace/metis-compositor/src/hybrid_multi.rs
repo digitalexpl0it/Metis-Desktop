@@ -85,6 +85,11 @@ pub fn try_multirenderer_frame(
     if primary_gpu == target_node {
         return Ok(None);
     }
+    // M6: lock surfaces go through transfer/local — skip Multi setup entirely
+    // so we do not churn `multi_fail` or build a MultiRenderer every frame.
+    if state.session_is_locked() {
+        return Err(cross_gpu::SESSION_LOCKED_SKIP_MULTI.to_string());
+    }
 
     let copy_format = Fourcc::Abgr8888;
     let scale = Scale::from(output.current_scale().fractional_scale());
@@ -381,8 +386,8 @@ fn build_hybrid_elements<'a>(
     target: RenderTargetInfo<'_>,
     output: &Output,
 ) -> Result<Vec<HybridOutputStack<'a>>, String> {
-    if state.lock.locked || state.protocol_lock.is_locked() {
-        return Err("hybrid MultiRenderer: session locked — use transfer/local".into());
+    if state.session_is_locked() {
+        return Err(cross_gpu::SESSION_LOCKED_SKIP_MULTI.to_string());
     }
 
     // Ensure blur / HDR decode programs on the primary GLES context.

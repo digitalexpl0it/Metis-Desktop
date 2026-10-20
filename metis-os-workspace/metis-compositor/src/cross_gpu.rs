@@ -16,7 +16,10 @@
 //! When transfer fails entirely, callers fall back to the local `single_renderer`
 //! path with blur disabled — same behaviour as before Wave 3a.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use smithay::{
     backend::{
@@ -91,6 +94,93 @@ pub(crate) fn record_multi_ok() {
 
 pub(crate) fn record_multi_fail() {
     MULTI_FAIL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Returned by [`crate::hybrid_multi::try_multirenderer_frame`] when the session
+/// is locked — callers must skip Multi and try transfer/local without counting
+/// a Multi failure.
+pub(crate) const SESSION_LOCKED_SKIP_MULTI: &str = "session_locked_skip_multi";
+
+/// Minimum gap between sticky hybrid-fallback `warn`s for the same output+kind.
+pub(crate) const FALLBACK_WARN_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Which step of the hybrid present cascade just failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum HybridFallbackKind {
+    MultiToTransfer,
+    TransferToLocal,
+}
+
+struct FallbackWarnGate {
+    last: HashMap<(String, HybridFallbackKind), Instant>,
+}
+
+impl FallbackWarnGate {
+    fn new() -> Self {
+        Self {
+            last: HashMap::new(),
+        }
+    }
+}
+
+fn fallback_warn_gate() -> &'static Mutex<FallbackWarnGate> {
+    static GATE: OnceLock<Mutex<FallbackWarnGate>> = OnceLock::new();
+    GATE.get_or_init(|| Mutex::new(FallbackWarnGate::new()))
+}
+
+/// Whether a rate-limited warn should fire given the previous emit time.
+pub(crate) fn should_emit_fallback_warn(
+    last: Option<Instant>,
+    now: Instant,
+    interval: Duration,
+) -> bool {
+    match last {
+        None => true,
+        Some(prev) => now.saturating_duration_since(prev) >= interval,
+    }
+}
+
+/// Rate-limited `warn` for Multi→transfer or transfer→local, with stats.
+pub(crate) fn warn_hybrid_fallback(
+    output: &str,
+    kind: HybridFallbackKind,
+    detail: &str,
+    used_export_mem: bool,
+) {
+    let now = Instant::now();
+    let key = (output.to_string(), kind);
+    let emit = {
+        let mut gate = fallback_warn_gate()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last = gate.last.get(&key).copied();
+        if should_emit_fallback_warn(last, now, FALLBACK_WARN_INTERVAL) {
+            gate.last.insert(key, now);
+            true
+        } else {
+            false
+        }
+    };
+    let stats = CrossGpuStats::snapshot();
+    if emit {
+        tracing::warn!(
+            output,
+            ?kind,
+            detail,
+            used_export_mem,
+            ?stats,
+            "hybrid present fallback"
+        );
+    } else {
+        tracing::debug!(
+            output,
+            ?kind,
+            detail,
+            used_export_mem,
+            ?stats,
+            "hybrid present fallback (rate-limited)"
+        );
+    }
 }
 
 /// Result of a successful primary→secondary transfer scan-out.
@@ -371,5 +461,22 @@ mod tests {
         assert!(after.dmabuf_ok > before.dmabuf_ok);
         assert!(after.export_mem_fallback > before.export_mem_fallback);
         assert!(after.multi_ok > before.multi_ok);
+    }
+
+    #[test]
+    fn fallback_warn_rate_limit_respects_interval() {
+        let t0 = Instant::now();
+        let interval = Duration::from_secs(30);
+        assert!(should_emit_fallback_warn(None, t0, interval));
+        assert!(!should_emit_fallback_warn(
+            Some(t0),
+            t0 + Duration::from_secs(5),
+            interval
+        ));
+        assert!(should_emit_fallback_warn(
+            Some(t0),
+            t0 + Duration::from_secs(30),
+            interval
+        ));
     }
 }

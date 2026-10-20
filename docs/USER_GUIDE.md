@@ -441,7 +441,15 @@ Enable it in *Steam → Settings → Compatibility → Run other titles with…*
 - **Anti-cheat** — enable *Steam Play* for the title and check
   [ProtonDB](https://www.protondb.com) for per-game tweaks.
 
-**Hybrid GPU (laptops).** Metis exports the compositor's own render GPU to
+**Hybrid GPU (laptops).** When a monitor is driven by a different GPU than the
+session’s primary render GPU, the compositor presents via Smithay
+`MultiRenderer` (including blur and HDR). If that fails it falls back to a
+full-frame primary→secondary transfer, then to the local GPU with blur off.
+Dragging heavy windows across those monitors can briefly rebuild wallpaper /
+decoration GL caches; that is expected. Client GPU routing (below) is separate
+from this present path.
+
+Metis exports the compositor's own render GPU to
 every spawned client, so Steam, Proton, XWayland, and Vulkan apps default to the
 **same** card the session renders on instead of silently picking the wrong one.
 The card is chosen by the compositor (override with `METIS_DRM_DEVICE`, see dev

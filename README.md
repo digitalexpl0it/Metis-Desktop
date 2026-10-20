@@ -433,8 +433,9 @@ reference.
 - **Phase 3 — Multi-monitor, workspaces & tiling:** complete. Per-output bars and
   desks; independent or linked workspaces; optional scrolling layout; ScreenCast
   dmabuf zero-copy; Stage G multi-GPU DRM (**hardware validation 2026-07-26** on
-  hybrid iGPU+dGPU: HDMI projector, gaming PRIME, input); full `MultiRenderer`
-  transfer remains deferred.
+  hybrid iGPU+dGPU: HDMI projector, gaming PRIME, input); Wave A/B/C
+  `MultiRenderer` hybrid present landed (2026-10-03); full-frame transfer is
+  fail-fallback only.
 - **Phase 4 — System settings expansion:** complete (Input, Bluetooth, Printers,
   Power, Sound, Display).
 - **Phase 5 — Display pipeline (mode-setting, HDR / VRR / colour):** **complete**
@@ -472,8 +473,9 @@ reference.
   press-and-drag to move, and per-card close.
 - **Phase 18 — Security polish (IPC / isolation):** **A–D complete** (2026-08-08) —
   gaming path/env sanitization, IPC rate limits, widget pack schema gate, soft
-  two-bucket XWayland isolation. **§E track-only** — default-on colour management
-  (upstream UAF) + GLES MultiRenderer remain deferred.
+  two-bucket XWayland isolation. **§E** — GLES MultiRenderer Wave A/B/C landed
+  (2026-10-03; M6 edge polish 2026-10-20); default-on colour management remains
+  track-only (upstream UAF).
 - **Phase 19 — Gaming Setup UX:** **complete** (2026-08-08) — guided drivers /
   Steam / Vulkan / controllers wizard; NVIDIA consent + reboot banner; Settings
   library paths + Metis MangoHud/Gamescope toggles; X11 borderless game placement
