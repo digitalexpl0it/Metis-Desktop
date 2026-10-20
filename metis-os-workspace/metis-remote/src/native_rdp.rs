@@ -419,14 +419,13 @@ pub fn enable() -> Result<(), String> {
     Ok(())
 }
 
-/// Stop host and clear MetisNative backend preference (restore GRD default).
+/// Stop host; keep MetisNative selected (default backend) with sharing off.
 pub fn disable(kill: bool) -> Result<(), String> {
     if kill {
         stop_host()?;
     }
     let mut cfg = load_remote_config();
     if matches!(cfg.backend, RemoteBackend::MetisNative) {
-        cfg.backend = RemoteBackend::GnomeRdp;
         cfg.enabled = false;
     }
     save_remote_config(&cfg).map_err(|e| e.to_string())?;

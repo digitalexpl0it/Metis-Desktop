@@ -72,15 +72,14 @@ is tracked under **Product backlog — Desktop maturity** below.
 - [x] **3. Metis-native remote host** — **Landed (2026-10-03…2026-10-11):**
       **RUDP** Phases 1–8 + clipboard/audio/HW decode/AV1/packet queue;
       **Metis native RDP** via `metis-rdp-host` (portal ScreenCast + FreeRDP;
-      GRD remains default on **Remote access**). **2026-10-10:** RUDP auth
+      **default** on **Remote access** as of M5). **2026-10-10:** RUDP auth
       rate-limit/lockout, unlock-on-connect policy, LAN fail-closed, pause
       stream while locked. **2026-10-11:** RUDP protocol **v3** multi-monitor
       (`DesktopLayout` / `SubscribeOutputs` / per-output streams; Viewer
       multi-window + `--monitor` / `--all-monitors`); native RDP credential
       parity (stdin → runtime password file); software AV1 encode
       (`libsvtav1`/`libaom-av1`; Settings Encoder → Software; Auto+AV1 ladder
-      HW AV1 → soft AV1 → HW H.264/HEVC). Residual before GRD default-flip:
-      manual QA sign-off (M5 multi-monitor + packaging checklist).
+      HW AV1 → soft AV1 → HW H.264/HEVC).
       → Wave 4c, Phase 7 §B RUDP-Stream, Phase 15 §F, maturity **M5**,
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 - [x] **4. Per-Steam-appid Gamescope profile UI** — Settings → Gaming editor for
@@ -149,9 +148,9 @@ called out as residuals only. Prefer working top→bottom.
 - [x] **M3. Fractional-scale protocol polish** (2026-10-20) —
       `wp_viewporter` + `wp_fractional_scale_v1`; `wl_compositor` v6 with
       `preferred_buffer_scale` / transform synced from primary scan-out
-      (DRM/winit + output prefs). **Residual:** `Scale::Custom` integer
-      advertising; XWayland `set_client_scale`.
-      → Phase 5 / output prefs follow-up.
+      (DRM/winit + output prefs). Residuals closed: `Scale::Custom` floors
+      the advertised integer (`1.25` → `wl_output` 1, fractional 1.25);
+      XWayland `set_client_scale` tracks the primary output’s fractional scale.
 
 #### Interop & ecosystem
 
@@ -161,12 +160,11 @@ called out as residuals only. Prefer working top→bottom.
       on `metis-protocol` IPC. **Residual:** management protocol
       (activate/minimize/close) for third-party docks deferred.
       → [`docs/decisions/foreign-toplevel-list.md`](../docs/decisions/foreign-toplevel-list.md).
-- [x] **M5. MetisNative RDP GA residuals** (2026-10-20) — multi-monitor
-      virtual-desktop atlas (`rdp-layout.json` + multi-stream ScreenCast);
-      FreeRDP `EnumMonitors`; MetisNative session autostart without `grdctl`;
-      packaging/QA checklist in ADR. **Residual:** flip
-      `RemoteBackend` default off GRD after manual QA sign-off (audio/clipboard
-      still native-absent).
+- [x] **M5. MetisNative RDP GA** (2026-10-20) — multi-monitor virtual-desktop
+      atlas (`rdp-layout.json` + multi-stream ScreenCast); FreeRDP
+      `EnumMonitors`; MetisNative session autostart without `grdctl`;
+      packaging/QA checklist; **`RemoteBackend` default = MetisNative**
+      (GRD opt-in). Native host audio/clipboard still absent (use GRD/RUDP).
       → Wave **4c** / [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 
 #### Graphics residuals
@@ -185,8 +183,7 @@ called out as residuals only. Prefer working top→bottom.
       security design note before enabling.
 
 **Suggested order:** **M1**/**M3**/**M4**/**M5** landed → **M2** when upstream
-allows → default-flip after M5 QA → **M6** as hybrid reports arrive → **M7**
-last.
+allows → **M6** as hybrid reports arrive → **M7** last.
 
 ---
 
@@ -315,13 +312,13 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
 
 ### Wave 4 — Remote
 - [x] **4a** `metis-remote rustdesk status|enable|disable` + firewall/Polkit +
-      Settings; GRD remains default until native host ships
+      Settings; MetisNative is now the Remote access default (**M5**)
 - [x] **4b** Decision doc:
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md)
 - [x] **4c** Wayland/portal-backed FreeRDP host — `metis-rdp-host` (ScreenCast +
       PipeWire + FreeRDP) landed 2026-10-03; Viewer polish 2026-09-27; RUDP
-      Phases 1–8; multi-monitor atlas + autostart 2026-10-20 (**M5**). GRD stays
-      default until checklist sign-off in
+      Phases 1–8; multi-monitor atlas + autostart + **MetisNative default**
+      2026-10-20 (**M5**). See
       [`docs/decisions/remote-host-native-vs-grd.md`](../docs/decisions/remote-host-native-vs-grd.md).
 
 ### Wave 5 — Session startup
@@ -1188,8 +1185,8 @@ latency and clear setup docs.
       (FFmpeg H.264/HEVC → RGBA); `metis-rudp-client` lib; Metis Viewer
       Metis Remote mode (TOFU UI, video present, PointerLock input switching);
       Settings bind address + **Connect with Metis Viewer…**; host relative
-      inject when locked. GRD remains default under **Remote access**; Metis
-      native RDP promoted past experimental via portal host (2026-10-03).
+      inject when locked. Metis native RDP promoted past experimental via portal
+      host (2026-10-03); became **Remote access** default with **M5** (2026-10-20).
       **2026-10-03:** client integration guide
       [`docs/RUDP_CLIENT.md`](../docs/RUDP_CLIENT.md) (Win/mac deferred).
 - [x] **RUDP Viewer HW decode** (2026-10-03) — `metis-decode` Auto ladder
@@ -1230,7 +1227,7 @@ latency and clear setup docs.
       `av1_vaapi` / `av1_nvdec`/`av1_cuvid`); wire `CODEC_AV1=3`.
 - [x] **Metis native portal RDP host** (2026-10-03) — `metis-rdp-host` ScreenCast
       client → PipeWire → FreeRDP shadow subsystem; `metis-remote native` spawn;
-      Settings **Metis native RDP** (GRD stays default).
+      Settings **Metis native RDP** (default as of **M5** 2026-10-20).
 - [x] **RUDP multi-monitor (protocol v3)** (2026-10-11) — host `DesktopLayout`
       + `SubscribeOutputs` (default primary, max 4); per-output export frames /
       pools / damage trackers in `stream_export.rs`, one encoder + `stream_id` per

@@ -127,7 +127,7 @@ pub fn apply_mirror_scales(state: &mut MetisState, cfg: &OutputsConfig) -> bool 
         output.change_current_state(
             None,
             None,
-            Some(smithay::output::Scale::Fractional(source_scale)),
+            Some(crate::surface_scale::output_scale_for_clients(source_scale)),
             None,
         );
         tracing::info!(name = %output.name(), scale = source_scale, "applied mirror source scale");

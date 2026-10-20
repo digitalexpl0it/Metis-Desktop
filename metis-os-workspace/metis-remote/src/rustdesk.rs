@@ -134,7 +134,7 @@ pub fn disable(kill: bool) -> Result<(), String> {
     let mut cfg = load_remote_config();
     cfg.enabled = false;
     if matches!(cfg.backend, RemoteBackend::RustDesk) {
-        cfg.backend = RemoteBackend::GnomeRdp;
+        cfg.backend = RemoteBackend::default();
     }
     save_remote_config(&cfg).map_err(|e| e.to_string())?;
     if kill {

@@ -4,10 +4,10 @@ use std::time::{Duration, Instant};
 
 use metis_config::{OutputsConfig, load_outputs_config, output_prefs};
 use smithay::output::Output;
-use smithay::output::Scale;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use crate::state::MetisState;
+use crate::surface_scale::output_scale_for_clients;
 
 pub struct OutputRuntime {
     last_check: Instant,
@@ -160,7 +160,7 @@ fn apply_output_scale(output: &Output, cfg: &OutputsConfig) -> bool {
     if (current - next).abs() <= 0.001 {
         return false;
     }
-    output.change_current_state(None, None, Some(Scale::Fractional(next)), None);
+    output.change_current_state(None, None, Some(output_scale_for_clients(next)), None);
     tracing::info!(name = %output.name(), scale = next, "applied output scale");
     true
 }
@@ -177,6 +177,7 @@ fn post_output_geometry_change(state: &mut MetisState) {
     state.nudge_clients_after_output_change();
     // Preferred fractional / buffer scale for clients on every output.
     state.refresh_all_surface_scales();
+    state.sync_xwayland_client_scales();
 }
 
 fn clamp_user_scale(raw: f64) -> f64 {

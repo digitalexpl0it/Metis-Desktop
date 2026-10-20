@@ -70,7 +70,7 @@ fn default_hostname() -> String {
 }
 
 fn default_backend() -> String {
-    "gnome-rdp".into()
+    "metis_native".into()
 }
 
 fn default_true() -> bool {

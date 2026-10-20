@@ -5,15 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Remote desktop backend. Default remains GNOME RDP (GRD).
+/// Remote desktop backend. Default is Metis native RDP (`metis-rdp-host`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteBackend {
-    #[default]
     GnomeRdp,
     RustDesk,
     /// Metis-native RDP host (`metis-rdp-host`: portal ScreenCast + FreeRDP).
-    /// GRD stays the supported default.
+    /// Default session-sharing host (GRD remains an opt-in alternative).
+    #[default]
     MetisNative,
 }
 
@@ -101,4 +101,24 @@ pub fn load_remote_config() -> RemoteConfig {
 pub fn save_remote_config(cfg: &RemoteConfig) -> std::io::Result<()> {
     super::ensure_config_dirs()?;
     crate::persist::write_json_atomic(&remote_config_path(), cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_backend_is_metis_native() {
+        assert_eq!(RemoteBackend::default(), RemoteBackend::MetisNative);
+        assert_eq!(RemoteConfig::default().backend, RemoteBackend::MetisNative);
+        let cfg: RemoteConfig = serde_json::from_str("{}").expect("empty remote.json");
+        assert_eq!(cfg.backend, RemoteBackend::MetisNative);
+    }
+
+    #[test]
+    fn explicit_gnome_rdp_preserved() {
+        let cfg: RemoteConfig =
+            serde_json::from_str(r#"{"backend":"gnome_rdp"}"#).expect("gnome_rdp");
+        assert_eq!(cfg.backend, RemoteBackend::GnomeRdp);
+    }
 }

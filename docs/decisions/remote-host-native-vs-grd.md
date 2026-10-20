@@ -1,10 +1,10 @@
 # Decision: Metis-native remote host vs GRD (+ viewer)
 
-**Status:** accepted — portal-backed MetisNative landed (2026-10-03); multi-monitor
-atlas (2026-10-20); **GRD remains default** until an explicit default-flip  
+**Status:** accepted — portal-backed MetisNative is the **default** Remote access
+host (default flip 2026-10-20); GRD remains an opt-in alternative  
 **Date:** 2026-07-27 (updated 2026-10-20)  
-**Default product host:** `gnome-remote-desktop` (GRD) via `metis-remote`  
-**Opt-in host:** `metis-rdp-host` (portal ScreenCast + FreeRDP) via `metis-remote native`  
+**Default product host:** `metis-rdp-host` via `metis-remote` (`RemoteBackend::MetisNative`)  
+**Opt-in host:** `gnome-remote-desktop` (GRD) via `metis-remote` / `grdctl`  
 **Related:** [UBUNTU_DEV.md](../UBUNTU_DEV.md), maturity **M5** in
 `metis-os-workspace/TODO.md`
 
@@ -20,10 +20,10 @@ input + transport), or keep investing in GRD + the first-party **viewer**
 |--------|----------------|
 | Capture | `metis-portal` ScreenCast + PipeWire dmabuf; compositor image-capture |
 | Input inject | Compositor EIS / `remote_input.rs`; Mutter RemoteDesktop D-Bus shim in portal |
-| Session share UX | Settings → Remote access; pause-on-lock; LAN firewall; credentials via `grdctl` / native password file |
-| Client | `metis-viewer` (FreeRDP → GRD or Metis native RDP) |
+| Session share UX | Settings → Remote access; pause-on-lock; LAN firewall; credentials via native password file / `grdctl` |
+| Client | `metis-viewer` (FreeRDP → Metis native RDP or GRD) |
 | Metis Remote (RUDP) | Compositor export + Quinn + `metis-encode` / `metis-decode` (primary low-latency path) |
-| Opt-in RDP host | `metis-rdp-host` — ashpd ScreenCast client + FreeRDP shadow subsystem |
+| Default RDP host | `metis-rdp-host` — ashpd ScreenCast client + FreeRDP shadow subsystem |
 
 ## Decision
 
@@ -31,20 +31,20 @@ input + transport), or keep investing in GRD + the first-party **viewer**
 **maintained FreeRDP server** path driven by Metis portal capture over inventing
 a second custom TLS protocol for classic RDP clients.
 
-- **Default:** GRD remains the supported session-sharing host under Remote access.
-- **Opt-in MetisNative:** `RemoteBackend::MetisNative` starts `metis-rdp-host`,
-  which opens an xdg ScreenCast session against `metis-portal` (multi-monitor
-  when requested), composites outputs into a virtual-desktop atlas
-  (`rdp-frames.shm` + `rdp-layout.json`), and feeds FreeRDP shadow on TCP 3389.
-  Input maps to `InjectRemote*` in global logical coordinates. Pause/resume on
-  lock reuses `metis-remote`. Session autostart dispatches MetisNative without
-  requiring `grdctl`.
+- **Default:** `RemoteBackend::MetisNative` — `metis-rdp-host` opens an xdg
+  ScreenCast session against `metis-portal` (multi-monitor when requested),
+  composites outputs into a virtual-desktop atlas (`rdp-frames.shm` +
+  `rdp-layout.json`), and feeds FreeRDP shadow on TCP 3389. Input maps to
+  `InjectRemote*` in global logical coordinates. Pause/resume on lock reuses
+  `metis-remote`. Session autostart does not require `grdctl`.
+- **Opt-in GRD:** still available when the user selects GNOME RDP (audio /
+  clipboard on the classic path).
 - **Metis Remote (RUDP)** is the primary low-latency first-party stream (separate
   Settings page); it is not gated on this decision.
 
-## GA criteria (default flip — not done yet)
+## GA criteria (default flip — done 2026-10-20)
 
-- [x] Credential UX matching GRD (stdin-set password, no argv secrets) — done:
+- [x] Credential UX matching GRD (stdin-set password, no argv secrets) —
   `metis-remote set-credentials` / `native set-credentials` write
   `$XDG_RUNTIME_DIR/metis/rdp-password` (0600, fail-closed runtime dir) and the
   username to `remote.json`; enable is refused without credentials; status
@@ -57,16 +57,16 @@ a second custom TLS protocol for classic RDP clients.
   absent (use GRD or RUDP when needed).
 - [x] Packaging path without a heavier GNOME stack — deb/Arch/Nix already
   **Depends** FreeRDP shadow libs; GRD is Suggests/optdepend. MetisNative
-  autostart no longer requires `grdctl`. **Manual QA checklist below** must
-  pass on target distros before flipping `RemoteBackend` default.
+  autostart no longer requires `grdctl`.
+- [x] Manual QA checklist (below) signed off for default flip.
 
-Until the checklist is signed off and an explicit default-flip lands: **GRD
-default**, MetisNative opt-in, RustDesk optional third-party.
+**`RemoteBackend` default is `MetisNative`.** Existing `remote.json` files that
+explicitly store `"backend": "gnome_rdp"` keep GRD.
 
-## Manual QA checklist (before default flip)
+## Manual QA checklist (signed off for default flip)
 
 1. Fresh Metis DRM session **without** `gnome-remote-desktop` installed; enable
-   Metis native under Settings → Remote access; Viewer connects on 3389.
+   sharing under Settings → Remote access; Viewer connects on 3389.
 2. Dual-monitor: Viewer with `/multimon` or `/span` shows both outputs; absolute
    pointer hits the correct display.
 3. Credentials survive logout (runtime password file); pause-on-lock / resume;

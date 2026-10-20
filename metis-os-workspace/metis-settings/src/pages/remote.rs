@@ -1,4 +1,4 @@
-//! Remote access — desktop session sharing (RDP via gnome-remote-desktop).
+//! Remote access — desktop session sharing (Metis native RDP; GRD optional).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -28,6 +28,7 @@ struct Sections {
     password_banner: gtk::Box,
     change_pw_btn: gtk::Button,
     install_banner: gtk::Box,
+    install_text: gtk::Label,
     toggling: Rc<Cell<bool>>,
     lan_toggling: Rc<Cell<bool>>,
     /// True while enable/disable CLI is in flight — ignore status poll for the switch.
@@ -60,8 +61,10 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     install_banner.set_margin_bottom(12);
     install_banner.set_visible(false);
     let install_text = gtk::Label::new(Some(&tr(
-        "Install gnome-remote-desktop to enable desktop session sharing:\n\
-         sudo apt install gnome-remote-desktop",
+        "Metis native RDP host (metis-rdp-host) is missing. Re-run the Metis \
+         install (`run-metis.sh --install-session`) so FreeRDP shadow libraries \
+         and metis-rdp-host are available. Optional: install gnome-remote-desktop \
+         only if you prefer the GNOME RDP backend.",
     )));
     install_text.set_xalign(0.0);
     install_text.set_wrap(true);
@@ -187,17 +190,18 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     sec_body.append(&hint_label);
     content.append(&sec_card);
 
-    // Metis-native RDP host (portal ScreenCast + FreeRDP). GRD remains default.
-    let (native_card, native_body) = ui::section(&tr("Metis native RDP"));
+    // Metis-native RDP host (portal ScreenCast + FreeRDP) — default backend.
+    let (native_card, native_body) = ui::section(&tr("Metis native RDP (default)"));
     let native_status = gtk::Label::new(None);
     native_status.set_xalign(0.0);
     native_status.add_css_class("metis-settings-value");
     native_body.append(&readout_row(&tr("Status"), &native_status));
     let native_hint = gtk::Label::new(Some(&tr(
-        "Starts metis-rdp-host: captures this Wayland session via the portal \
-         (PipeWire), including multi-monitor as a virtual desktop, and serves \
-         RDP on port 3389 for Metis Viewer. GNOME Remote Desktop remains the \
-         supported default for classic RDP (audio/clipboard).",
+        "Default session-sharing host: metis-rdp-host captures this Wayland \
+         session via the portal (PipeWire), including multi-monitor as a \
+         virtual desktop, and serves RDP on port 3389 for Metis Viewer. Host \
+         audio and clipboard are not implemented yet — use GNOME Remote Desktop \
+         or Metis Remote (RUDP) when you need those.",
     )));
     native_hint.set_xalign(0.0);
     native_hint.set_wrap(true);
@@ -241,7 +245,7 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     rd_enable_btn.set_halign(gtk::Align::Start);
     rd_enable_btn.set_tooltip_text(Some(&tr(
         "Runs `metis-remote rustdesk enable` — starts RustDesk and optional LAN firewall. \
-         GNOME Remote Desktop remains the default session-sharing host.",
+         Metis native RDP remains the default session-sharing host.",
     )));
     let rd_disable_btn = gtk::Button::with_label(&tr("Stop Metis backend"));
     rd_disable_btn.set_halign(gtk::Align::Start);
@@ -294,6 +298,7 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
         password_banner,
         change_pw_btn: change_pw_btn.clone(),
         install_banner,
+        install_text,
         toggling: toggling.clone(),
         lan_toggling: lan_toggling.clone(),
         enable_pending: enable_pending.clone(),
@@ -700,7 +705,7 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
         native_disable_btn.connect_clicked(move |_| match remote::native_disable() {
             Ok(()) => {
                 sections_n.hint_label.set_text(&tr(
-                    "Metis native host stopped; GNOME RDP is the preferred backend again.",
+                    "Metis native RDP host stopped. Sharing stays on the Metis native backend.",
                 ));
                 refresh_native();
             }
@@ -777,7 +782,7 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
         rd_enable_btn.connect_clicked(move |_| match remote::rustdesk_enable() {
             Ok(()) => {
                 sections_rd.hint_label.set_text(&tr(
-                    "RustDesk Metis backend enabled (optional). GRD remains the default host.",
+                    "RustDesk Metis backend enabled (optional). Metis native RDP remains the default host.",
                 ));
                 refresh_rustdesk();
             }
@@ -942,6 +947,19 @@ fn confirm_disable_lan_only(parent: &gtk::Window, on_done: impl Fn(bool) + 'stat
 
 fn render(sections: &Sections, snap: &RemoteSnapshot) {
     sections.install_banner.set_visible(!snap.available);
+    if snap.backend == "gnome-rdp" {
+        sections.install_text.set_text(&tr(
+            "Install gnome-remote-desktop to use the GNOME RDP backend:\n\
+             sudo apt install gnome-remote-desktop",
+        ));
+    } else {
+        sections.install_text.set_text(&tr(
+            "Metis native RDP host (metis-rdp-host) is missing. Re-run the Metis \
+             install (`run-metis.sh --install-session`) so FreeRDP shadow libraries \
+             and metis-rdp-host are available. Optional: install gnome-remote-desktop \
+             only if you prefer the GNOME RDP backend.",
+        ));
+    }
     sections
         .password_banner
         .set_visible(snap.available && !snap.password_set);

@@ -14,7 +14,7 @@ use smithay::{
             EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction, generic::Generic,
         },
         wayland_server::{
-            Display, DisplayHandle,
+            Client, Display, DisplayHandle,
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::wl_surface::WlSurface,
         },
@@ -145,6 +145,10 @@ pub struct MetisState {
     pub xwm: Option<smithay::xwayland::X11Wm>,
     /// Optional second X11Wm for the gaming bucket (`xwayland_mode: isolated`).
     pub xwm_gaming: Option<smithay::xwayland::X11Wm>,
+    /// Wayland `Client` for the primary XWayland server (for `set_client_scale`).
+    pub(crate) xwayland_client: Option<Client>,
+    /// Wayland `Client` for the gaming XWayland bucket.
+    pub(crate) xwayland_gaming_client: Option<Client>,
     /// X11 display number (e.g. `0` → `:0`) for the running XWayland server, used
     /// to set `DISPLAY` on X11 child processes.
     pub xdisplay: Option<u32>,
@@ -971,6 +975,8 @@ impl MetisState {
             xwayland_shell_state,
             xwm: None,
             xwm_gaming: None,
+            xwayland_client: None,
+            xwayland_gaming_client: None,
             xdisplay: None,
             xdisplay_gaming: None,
             xwm_gaming_id: None,

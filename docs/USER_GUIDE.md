@@ -882,7 +882,9 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
 `metis-cmd settings <page>` (e.g. `display`, `network`, `power`).
 
 - **Display** — per-output scale (clients get standard `wp_fractional_scale_v1`
-  / viewporter + preferred buffer scale on mixed-DPI setups), enable/disable,
+  / viewporter; the integer `wl_output` / preferred buffer scale is the floor of
+  that factor so 125% does not force 2× on apps that ignore fractional scale;
+  X11 apps follow the primary output’s scale), enable/disable,
   resolution & refresh (DRM mode list on real hardware), **Duplicate displays**
   (mirror clone with scale-to-fit
   letterboxing on DRM hardware), and multi-monitor arrangement (drag preview when
@@ -1066,11 +1068,12 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   command lines). Master switch plus per-app enable toggles. The compositor
   starts them ~2 seconds after the session begins (skipped during onboarding
   or while the session is locked). Changes apply on the next login.
-- **Remote access** — GNOME-style desktop sharing toggle: enable RDP to your
-  **live** Metis session via `gnome-remote-desktop` (headless). Set credentials
-  via a top-slide password sheet, copy the connection address, or open **Metis
-  Viewer** / connect with Remmina / FreeRDP. Requires a real (DRM) session — not
-  nested dev. Open with `metis-cmd settings remote` or `metis-cmd viewer`.
+- **Remote access** — desktop session sharing over RDP to your **live** Metis
+  session. Default host is **Metis native RDP** (`metis-rdp-host`); GNOME Remote
+  Desktop remains optional. Set credentials via a top-slide password sheet, copy
+  the connection address, or open **Metis Viewer**. Requires a real (DRM)
+  session — not nested dev. Open with `metis-cmd settings remote` or
+  `metis-cmd viewer`.
 - **Sound** — default output and input device selection (bar volume widget
   unchanged).
 - **Updates** — automatic checks (default every 6 hours; first soft check ~90s
@@ -1259,19 +1262,21 @@ automatically. Preferred codec may be **AV1** when the GPU exposes `av1_vaapi` /
 
 Use a DRM Metis session (not nested winit) for the host.
 
-Classic **RDP** (GNOME Remote Desktop), Metis native RDP (`metis-rdp-host`), and
-third-party tools remain under **Settings → Remote access**.
+Classic **RDP** defaults to Metis native (`metis-rdp-host`); GNOME Remote Desktop
+and third-party tools remain available under **Settings → Remote access**.
 
 ### Remote desktop (RDP)
 
-**Settings → System → Remote access** turns on headless RDP sharing for the
-session you are logged into — the same idea as GNOME Settings → Sharing → Remote
-Desktop. Metis orchestrates `gnome-remote-desktop` via the `metis-remote` helper;
-credentials live in the headless store (`grdctl --headless`), not in Metis config
-files.
+**Settings → System → Remote access** turns on RDP sharing for the session you
+are logged into — the same idea as GNOME Settings → Sharing → Remote Desktop.
+By default Metis starts **`metis-rdp-host`** (portal ScreenCast + FreeRDP shadow)
+via `metis-remote`. No `gnome-remote-desktop` package is required. Credentials:
+username in `remote.json`, password only in `$XDG_RUNTIME_DIR/metis/rdp-password`
+(0600, cleared at logout).
 
-1. Install the backend on the host (Ubuntu):
-   `sudo apt install gnome-remote-desktop`
+1. Install Metis with `metis-rdp-host` (FreeRDP shadow libs from packaging /
+   `run-metis.sh --install-session`). Optional GRD:
+   `sudo apt install gnome-remote-desktop` if you want that backend instead.
 2. Open **Settings → Remote access** (or `metis-cmd settings remote`).
 3. Click **Set password…** and choose the RDP username and password clients will
    use. Settings pipes the password into `metis-remote` on stdin — never put the
@@ -1284,11 +1289,14 @@ files.
    **Retry firewall apply** live under **Security**.
 6. Copy the connection address (hostname or LAN IP plus port **3389**), or click
    **Connect with Metis Viewer…** to open the first-party client with host/port
-   prefilled.
+   prefilled. For multi-monitor hosts, enable Viewer **multi-monitor** / **span**.
 
 **Test from another machine** (or the VM host), not from Metis Viewer *inside*
 the same shared session. Connecting a guest to its own RDP address nests FreeRDP
-inside the desktop GRD is capturing and often fails during clipboard setup.
+inside the desktop being captured and often fails during clipboard setup.
+
+Native host **audio and clipboard** are not implemented yet — select GNOME RDP
+or use Metis Remote (RUDP) when you need those.
 
 **CLI credentials (if needed):**
 
@@ -1301,22 +1309,16 @@ printf '%s\n' 'your-password' | metis-remote set-credentials YOUR_USER
 **Metis Viewer** (`metis-viewer`) is the first-party RDP *client* — a GTK connect
 dialog that spawns FreeRDP (`wlfreerdp3` → `wlfreerdp` → `xfreerdp3` →
 `xfreerdp`, searched under `/usr/bin` only; argv spawn, no shell). Host sharing
-defaults to **Settings → Remote access** + `gnome-remote-desktop` / `metis-remote`.
-A **Metis native** RDP host (`metis-remote native enable` → `metis-rdp-host`) is
-also RDP-compatible with this viewer: it captures the Wayland session via the
-portal (PipeWire), composites up to four monitors into a virtual-desktop atlas,
-and serves RDP on port 3389. Enable Viewer **multi-monitor** / **span** when the
-host has more than one display. GRD remains the supported default under
-**Settings → Remote access**. Enable **Metis native RDP** there after installing
-Metis with `metis-rdp-host` present (FreeRDP shadow libraries required; GNOME
-Remote Desktop is not required for the native path). Like GRD, native RDP
-**requires credentials**: set a username/password under Remote access (or
-`metis-remote native set-credentials <user>` with the password on stdin) before
-enabling. The password is stored only in `$XDG_RUNTIME_DIR/metis/rdp-password`
-(mode 0600, cleared at logout — set it again after signing back in); the
-username is saved in `remote.json`. The host refuses to start, and rejects every
-login, when no password is configured. Native host **audio and clipboard** are
-not implemented yet — use GRD or Metis Remote (RUDP) when you need those.
+defaults to **Settings → Remote access** + Metis native RDP (`metis-rdp-host` /
+`metis-remote`). The native host captures the Wayland session via the portal
+(PipeWire), composites up to four monitors into a virtual-desktop atlas, and
+serves RDP on port 3389. GNOME Remote Desktop remains an optional backend.
+Native RDP **requires credentials**: set a username/password under Remote access
+(or `metis-remote native set-credentials <user>` with the password on stdin)
+before enabling. The password is stored only in
+`$XDG_RUNTIME_DIR/metis/rdp-password` (mode 0600, cleared at logout — set it
+again after signing back in); the username is saved in `remote.json`. The host
+refuses to start, and rejects every login, when no password is configured.
 
 1. Install a FreeRDP client on the machine that will connect (Ubuntu):
    `sudo apt install freerdp3-wayland`  
@@ -1645,7 +1647,7 @@ changes live.
 | Want factory defaults | **Settings → System → Reset** (backup first); then log out and sign back in |
 | Verify the shell is reachable | `./run-metis.sh --verify` |
 | Compare compositor vs shell grid | `./run-metis.sh --verify-grid` |
-| Remote desktop toggle greyed out | Install `gnome-remote-desktop`; set a password on **Settings → Remote access** before enabling |
+| Remote desktop toggle greyed out | Ensure `metis-rdp-host` is installed (`run-metis.sh --install-session`); set a password on **Settings → Remote access** before enabling |
 | LAN firewall not applied / Retry times out | Install `nftables` (or active `ufw`); ensure `metis-polkit-agent` is running (`ps` / session logs); use **Retry firewall apply** under Security, or `pkexec metis-remote firewall apply`. On polkit 127+, confirm `systemctl is-active polkit-agent-helper.socket` |
 | PolicyKit password dialog missing / auth fails | Confirm `metis-polkit-agent` is running; kill competing GNOME/KDE agents if register fails. Helper path: socket `/run/polkit/agent-helper.socket` or setuid `polkit-agent-helper-1`. Auth is a top-center layer-shell overlay — it should sit above the updater and other apps |
 | Settings says updates available but updater / bar icon empty | Rebuild/reinstall shell + settings (shared `updates-snapshot.json`). Use **Check now**, then **Open updater**; the badge should match |

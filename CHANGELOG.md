@@ -16,12 +16,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   Startup → **Restore windows after crash** (`session.json`). Clean logout
   still returns to the greeter. See
   [`docs/decisions/session-restore.md`](docs/decisions/session-restore.md).
-- **MetisNative RDP multi-monitor (M5)** — `metis-rdp-host` captures multiple
-  monitors via the portal into a virtual-desktop atlas (`rdp-layout.json`);
-  FreeRDP advertises each monitor for Viewer `/multimon` / `/span`. Session
-  autostart works for the MetisNative backend without `gnome-remote-desktop`.
-  GRD remains the Remote access default until QA sign-off. See
-  [`docs/decisions/remote-host-native-vs-grd.md`](docs/decisions/remote-host-native-vs-grd.md).
+- **MetisNative RDP GA (M5)** — `metis-rdp-host` captures multiple monitors via
+  the portal into a virtual-desktop atlas (`rdp-layout.json`); FreeRDP
+  advertises each monitor for Viewer `/multimon` / `/span`. Session autostart
+  works without `gnome-remote-desktop`. **`RemoteBackend` default is now
+  MetisNative** (GRD remains opt-in). Native host audio/clipboard still absent.
+  See [`docs/decisions/remote-host-native-vs-grd.md`](docs/decisions/remote-host-native-vs-grd.md).
 - **Fractional scale protocols (M3)** — the compositor advertises
   `wp_viewporter` and `wp_fractional_scale_v1`, and uses `wl_compositor` v6 so
   clients receive `preferred_buffer_scale` / transform updates when windows
@@ -34,6 +34,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **Fractional Display scale (M3 residual)** — `wl_output` / integer
+  `preferred_buffer_scale` now advertise `floor(scale)` instead of ceil, so a
+  125% UI scale no longer forces integer-only clients to 2×. Clients that
+  speak `wp_fractional_scale_v1` still get the true fractional factor. X11 apps
+  via XWayland inherit the primary output’s fractional scale (including after
+  Display scale changes).
 - **README** — dropped the “Beta” callout; Metis is presented as an active
   Wayland desktop with first-party portals (roadmap maturity items live in
   `metis-os-workspace/TODO.md`).

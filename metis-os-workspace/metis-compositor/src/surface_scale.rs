@@ -9,7 +9,7 @@
 
 use smithay::{
     desktop::utils::{surface_primary_scanout_output, with_surfaces_surface_tree},
-    output::Output,
+    output::{Output, Scale},
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::{
         compositor::{SurfaceData, get_parent, send_surface_state, with_states},
@@ -19,6 +19,16 @@ use smithay::{
 };
 
 use crate::state::MetisState;
+
+/// Client-facing output scale: fractional truth + floored integer for
+/// `wl_output` / `preferred_buffer_scale` (avoids ceil(1.25) → 2).
+pub(crate) fn output_scale_for_clients(fractional: f64) -> Scale {
+    let fractional = fractional.clamp(1.0, 4.0);
+    Scale::Custom {
+        advertised_integer: fractional.floor().max(1.0) as i32,
+        fractional,
+    }
+}
 
 /// Push fractional + integer preferred scales using already-locked `SurfaceData`.
 fn apply_scales_with_states(surface: &WlSurface, states: &SurfaceData, output: &Output) {
@@ -139,7 +149,7 @@ pub(crate) fn foreign_toplevel_identifier(id: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::foreign_toplevel_identifier;
+    use super::{foreign_toplevel_identifier, output_scale_for_clients};
 
     #[test]
     fn foreign_identifier_fits_protocol_limits() {
@@ -148,5 +158,17 @@ mod tests {
         assert!(id.len() <= 32);
         assert!(id.is_ascii());
         assert_eq!(id, "metis-4294967295");
+    }
+
+    #[test]
+    fn output_scale_floor_integer_advertising() {
+        for (frac, want_int) in [(1.0, 1), (1.25, 1), (1.5, 1), (1.75, 1), (2.0, 2), (2.5, 2)] {
+            let scale = output_scale_for_clients(frac);
+            assert_eq!(scale.integer_scale(), want_int, "frac={frac}");
+            assert!(
+                (scale.fractional_scale() - frac).abs() < 1e-9,
+                "frac={frac}"
+            );
+        }
     }
 }

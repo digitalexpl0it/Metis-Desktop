@@ -14,9 +14,10 @@ use metis_grid::PixelRect;
 use smithay::{
     desktop::Window,
     input::pointer::{Focus, GrabStartData as PointerGrabStartData},
-    reexports::calloop::LoopHandle,
+    reexports::{calloop::LoopHandle, wayland_server::Client},
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size},
     wayland::{
+        compositor::CompositorHandler,
         selection::{
             SelectionTarget,
             data_device::{
@@ -636,15 +637,18 @@ impl MetisState {
                             state.xwm_gaming_id = Some(id);
                             state.xwm_gaming = Some(wm);
                             state.xdisplay_gaming = Some(display_number);
+                            state.xwayland_gaming_client = Some(client.clone());
                             state.xwayland_gaming_spawn_pending = false;
                             tracing::info!(
                                 display = display_number,
                                 "gaming XWayland ready (isolated bucket)"
                             );
+                            state.sync_xwayland_client_scales();
                             state.flush_pending_gaming_launches();
                         } else {
                             state.xwm = Some(wm);
                             state.xdisplay = Some(display_number);
+                            state.xwayland_client = Some(client.clone());
                             // Default DISPLAY for non-gaming spawns.
                             unsafe {
                                 std::env::set_var("DISPLAY", format!(":{display_number}"));
@@ -653,10 +657,12 @@ impl MetisState {
                                 display = display_number,
                                 "XWayland ready — X11 apps supported"
                             );
+                            state.sync_xwayland_client_scales();
                         }
                     }
                     Err(err) => {
                         tracing::error!(%err, gaming_bucket, "failed to start the X11 window manager");
+                        state.clear_xwayland_client(gaming_bucket);
                         if gaming_bucket {
                             state.xwayland_gaming_spawn_pending = false;
                             state.drop_pending_gaming_launches("X11 WM failed");
@@ -666,6 +672,7 @@ impl MetisState {
             }
             XWaylandEvent::Error => {
                 tracing::warn!(gaming_bucket, "XWayland crashed during startup");
+                state.clear_xwayland_client(gaming_bucket);
                 if gaming_bucket {
                     state.xwayland_gaming_spawn_pending = false;
                     state.drop_pending_gaming_launches("XWayland startup error");
@@ -675,6 +682,29 @@ impl MetisState {
 
         if let Err(err) = inserted {
             tracing::error!(%err, gaming_bucket, "failed to insert XWayland source into the event loop");
+        }
+    }
+
+    fn clear_xwayland_client(&mut self, gaming_bucket: bool) {
+        if gaming_bucket {
+            self.xwayland_gaming_client = None;
+        } else {
+            self.xwayland_client = None;
+        }
+    }
+
+    /// Push the primary output's fractional scale into every live XWayland client.
+    pub(crate) fn sync_xwayland_client_scales(&mut self) {
+        let scale = self
+            .primary_output()
+            .map(|o| o.current_scale().fractional_scale())
+            .unwrap_or(1.0);
+        let clients: [Option<&Client>; 2] = [
+            self.xwayland_client.as_ref(),
+            self.xwayland_gaming_client.as_ref(),
+        ];
+        for client in clients.into_iter().flatten() {
+            self.client_compositor_state(client).set_client_scale(scale);
         }
     }
 
