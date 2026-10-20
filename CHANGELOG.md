@@ -40,6 +40,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- **Session freeze after M3 fractional-scale** — refreshing preferred scales
+  re-locked the client cursor surface while already inside
+  `with_surfaces_surface_tree`, deadlocking the DRM event loop (cursor and
+  input stopped). Scale updates now use the already-held `SurfaceData`.
 - **CI `cargo deny`** — bumped `rustls` to 0.23.46 and `zip` to 9.0.5 so
   advisory checks pass again.
 

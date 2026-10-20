@@ -2,13 +2,17 @@
 //!
 //! Output scale already drives render/layout; this module advertises the matching
 //! client-facing preferred scales (Anvil-style).
+//!
+//! Important: never call [`with_states`] from inside `with_surfaces` /
+//! `with_surfaces_surface_tree` on the same surface — those already hold the
+//! surface mutex and re-entry deadlocks the compositor (frozen pointer/input).
 
 use smithay::{
     desktop::utils::{surface_primary_scanout_output, with_surfaces_surface_tree},
     output::Output,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::{
-        compositor::{get_parent, send_surface_state, with_states},
+        compositor::{SurfaceData, get_parent, send_surface_state, with_states},
         fractional_scale::{FractionalScaleHandler, with_fractional_scale},
         seat::WaylandFocus,
     },
@@ -16,35 +20,25 @@ use smithay::{
 
 use crate::state::MetisState;
 
-/// Push fractional + integer preferred scales for one surface from `output`.
-pub(crate) fn apply_scales_from_output(surface: &WlSurface, output: &Output) {
+/// Push fractional + integer preferred scales using already-locked `SurfaceData`.
+fn apply_scales_with_states(surface: &WlSurface, states: &SurfaceData, output: &Output) {
     let scale_f = output.current_scale().fractional_scale();
     let scale_i = output.current_scale().integer_scale();
     let transform = output.current_transform();
+    with_fractional_scale(states, |fractional_scale| {
+        fractional_scale.set_preferred_scale(scale_f);
+    });
+    send_surface_state(surface, states, scale_i, transform);
+}
+
+/// Push scales when the caller does **not** already hold the surface lock.
+pub(crate) fn apply_scales_from_output(surface: &WlSurface, output: &Output) {
     with_states(surface, |states| {
-        with_fractional_scale(states, |fractional_scale| {
-            fractional_scale.set_preferred_scale(scale_f);
-        });
-        send_surface_state(surface, states, scale_i, transform);
+        apply_scales_with_states(surface, states, output);
     });
 }
 
 impl MetisState {
-    /// Refresh preferred scales from the surface's primary scan-out output, if any.
-    pub(crate) fn refresh_surface_scales(&self, surface: &WlSurface) {
-        with_states(surface, |states| {
-            if let Some(output) = surface_primary_scanout_output(surface, states) {
-                let scale_f = output.current_scale().fractional_scale();
-                let scale_i = output.current_scale().integer_scale();
-                let transform = output.current_transform();
-                with_fractional_scale(states, |fractional_scale| {
-                    fractional_scale.set_preferred_scale(scale_f);
-                });
-                send_surface_state(surface, states, scale_i, transform);
-            }
-        });
-    }
-
     /// After a frame (or output scale change): update preferred scales for every
     /// surface shown on `output` (windows, layers, client cursor).
     pub(crate) fn refresh_scales_on_output(&self, output: &Output) {
@@ -57,13 +51,7 @@ impl MetisState {
                     .unwrap_or_else(|| self.space.outputs_for_element(window).contains(output));
                 if use_output {
                     let src = primary.as_ref().unwrap_or(output);
-                    let scale_f = src.current_scale().fractional_scale();
-                    let scale_i = src.current_scale().integer_scale();
-                    let transform = src.current_transform();
-                    with_fractional_scale(states, |fractional_scale| {
-                        fractional_scale.set_preferred_scale(scale_f);
-                    });
-                    send_surface_state(surface, states, scale_i, transform);
+                    apply_scales_with_states(surface, states, src);
                 }
             });
         }
@@ -73,21 +61,21 @@ impl MetisState {
             layer_surface.with_surfaces(|surface, states| {
                 let primary = surface_primary_scanout_output(surface, states);
                 let src = primary.as_ref().unwrap_or(output);
-                let scale_f = src.current_scale().fractional_scale();
-                let scale_i = src.current_scale().integer_scale();
-                let transform = src.current_transform();
-                with_fractional_scale(states, |fractional_scale| {
-                    fractional_scale.set_preferred_scale(scale_f);
-                });
-                send_surface_state(surface, states, scale_i, transform);
+                apply_scales_with_states(surface, states, src);
             });
         }
         drop(map);
 
         if let smithay::input::pointer::CursorImageStatus::Surface(ref surface) = self.cursor_status
         {
-            with_surfaces_surface_tree(surface, |surface, _states| {
-                self.refresh_surface_scales(surface);
+            // Must use the `states` from the tree walk — do not call `with_states`
+            // here (same-surface re-lock deadlocks the DRM loop).
+            with_surfaces_surface_tree(surface, |surface, states| {
+                if let Some(scanout) = surface_primary_scanout_output(surface, states) {
+                    apply_scales_with_states(surface, states, &scanout);
+                } else {
+                    apply_scales_with_states(surface, states, output);
+                }
             });
         }
     }
@@ -106,23 +94,26 @@ impl MetisState {
             root = parent;
         }
 
-        with_states(surface, |states| {
-            surface_primary_scanout_output(surface, states).or_else(|| {
-                if root != *surface {
-                    with_states(&root, |states| {
-                        surface_primary_scanout_output(&root, states).or_else(|| {
-                            self.window_for_wl_surface(&root).and_then(|window| {
-                                self.space.outputs_for_element(&window).first().cloned()
-                            })
-                        })
-                    })
-                } else {
-                    self.window_for_wl_surface(&root)
-                        .and_then(|window| self.space.outputs_for_element(&window).first().cloned())
-                }
-            })
-        })
-        .or_else(|| self.space.outputs().next().cloned())
+        // Resolve primary scan-out without nested same-surface locks.
+        let from_surface = with_states(surface, |states| {
+            surface_primary_scanout_output(surface, states)
+        });
+        if from_surface.is_some() {
+            return from_surface;
+        }
+
+        if root != *surface {
+            let from_root = with_states(&root, |states| {
+                surface_primary_scanout_output(&root, states)
+            });
+            if from_root.is_some() {
+                return from_root;
+            }
+        }
+
+        self.window_for_wl_surface(&root)
+            .and_then(|window| self.space.outputs_for_element(&window).first().cloned())
+            .or_else(|| self.space.outputs().next().cloned())
     }
 
     fn window_for_wl_surface(&self, surface: &WlSurface) -> Option<smithay::desktop::Window> {
