@@ -511,7 +511,12 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
     }
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
-        let Some(rel) = sanitized_archive_relpath(entry.name()) else {
+        // zip 9: never materialise archive symlinks (RUSTSEC-2026-0368 family).
+        if entry.is_symlink() {
+            continue;
+        }
+        let name = entry.name().map_err(|e| e.to_string())?;
+        let Some(rel) = sanitized_archive_relpath(name.as_ref()) else {
             continue;
         };
         let out_path = dest.join(&rel);
