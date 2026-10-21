@@ -6,7 +6,7 @@ use smithay::{
     },
     input::{
         keyboard::{FilterResult, keysyms},
-        pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent},
+        pointer::{AxisFrame, MotionEvent, RelativeMotionEvent},
         touch::{DownEvent, MotionEvent as TouchMotionEventWl, UpEvent},
     },
     utils::{Logical, Point, SERIAL_COUNTER, Serial},
@@ -779,131 +779,7 @@ impl MetisState {
             }
             InputEvent::PointerButton { event, .. } => {
                 needs_redraw = true;
-                let Some(pointer) = self.seat.get_pointer() else {
-                    tracing::warn!("pointer button: seat has no pointer");
-                    return;
-                };
-                let serial = SERIAL_COUNTER.next_serial();
-                let button = event.button_code();
-                let button_state = event.state();
-                let raw_loc = pointer.current_location();
-                let under = self.pointer_target_at(raw_loc);
-                // Mutter/KWin: activate a pending lock before click delivery so a
-                // brief unlock cannot inject absolute desktop motion on fire.
-                if let Some((surface, surface_loc)) = under.as_ref() {
-                    self.maybe_arm_pointer_constraint(surface, &pointer, raw_loc, *surface_loc);
-                }
-                let loc = raw_loc;
-                let pointer_locked = under
-                    .as_ref()
-                    .is_some_and(|(surface, _)| self.pointer_locked_on_surface(surface, &pointer));
-
-                if let Some((surface, _)) = under.as_ref() {
-                    self.sync_pointer_constraint_phase(surface, &pointer);
-                }
-
-                if ButtonState::Pressed == button_state
-                    && let Some((surface, _)) = under.as_ref()
-                {
-                    self.trace_game_pointer(surface, &pointer, "pointer button press", Some(loc));
-                }
-
-                // Mutter/KWin: no absolute wl_pointer.motion while locked.
-                // Do not remap locked clicks through cursor_position_hint — Proton
-                // streams hints during mouse-look; remapping them warps the camera.
-                if !pointer_locked {
-                    pointer.motion(
-                        self,
-                        under.clone(),
-                        &MotionEvent {
-                            location: loc,
-                            serial,
-                            time: event.time(),
-                        },
-                    );
-                }
-
-                if ButtonState::Pressed == button_state {
-                    const BTN_LEFT: u32 = 0x110;
-                    const BTN_MIDDLE: u32 = 0x112;
-                    const BTN_RIGHT: u32 = 0x111;
-                    if self.capture_overlay_active() {
-                        self.enforce_capture_overlay_stacking();
-                    }
-                    let paste_button = button == BTN_MIDDLE || button == BTN_RIGHT;
-                    // A press over the bar or one of its open popovers (e.g. the app
-                    // launcher) belongs to the shell. The bar's popovers don't take a
-                    // pointer grab, so without this guard a click would fall through to
-                    // window resize/move chrome rendered geometrically *beneath* the
-                    // popover — letting you drag a window through the open menu.
-                    let on_bar_ui = self.metis_bar_ui_hit(loc);
-                    let on_nc = self.metis_notification_center_hit(loc);
-                    // Any press outside the Notification Center dismisses it (and
-                    // bar popovers) — including presses on the edge bar. Presses
-                    // on the NC panel itself must not dismiss. While a capture
-                    // picker owns the pointer, no press counts as an outside click:
-                    // the shell UI being framed must survive the selection drag.
-                    // Task View is sticky (Win11-style): pointer presses must not
-                    // broadcast close-popovers, or the shell tears the overlay down
-                    // on button-down before click/drag can complete.
-                    if crate::desk_input::should_close_shell_popovers_on_press(
-                        pointer.is_grabbed(),
-                        on_nc,
-                        self.screenshot_overlay_active(),
-                        self.task_view_overlay_active(),
-                        self.capture_overlay_active(),
-                        on_bar_ui,
-                        self.notification_center_mapped(),
-                    ) {
-                        // Pass location so a right-click on desktop widgets does
-                        // not race-close the menu that same press is opening.
-                        self.request_close_shell_popovers(Some(loc));
-                    }
-                    // Terminals (kitty, foot, …) use right/middle-click paste and
-                    // context menus against the surface under the pointer — align
-                    // clipboard + primary-selection focus before any chrome handler
-                    // can short-circuit the press path.
-                    if paste_button && !on_bar_ui {
-                        self.sync_selection_focus_from_target(&under);
-                    }
-                    let mut chrome_press = false;
-                    if !on_bar_ui
-                        && button == BTN_LEFT
-                        && !self.capture_overlay_active()
-                        && !self.screenshot_overlay_active()
-                        && !self.task_view_overlay_active()
-                    {
-                        chrome_press = self.handle_resize_press(loc, serial, button)
-                            || self.handle_decoration_press(loc, serial, button);
-                        if chrome_press {
-                            self.schedule_redraw();
-                        }
-                    }
-                    if !chrome_press && !self.task_view_overlay_active() {
-                        self.update_keyboard_focus(loc, serial);
-                        if !paste_button {
-                            self.sync_selection_focus_from_target(&under);
-                        }
-                    }
-                } else if button_state == ButtonState::Released && button == 0x110 {
-                    self.clear_titlebar_press_pending();
-                }
-
-                pointer.button(
-                    self,
-                    &ButtonEvent {
-                        button,
-                        state: button_state,
-                        serial,
-                        time: event.time(),
-                    },
-                );
-                if let Some((surface, _)) = under
-                    && button_state == ButtonState::Pressed
-                {
-                    self.trace_game_pointer(&surface, &pointer, "after pointer button", Some(loc));
-                }
-                pointer.frame(self);
+                self.dispatch_pointer_button(event.button_code(), event.state(), event.time());
             }
             InputEvent::PointerAxis { event, .. } => {
                 needs_redraw = true;
@@ -1050,7 +926,7 @@ impl MetisState {
         }
     }
 
-    fn update_keyboard_focus(&mut self, location: Point<f64, Logical>, serial: Serial) {
+    pub(crate) fn update_keyboard_focus(&mut self, location: Point<f64, Logical>, serial: Serial) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             tracing::warn!("update_keyboard_focus: seat has no keyboard");
             return;

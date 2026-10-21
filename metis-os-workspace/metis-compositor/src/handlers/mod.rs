@@ -109,14 +109,6 @@ fn position_ime_popup(surface: &ImePopupSurface) {
 }
 
 impl MetisState {
-    /// Point the seat's clipboard + primary-selection devices at the client under
-    /// `loc` so paste (right/middle-click, Shift+Insert) works even when keyboard
-    /// focus was previously elsewhere.
-    pub(crate) fn sync_selection_focus_at(&mut self, loc: Point<f64, Logical>) {
-        let under = self.pointer_target_at(loc);
-        self.sync_selection_focus_from_target(&under);
-    }
-
     /// Align data-device and primary-selection focus with an already-resolved
     /// pointer target (avoids a second hit-test that can disagree with motion).
     pub(crate) fn sync_selection_focus_from_target(

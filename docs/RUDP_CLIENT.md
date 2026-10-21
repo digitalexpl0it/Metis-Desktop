@@ -150,6 +150,17 @@ Map OS key/button codes to evdev on the client (or maintain a table). Absolute
 pointer coordinates are the host’s full virtual desktop logical space, not
 window-local.
 
+**Cursor UX (Metis Viewer):** the host **omits** its seat cursor from RUDP video
+frames. Clients should show the local OS pointer over the stream (do not use
+`cursor: none`) so the user sees one responsive cursor. Absolute motion is mapped
+1:1 into host logical space — local mouse acceleration affects travel across the
+widget; host `input.json` accel does not apply to injected motion. On
+`pointer_lock` with `locked=true`, prefer relative motion (games/CAD).
+
+**Keyboard:** `key.keycode` is a Linux **evdev** `KEY_*` value (ESC = 1, A = 30).
+The Metis host converts to XKB (`+ 8`) before seat inject — do **not** send
+XKB keycodes on the wire.
+
 ---
 
 ## 5. Video media

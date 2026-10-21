@@ -53,6 +53,18 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- **Metis Remote click / drag** — RUDP/RDP pointer inject shares the local
+  libinput button path (SSD titlebar move, traffic lights, resize edges, and
+  keyboard focus) instead of only emitting `wl_pointer.button` under the
+  cursor. Remote motion also skips the local GTK hover throttle so grabs get
+  every sample.
+- **Metis Remote typing** — host inject maps wire Linux evdev keycodes to XKB
+  (`+ 8`, same as libinput); Viewer forwards window Capture-phase keys using
+  the hardware scancode (with a correct QWERTY fallback) and re-grabs focus on
+  click.
+- **Metis Remote double cursor** — host stream export no longer composites the
+  seat cursor into video; Viewer shows the local OS pointer only (responsive,
+  aligned). Absolute mapping stays 1:1 host logical pixels.
 - **IME binds the live Wayland display** — `metis-session` no longer starts
   Fcitx5/IBus before the compositor socket exists (or reuses a stale daemon
   from a prior seat). It waits for `wayland-*`, restarts the IM with

@@ -642,7 +642,6 @@ fn opaque_viewer_css(t: &ThemeTokens) -> String {
             border-radius: {rs}px;
             padding: 4px 8px;
         }}
-
         /* Dedicated-desktop first-run tip. */
         .metis-viewer-tips-scrim {{
             background-color: rgba(0, 0, 0, 0.55);

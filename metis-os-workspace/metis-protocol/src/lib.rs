@@ -257,7 +257,8 @@ pub enum CompositorCommand {
         dx: f64,
         dy: f64,
     },
-    /// Inject remote-desktop keyboard key (evdev keycode, 8 = ESC).
+    /// Inject remote-desktop keyboard key (Linux evdev `KEY_*`, e.g. ESC = 1).
+    /// The compositor converts to XKB (`+ 8`) before seat inject.
     InjectRemoteKey {
         keycode: u32,
         pressed: bool,

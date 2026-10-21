@@ -766,7 +766,7 @@ pub fn maybe_export_frame(
         .map(|g| g.loc.to_physical_precise_round(output_scale))
         .unwrap_or_default();
 
-    let mut elements = state.build_render_elements(
+    let elements = state.build_render_elements(
         renderer,
         render_origin,
         output_scale,
@@ -778,11 +778,9 @@ pub fn maybe_export_frame(
         &["metis-screenshot", "metis-screenshot-record"],
         true,
     );
-    let mut cursor = state.build_cursor_elements(renderer, output, output_scale);
-    if !cursor.is_empty() {
-        cursor.append(&mut elements);
-        elements = cursor;
-    }
+    // Do not bake the seat cursor into RUDP frames — Viewer shows the local OS
+    // pointer (responsive). Compositing the host cursor caused a laggy double-
+    // cursor that never lined up with the client's position.
 
     // Scene damage (persistent per-output tracker) — skip before pool acquire
     // when idle.

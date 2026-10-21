@@ -1249,16 +1249,20 @@ not ship Win/mac clients yet; that doc is the integration contract.
    cancel); failures stay inline there (no separate modal).
 
 Metis Remote accepts pointer and keyboard on the Quinn control stream (absolute /
-relative pointer, buttons, scroll, keys). **Session lock:** while the Metis PAM
-lock or a third-party `ext-session-lock` locker is active, the host **pauses
-video and audio** (RDP-parity). With **Unlock session when I connect** on, a
-successful RUDP PAM login as the **session owner** (logged-in `$USER`) unlocks
-the Metis PAM lock so you need not type into the lock UI again. Third-party
-lockers are never cleared by RUDP; other allowlisted users never unlock and
-cannot inject input while locked. Classic RDP still pauses listen on lock
-(separate from Metis Remote). Failed PAM attempts are rate-limited per peer IP
-(`rate_limited` reject). When a game locks the pointer, the host advertises
-`PointerLock` so the Viewer sends relative motion.
+relative pointer, buttons, scroll, keys). The host **does not paint its seat
+cursor into the video** — you see your **local** OS pointer only (responsive,
+aligned). Absolute mapping is 1:1 in host logical pixels, so mouse travel follows
+your local pointer speed across the Viewer window (host libinput accel does not
+apply to remote inject). When a game locks the pointer, the host advertises
+`PointerLock` and the Viewer switches to relative motion. **Session lock:** while
+the Metis PAM lock or a third-party `ext-session-lock` locker is active, the host
+**pauses video and audio** (RDP-parity). With **Unlock session when I connect**
+on, a successful RUDP PAM login as the **session owner** (logged-in `$USER`)
+unlocks the Metis PAM lock so you need not type into the lock UI again.
+Third-party lockers are never cleared by RUDP; other allowlisted users never
+unlock and cannot inject input while locked. Classic RDP still pauses listen on
+lock (separate from Metis Remote). Failed PAM attempts are rate-limited per peer
+IP (`rate_limited` reject).
 
 **Audio.** While a Viewer session is connected, Metis Remote captures the host
 **default sink monitor** (system audio via Pulse/PipeWire-pulse), encodes Opus,

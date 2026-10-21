@@ -1137,7 +1137,10 @@ impl SessionUi {
             let click = gtk::GestureClick::new();
             click.set_button(0);
             let ui = Rc::downgrade(self);
+            let pic = picture.clone();
             click.connect_pressed(move |g, _, _, _| {
+                // Keep keyboard focus on the stream so typing reaches the host.
+                pic.grab_focus();
                 if let Some(ui) = ui.upgrade() {
                     ui.send_input(RudpControlMsg::PointerButton {
                         button: map_gdk_button(g.current_button()),
@@ -1173,29 +1176,38 @@ impl SessionUi {
         }
 
         {
-            // Keyboard events reach only the focused window — that is the
-            // "active monitor" for typing.
+            // Prefer the window so keys still arrive if focus leaves the Picture
+            // (e.g. after dismissing the connection bar). Capture phase runs
+            // before child widgets consume the event.
             let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
             let ui = Rc::downgrade(self);
-            keys.connect_key_pressed(move |_, key, _, _| {
-                if let (Some(ui), Some(evdev)) = (ui.upgrade(), gdk_key_to_evdev(key)) {
+            keys.connect_key_pressed(move |_, key, hw, mods| {
+                // Leave Ctrl+Alt+Home to the dedicated-desk bar toggle.
+                let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
+                let alt = mods.contains(gdk::ModifierType::ALT_MASK);
+                if ctrl && alt && key == gdk::Key::Home {
+                    return glib::Propagation::Proceed;
+                }
+                if let (Some(ui), Some(evdev)) = (ui.upgrade(), gdk_key_to_evdev(key, hw)) {
                     ui.send_input(RudpControlMsg::Key {
                         keycode: evdev,
                         pressed: true,
                     });
+                    return glib::Propagation::Stop;
                 }
                 glib::Propagation::Proceed
             });
             let ui = Rc::downgrade(self);
-            keys.connect_key_released(move |_, key, _, _| {
-                if let (Some(ui), Some(evdev)) = (ui.upgrade(), gdk_key_to_evdev(key)) {
+            keys.connect_key_released(move |_, key, hw, _| {
+                if let (Some(ui), Some(evdev)) = (ui.upgrade(), gdk_key_to_evdev(key, hw)) {
                     ui.send_input(RudpControlMsg::Key {
                         keycode: evdev,
                         pressed: false,
                     });
                 }
             });
-            picture.add_controller(keys);
+            sw.win.add_controller(keys);
         }
     }
 
@@ -1534,7 +1546,23 @@ fn map_gdk_button(btn: u32) -> u32 {
     }
 }
 
-fn gdk_key_to_evdev(key: gdk::Key) -> Option<u32> {
+/// Map a GTK key event to a Linux evdev `KEY_*` code for the RUDP wire.
+///
+/// Prefer the hardware scancode GTK reports (Wayland: linux keycode). Fall back
+/// to a keyval table — letter names are **not** sequential in evdev.
+fn gdk_key_to_evdev(key: gdk::Key, hardware: u32) -> Option<u32> {
+    if hardware > 0 {
+        // Wayland seats report linux keycodes; X11 reports XKB (= evdev + 8).
+        // Detect X11 by the display backend name when available.
+        let evdev = if hardware >= 8 && display_is_x11() {
+            hardware.saturating_sub(8)
+        } else {
+            hardware
+        };
+        if evdev > 0 {
+            return Some(evdev);
+        }
+    }
     use gdk::Key;
     match key {
         Key::Escape => Some(1),
@@ -1546,14 +1574,72 @@ fn gdk_key_to_evdev(key: gdk::Key) -> Option<u32> {
         Key::Down => Some(108),
         Key::BackSpace => Some(14),
         Key::Tab => Some(15),
+        Key::Shift_L => Some(42),
+        Key::Shift_R => Some(54),
+        Key::Control_L => Some(29),
+        Key::Control_R => Some(97),
+        Key::Alt_L => Some(56),
+        Key::Alt_R | Key::Meta_R => Some(100),
+        Key::Super_L | Key::Meta_L => Some(125),
+        Key::Super_R => Some(126),
+        Key::Caps_Lock => Some(58),
+        Key::Delete => Some(111),
+        Key::Home => Some(102),
+        Key::End => Some(107),
+        Key::Page_Up => Some(104),
+        Key::Page_Down => Some(109),
+        Key::Insert => Some(110),
+        Key::minus | Key::KP_Subtract => Some(12),
+        Key::equal => Some(13),
+        Key::bracketleft => Some(26),
+        Key::bracketright => Some(27),
+        Key::semicolon => Some(39),
+        Key::apostrophe => Some(40),
+        Key::grave => Some(41),
+        Key::backslash => Some(43),
+        Key::comma => Some(51),
+        Key::period | Key::KP_Decimal => Some(52),
+        Key::slash | Key::KP_Divide => Some(53),
         k => {
             let name = k.name()?.to_ascii_lowercase();
             if name.len() != 1 {
                 return None;
             }
             let c = name.chars().next()?;
+            // QWERTY US scancodes (not alphabetical).
+            const LETTERS: [(char, u32); 26] = [
+                ('a', 30),
+                ('b', 48),
+                ('c', 46),
+                ('d', 32),
+                ('e', 18),
+                ('f', 33),
+                ('g', 34),
+                ('h', 35),
+                ('i', 23),
+                ('j', 36),
+                ('k', 37),
+                ('l', 38),
+                ('m', 50),
+                ('n', 49),
+                ('o', 24),
+                ('p', 25),
+                ('q', 16),
+                ('r', 19),
+                ('s', 31),
+                ('t', 20),
+                ('u', 22),
+                ('v', 47),
+                ('w', 17),
+                ('x', 45),
+                ('y', 21),
+                ('z', 44),
+            ];
             if c.is_ascii_lowercase() {
-                Some(30 + (c as u32 - b'a' as u32))
+                LETTERS
+                    .iter()
+                    .find(|(ch, _)| *ch == c)
+                    .map(|(_, code)| *code)
             } else if c.is_ascii_digit() {
                 Some(if c == '0' {
                     11
@@ -1565,6 +1651,11 @@ fn gdk_key_to_evdev(key: gdk::Key) -> Option<u32> {
             }
         }
     }
+}
+
+fn display_is_x11() -> bool {
+    use gdk::prelude::DisplayExtManual;
+    gdk::Display::default().is_some_and(|d| d.backend().is_x11())
 }
 
 async fn trust_dialog(parent: &gtk::Window, fingerprint: &str) -> bool {

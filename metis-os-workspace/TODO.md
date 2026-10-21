@@ -1219,6 +1219,9 @@ latency and clear setup docs.
       pointer/keyboard/relative → calloop → `remote_input` inject (session-lock
       gated); host advertises `PointerLock`; `metis-rudp-smoke --input-smoke`.
       Relative Wayland emission when locked landed with Phase 8.
+      **2026-10-21:** inject shares SSD chrome / focus with local libinput;
+      remote motion unthrottled; stream omits host cursor (local pointer only);
+      key inject uses evdev→XKB `+8`; Viewer window-level key Capture.
 - [x] **RUDP-Stream Phase 8 — first-party client** (2026-10-01) — `metis-decode`
       (FFmpeg H.264/HEVC → RGBA); `metis-rudp-client` lib; Metis Viewer
       Metis Remote mode (TOFU UI, video present, PointerLock input switching);
