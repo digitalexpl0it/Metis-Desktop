@@ -2198,19 +2198,19 @@ hosts protocols, frameworks stay distro packages).
 
 Layout switching via `input.json` / xkb is **not** enough for Fcitx5 / IBus.
 
-- [ ] **Compositor protocols** — full `zwp_text_input_v3` + `zwp_input_method_v2`
-      (and popup / surrounding-text as needed) in `metis-compositor` on Smithay;
-      today only `TextInputManagerState` is constructed — wire seat focus,
-      preedit, and commit through the focused surface
-- [ ] **IME popup positioning** — candidate / preedit popups anchored to the
-      caret (not random corners); honour output scale / fractional scale
-- [ ] **Session env** — document / optionally set `GTK_IM_MODULE` /
-      `QT_IM_MODULE` / `XMODIFIERS` for Fcitx5/IBus when installed; no bundling
-      of IM frameworks in Metis packages
+- [x] **Compositor protocols** (2026-10-21) — `TextInputManagerState` +
+      `InputMethodManagerState` (same-UID filter); Smithay seat keyboard
+      enter/leave wires text-input when an IM is bound; preedit/commit via
+      protocol; IME keyboard grab does not block focus changes
+- [x] **IME popup positioning** (2026-10-21) — track `PopupKind::InputMethod`;
+      anchor under caret (`text_input_rectangle` bottom edge); parent geometry
+      from focused window or layer-shell surface
+- [ ] **Session env** — optionally set `GTK_IM_MODULE` / `QT_IM_MODULE` /
+      `XMODIFIERS` from `metis-session` when Fcitx5/IBus is detected; no bundling
+      of IM frameworks in Metis packages *(USER_GUIDE documents manual env)*
 - [ ] **QA** — Fcitx5 + IBus smoke on Ubuntu/Debian/Arch: CJK commit, Arabic /
       Indic, Electron/GTK/Firefox under Metis Wayland (not XWayland-only)
-- [ ] **Docs** — USER_GUIDE: install Fcitx5/IBus, pick engine, expected Metis
-      behaviour; CHANGELOG when protocols ship
+- [x] **Docs** (2026-10-21) — USER_GUIDE Input / IME; CHANGELOG
 
 ### B. Scratchpads (P1)
 

@@ -24,6 +24,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   while the edge-bar Weather widget or a desktop Weather card is enabled.
   Settings `reload-weather` still does a one-shot refresh when idle.
 
+### Added
+
+- **Phase 20 §A — Wayland IME protocols** — compositor advertises
+  `zwp_text_input_v3` + `zwp_input_method_v2` (same-UID clients). Seat focus
+  wires text-input enter/leave when an IM is bound; IME candidate popups are
+  tracked and anchored under the caret. Enables Fcitx5/IBus on Metis Wayland
+  (framework still installed separately).
+
 ## [2026-10-20]
 
 ### Fixed

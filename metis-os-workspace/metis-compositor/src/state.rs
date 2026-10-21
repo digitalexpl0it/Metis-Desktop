@@ -34,6 +34,7 @@ use smithay::{
         },
         shm::ShmState,
         socket::ListeningSocketSource,
+        input_method::InputMethodManagerState,
         text_input::TextInputManagerState,
         viewporter::ViewporterState,
     },
@@ -481,7 +482,16 @@ impl MetisState {
         let primary_selection_state = PrimarySelectionState::new::<MetisState>(&dh);
         let xwayland_shell_state =
             smithay::wayland::xwayland_shell::XWaylandShellState::new::<MetisState>(&dh);
+        // text-input-v3 + input-method-v2 (Phase 20 §A). Apps bind text-input;
+        // Fcitx5/IBus bind input-method. Seat keyboard enter/leave wires focus.
         TextInputManagerState::new::<MetisState>(&dh);
+        let dh_for_ime = dh.clone();
+        InputMethodManagerState::new::<MetisState, _>(&dh, move |client| {
+            match client.get_credentials(&dh_for_ime) {
+                Ok(creds) => creds.uid == unsafe { libc::geteuid() },
+                Err(_) => false,
+            }
+        });
 
         let mut seat_state = SeatState::<MetisState>::new();
         let mut seat = seat_state.new_wl_seat(&dh, "metis");

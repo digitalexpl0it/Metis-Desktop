@@ -1050,7 +1050,13 @@ impl MetisState {
             return;
         };
 
-        if pointer.is_grabbed() || keyboard.is_grabbed() {
+        // Fcitx5/IBus grab the keyboard via input-method-v2 while composing —
+        // still allow focus changes (same as Smithay anvil).
+        let ime_grab = {
+            use smithay::wayland::input_method::InputMethodSeat;
+            self.seat.input_method().keyboard_grabbed()
+        };
+        if pointer.is_grabbed() || (keyboard.is_grabbed() && !ime_grab) {
             return;
         }
 

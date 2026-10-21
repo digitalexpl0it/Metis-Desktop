@@ -11,12 +11,14 @@ use crate::state::MetisState;
 use smithay::wayland::selection::data_device::current_data_device_selection_userdata;
 use smithay::wayland::selection::primary_selection::current_primary_selection_userdata;
 
+use smithay::desktop::{PopupKind, PopupManager, WindowSurfaceType, layer_map_for_output};
 use smithay::input::dnd::{DnDGrab, DndGrabHandler, GrabType, Source};
 use smithay::input::pointer::{Focus, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point, Serial};
+use smithay::utils::{Logical, Point, Rectangle, Serial};
+use smithay::wayland::input_method::{InputMethodHandler, PopupSurface as ImePopupSurface};
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::pointer_constraints::{
     ConstraintRemove, PointerConstraintsHandler, with_pointer_constraint,
@@ -56,7 +58,54 @@ impl SeatHandler for MetisState {
             .and_then(|surface| dh.get_client(surface.id()).ok());
         set_data_device_focus(dh, seat, client.clone());
         set_primary_focus(dh, seat, client);
+        // text-input enter/leave is handled inside Smithay's `WlSurface`
+        // KeyboardTarget when an input-method instance is bound.
     }
+}
+
+/// Phase 20 §A — `zwp_input_method_v2` handler (Fcitx5 / IBus candidate popups).
+impl InputMethodHandler for MetisState {
+    fn new_popup(&mut self, surface: ImePopupSurface) {
+        position_ime_popup(&surface);
+        if let Err(err) = self.popups.track_popup(PopupKind::from(surface)) {
+            tracing::warn!(%err, "failed to track input-method popup");
+        }
+    }
+
+    fn dismiss_popup(&mut self, surface: ImePopupSurface) {
+        if let Some(parent) = surface.get_parent().map(|parent| parent.surface.clone()) {
+            let _ = PopupManager::dismiss_popup(&parent, &PopupKind::from(surface));
+        }
+    }
+
+    fn popup_repositioned(&mut self, surface: ImePopupSurface) {
+        position_ime_popup(&surface);
+    }
+
+    fn parent_geometry(&self, parent: &WlSurface) -> Rectangle<i32, Logical> {
+        if let Some(window) = self
+            .space
+            .elements()
+            .find(|w| w.wl_surface().as_deref() == Some(parent))
+        {
+            return window.geometry();
+        }
+        for output in self.space.outputs() {
+            let map = layer_map_for_output(output);
+            if let Some(layer) = map.layer_for_surface(parent, WindowSurfaceType::ALL)
+                && let Some(geo) = map.layer_geometry(layer)
+            {
+                return geo;
+            }
+        }
+        Rectangle::default()
+    }
+}
+
+/// Anchor the IME candidate popup just below the caret box (client-relative).
+fn position_ime_popup(surface: &ImePopupSurface) {
+    let rect = surface.text_input_rectangle();
+    surface.set_location(Point::from((rect.loc.x, rect.loc.y + rect.size.h)));
 }
 
 impl MetisState {

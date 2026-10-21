@@ -1066,6 +1066,14 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   plus **Keyboard → Shortcuts** to edit desktop keybinds (`keybinds.json`, live
   reload). **Shortcuts** (sidebar) is a searchable read-only chord guide with a
   jump to the editor; System VT/quit chords are listed but not editable.
+  **Input methods (IME):** Metis exposes Wayland `text-input-v3` and
+  `input-method-v2` so **Fcitx5** or **IBus** can compose CJK and other complex
+  scripts in native Wayland clients. Install the framework from your distro
+  (e.g. `fcitx5` + language engines, or `ibus` + `ibus-anthy` / `ibus-libpinyin`),
+  enable its user service / autostart, and set the usual module env if needed
+  (`GTK_IM_MODULE`, `QT_IM_MODULE`, `XMODIFIERS` — Fcitx5 docs often recommend
+  `fcitx` / `ibus`). Metis does **not** bundle an IME engine; layout switching in
+  Settings → Input remains xkb-only. Candidate popups anchor under the caret.
 - **Bluetooth** — adapter on/off, scan for devices (toggle stop, auto-stops after
   30s), pair / connect / trust / remove. Device list uses zebra rows. Battery
   percentage and charging state appear when the device or driver reports them.
