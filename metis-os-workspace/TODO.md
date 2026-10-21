@@ -9,7 +9,11 @@ consent + Mutter lock/EIS gates) and **Engineering review backlog**
 §E: colour management UAF stays track-only; **MultiRenderer** Wave A/B/C landed
 (blur/HDR/LUT on Multi; transfer fail-fallback) — see **Urgent priorities**.
 **Phase 19** (Gaming Setup UX — guided drivers + first-run polish) shipped
-2026-08-08 — see Phase 19 below; **per-app Gamescope UI** still urgent.
+2026-08-08 — see Phase 19 below; **per-app Gamescope UI** landed.
+**Phase 20** (Desktop power-user polish — IME, scratchpads, dock display
+profiles, handheld power deepen) opened 2026-10-21 — see Phase 20 below.
+**Phase 21** (Visual / interaction polish — blur corner mask, kinetic scroll,
+genie hit-test, ambient tint stretch) opened 2026-10-21 — see Phase 21 below.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -189,6 +193,10 @@ called out as residuals only. Prefer working top→bottom.
 
 **Suggested order:** **M1**/**M3**–**M7** + Urgent **#2** HDR landed → **M2**
 when upstream allows.
+
+**Related next product phases:** **Phase 20** (IME / scratchpads / dock display
+profiles / handheld power deepen) and **Phase 21** (visual / interaction polish)
+— opened 2026-10-21; not maturity M-items.
 
 ---
 
@@ -2171,6 +2179,195 @@ install helpers; Phase 18 A path/env sanitization (done); Ubuntu `ubuntu-drivers
 
 ---
 
+## Phase 20 — Desktop power-user polish (IME, scratchpads, docks, handheld)
+
+Opened **2026-10-21** from an external feature review. Several suggestions were
+**already landed** (power profiles + `metis-gamingd` auto Performance; dim-on-
+battery; `outputs.json` layout/mode hotplug). This phase tracks the **real**
+gaps only — do not re-build what Phase 4/5/11 already ship.
+
+**Goals:** first-class Wayland IME for CJK/complex scripts; i3-style scratchpads;
+multi-topology display memory keyed by monitor identity; deepen handheld power
+only where gamingd / `power.json` fall short.
+
+**Non-goals:** rewriting Settings → Power; replacing `outputs.json` arrangement
+UI; Steam Deck TDP/fan kernel stacks; competing with Fcitx/IBus *apps* (Metis
+hosts protocols, frameworks stay distro packages).
+
+### A. Input methods — `text-input-v3` / `input-method-v2` (P0)
+
+Layout switching via `input.json` / xkb is **not** enough for Fcitx5 / IBus.
+
+- [ ] **Compositor protocols** — full `zwp_text_input_v3` + `zwp_input_method_v2`
+      (and popup / surrounding-text as needed) in `metis-compositor` on Smithay;
+      today only `TextInputManagerState` is constructed — wire seat focus,
+      preedit, and commit through the focused surface
+- [ ] **IME popup positioning** — candidate / preedit popups anchored to the
+      caret (not random corners); honour output scale / fractional scale
+- [ ] **Session env** — document / optionally set `GTK_IM_MODULE` /
+      `QT_IM_MODULE` / `XMODIFIERS` for Fcitx5/IBus when installed; no bundling
+      of IM frameworks in Metis packages
+- [ ] **QA** — Fcitx5 + IBus smoke on Ubuntu/Debian/Arch: CJK commit, Arabic /
+      Indic, Electron/GTK/Firefox under Metis Wayland (not XWayland-only)
+- [ ] **Docs** — USER_GUIDE: install Fcitx5/IBus, pick engine, expected Metis
+      behaviour; CHANGELOG when protocols ship
+
+### B. Scratchpads (P1)
+
+Bar layer-shell dropdowns ≠ window scratchpads.
+
+- [ ] **Compositor scratchpad set** — stash / restore windows off the tiling /
+      scroll grid without breaking desk alignment (`metis-grid` + desk stash)
+- [ ] **Global hotkey** — default chord (e.g. Super+U) + `keybinds.json` action;
+      Settings → Keyboard list entry
+- [ ] **Shell / Menu** — optional “Send to scratchpad” / “Show scratchpad” in
+      window chrome or Task View; indicate hidden scratchpad count lightly
+- [ ] **Config** — `desk.json` or sibling file: which window ids / app rules
+      prefer scratchpad; survive compositor restart when session restore (M1)
+      is on
+- [ ] **Docs** — USER_GUIDE tiling section + CHANGELOG
+
+### C. Display topology profiles (P1)
+
+`outputs.json` already stores per-output scale, mode, VRR/HDR, `layout_x` /
+`layout_y`, and hotplug re-applies by **connector name**. Missing: remember
+**home dock vs office** when the same laptop sees different EDID sets.
+
+- [ ] **Stable identity** — key profiles by EDID serial / make+model+serial
+      (fallback to connector name when EDID missing)
+- [ ] **Profile store** — e.g. `outputs.json` `profiles[]` or
+      `output-profiles.json`: named topology → output prefs + layout
+- [ ] **Auto-apply on hotplug** — when the connected set matches a saved
+      profile, apply without forcing the keep/revert dialog every time (still
+      offer manual Save / Restore in Settings → Display)
+- [ ] **Settings UX** — “Save this setup as…” / list profiles / delete; show
+      which profile is active
+- [ ] **Docs** — USER_GUIDE Display docking; CHANGELOG
+
+### D. Handheld / power deepen (P2 — stretch)
+
+Already shipped (do **not** reopen as greenfield):
+
+- Settings → Power profiles via `powerprofilesctl`
+- `power.json` dim-on-battery → compositor pass
+- `metis-gamingd` auto Performance on `GameSession`, restore on exit (+ GameMode)
+
+Stretch only if handhelds (Steam Deck / Ally / GPD) are a real target:
+
+- [ ] **Idle / sleep inhibitor policy** — document + optional rules for when
+      apps may hold `zwp_idle_inhibit` / portal Inhibit (games vs browsers);
+      fail closed on lock (align Phase 15/portal)
+- [ ] **Per-app power hints** — optional `gaming.json` / `power.json` map
+      (app id → prefer power-saver | balanced | performance) beyond the binary
+      game-session switch
+- [ ] **Handheld QA notes** — USER_GUIDE or PACKAGING: known limits on Deck/Ally
+      (TDP/fan remain vendor tools; Metis owns session profile only)
+
+### E. Explicitly deferred / rejected
+
+- Replacing Fcitx5/IBus with a Metis-owned IME engine
+- Scratchpad as another bar popover (use real windows)
+- Silent NVIDIA / TDP installs on dock or game launch
+- Full EDID-driven colour/HDR retune on every hotplug (Phase 5 already owns
+  per-output HDR/ICC; topology profiles only restore layout/mode prefs)
+
+**Suggested order:** **A** (IME) → **B** (scratchpads) → **C** (dock profiles)
+→ **D** only if handheld demand shows up.
+
+**Dependencies:** Phase 4 input / Phase 5 outputs / Phase 11 gamingd; Smithay
+text-input + input-method support; M1 session restore for scratchpad survival.
+
+---
+
+## Phase 21 — Visual / interaction polish (blur, kinetic scroll, FX)
+
+Opened **2026-10-21** from an external UI/UX review. Complements **Phase 20**
+(functional power-user work). Prefer **A → B → C**; ambient tint (§D) is stretch
+only — do not put it above IME (Phase 20 §A) or corner-mask blur.
+
+**Already landed (do not reopen as greenfield):**
+
+- Bar backdrop Gaussian blur over wallpaper (`blur.rs`, `bar.json` `blur` /
+  `blur_radius`) — CHANGELOG notes **rounded-corner masking** as deferred
+- Minimize genie + maximize wobble (`window_fx`); workspace slide (~280ms)
+- Scroll-strip focus easing via `scroll_x` → `scroll_x_target` (`metis-grid` /
+  `desk.rs`)
+- Token themes (`themes/light.json` / `dark.json`) + live `reload-theme`
+
+**Goals:** stadium-safe frost; flickable scroll strip; animations that never
+steal clicks; optional ambient glass only if tokens stay authoritative.
+
+**Non-goals:** replacing token themes with wallpaper-driven chrome; blocking
+input for the full FX duration “for drama”; true layer-shell framebuffer
+capture blur (Metis frosts wallpaper under the exclusive zone on purpose).
+
+### A. Backdrop blur corner / stadium mask (P0)
+
+- [ ] **Shader mask** — fragment discard / smoothstep by distance to rounded
+      rect (or stencil) so blur does not leak a sharp square behind bar stadium
+      ends and floating panels
+- [ ] **Match shell radii** — use the same corner radius as GTK CSS / bar chrome
+      (incl. notched / floating layouts)
+- [ ] **Lock-screen blur** — same mask path if the lock frost uses the bar
+      shader family
+- [ ] **Docs** — CHANGELOG; note in USER_GUIDE bar blur if behaviour changes
+
+### B. Kinetic scroll-strip momentum (P0)
+
+Focus easing already exists; touchpad/wheel **flick** does not.
+
+- [ ] **Velocity + friction** — pointer/touchpad axis and mouse wheel accumulate
+      velocity; coast `scroll_x` toward rest with configurable friction
+- [ ] **Edge bounce** — subtle elastic overshoot at strip bounds (honour
+      `window_animations` / VM compatibility off-switch)
+- [ ] **Coexist with focus ease** — flick and Super/focus target animation must
+      not fight; cancel or blend cleanly
+- [ ] **Config** — optional `desk.json` / `input.json` knobs (friction, bounce);
+      defaults feel good with zero Settings work
+- [ ] **Docs** — USER_GUIDE tiling / scroll layout; CHANGELOG
+
+### C. Input-passthrough during window FX (P1)
+
+- [ ] **Genie / minimize** — while `MinimizeGenieFx` runs, hit-test as if the
+      window were already gone (or bounds follow the clip rect) so clicks pass
+      through to windows below; finish still calls `minimize_window_now`
+- [ ] **Workspace slide** — during `WorkspaceSlideFx`, do not leave stale full
+      rects stealing clicks on the outgoing desk
+- [ ] **Wobble** — maximize wobble must not restart forever or block drag after
+      unmaximize (partially fixed 2026-07; audit residual grab edge cases)
+- [ ] **Tests / QA** — click-through during minimize; no stuck grab after FX
+
+### D. Ambient wallpaper tint (P2 — stretch)
+
+Token themes stay source of truth. Ambient is a **subtle lift**, not a theme
+engine.
+
+- [ ] **Sampler** — downsample wallpaper (or bar blur source) under Control
+      Center / Notification Center / optional bar; extract rough luminance +
+      dominant hue
+- [ ] **Inject 5–10%** into frosted panel CSS or a compositor sheet tint —
+      clamp so light/dark preference and contrast remain readable
+- [ ] **Hybrid / Multi** — no extra full-frame readbacks on the hot path; fail
+      soft to tokens-only
+- [ ] **Kill-switch** — `bar.json` / theme pref or env to disable ambient
+- [ ] **Docs** — USER_GUIDE theming; CHANGELOG
+
+### E. Explicitly deferred / rejected
+
+- Wallpaper-driven replacement of `themes/*.json`
+- True `wlr-layer-shell` backdrop blur via framebuffer copy (coordinate hazards;
+  wallpaper sample is intentional)
+- Mandatory long FX that block the event loop or defer all input until done
+- Per-frame CPU color-histogram of the whole desktop
+
+**Suggested order:** **A** (corner mask) → **B** (kinetic strip) → **C**
+(passthrough FX) → **D** only after 20/21 P0s feel done.
+
+**Dependencies:** Phase 1 bar blur; Phase 3 scroll desks; `window_fx`; hybrid
+Multi blur path; honour `window_animations` / graphics compatibility mode.
+
+---
+
 ## Config
 
 Config lives under `~/.config/metis/`. Written on first run: `bar.json`,
@@ -2204,7 +2401,7 @@ recent hosts; no passwords).
 | `screenshot.json` | *(Phase 12)* Native screenshot defaults: mode, pointer, delay, after-capture, save dir |
 | `input.json` | Mouse, touchpad, and keyboard settings (compositor live-reload) |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action |
-| `outputs.json` | Per-output scale, enabled, layout, saved video mode, night-light prefs |
+| `outputs.json` | Per-output scale, enabled, layout, saved video mode, night-light prefs; *(Phase 20 §C)* topology profiles by EDID when added |
 
 ### `bar.json` (defaults)
 
@@ -2287,7 +2484,7 @@ recent hosts; no passwords).
 | `bar_border.color` | Stroke color (`#rrggbb`) when `mode: solid` |
 | `bar_border.gradient` | Stops (`#rrggbb`), along the bar's long axis, when `mode: gradient` |
 | `bar_border.width_px` | Stroke thickness in pixels (0 disables the border) |
-| `blur` | Enable the compositor Gaussian backdrop blur behind the bar |
+| `blur` | Enable the compositor Gaussian backdrop blur behind the bar; *(Phase 21 §A)* stadium corner mask |
 | `blur_radius` | Blur strength in pixels (1–64) when `blur` is on |
 | `widgets` | Ordered list; `spacer` pushes following widgets apart. Includes `tasks` (the running-apps dock) |
 | `clock.time_format` / `date_format` | `chrono` format strings |

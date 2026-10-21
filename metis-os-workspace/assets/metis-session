@@ -50,6 +50,23 @@ export XDG_DATA_DIRS="${XDG_DATA_HOME:-$HOME/.local/share}:/usr/local/share:/usr
 metis_add_data_dir "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak/exports/share"
 metis_add_data_dir "/var/lib/flatpak/exports/share"
 metis_add_data_dir "/var/lib/snapd/desktop"
+# Prepend Metis share so dbus-1/services/org.freedesktop.secrets.service under
+# …/metis/ wins over gnome-keyring's system copy without replacing that file.
+# Packaging may inject an extra prepend (Nix store path) at the marker below.
+metis_prepend_data_dir() {
+    local dir="$1"
+    [[ -d "$dir" ]] || return 0
+    case ":${XDG_DATA_DIRS:-}:" in
+        *":$dir:"*) : ;;
+        *) XDG_DATA_DIRS="$dir${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}" ;;
+    esac
+}
+if [[ -n "${METIS_SHARE_DIR:-}" ]]; then
+    metis_prepend_data_dir "$METIS_SHARE_DIR"
+fi
+: # metis-share-dirs
+metis_prepend_data_dir "/usr/local/share/metis"
+metis_prepend_data_dir "/usr/share/metis"
 export XDG_DATA_DIRS
 
 # GTK shell: prefer the Wayland backend.

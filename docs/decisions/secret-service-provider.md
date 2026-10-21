@@ -2,7 +2,7 @@
 
 **Status:** accepted  
 **Date:** 2026-10-07  
-**Updated:** 2026-10-20  
+**Updated:** 2026-10-21  
 **Related:** [`metis-secrets`](../../metis-os-workspace/metis-secrets/),
 [`metis-secretsd`](../../metis-os-workspace/metis-secretsd/),
 [UBUNTU_DEV.md](../UBUNTU_DEV.md) (Keyring section)
@@ -24,6 +24,11 @@ implements `org.freedesktop.secrets` on the user bus.
 - **Default:** session start launches `metis-secretsd` when the bus name is free.
 - **Compatible:** if another provider already owns `org.freedesktop.secrets`
   (KeePassXC, KWallet, pass-secret-service, gnome-keyring, …), leave it alone.
+- **Packaging:** D-Bus activation lives at
+  `/usr/share/metis/dbus-1/services/org.freedesktop.secrets.service` (and
+  `metis-session` prepends `/usr/share/metis` to `XDG_DATA_DIRS`). Do **not**
+  install into `/usr/share/dbus-1/services/` — that path is owned by
+  `gnome-keyring` on Ubuntu/Debian and breaks package upgrades.
 - **At rest:** DEK wraps with Argon2id(login password) in `vault.wrap`; unlock via
   `org.metis.Secrets1.UnlockWithPassword` (PAM). Legacy plaintext `vault.key` is
   migrated on first unlock. Shell prompts at startup when locked.

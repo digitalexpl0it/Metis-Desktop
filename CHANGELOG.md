@@ -5,6 +5,17 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-21]
+
+### Fixed
+
+- **`.deb` upgrade vs gnome-keyring** — stop installing
+  `org.freedesktop.secrets.service` into `/usr/share/dbus-1/services/` (dpkg
+  conflict with `gnome-keyring`). Ship it under
+  `/usr/share/metis/dbus-1/services/` and prepend that tree on
+  `XDG_DATA_DIRS` in `metis-session` so activation still reaches
+  `metis-secretsd`.
+
 ## [2026-10-20]
 
 ### Fixed

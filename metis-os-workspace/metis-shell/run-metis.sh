@@ -386,12 +386,26 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
     fi
     if [[ -x "$REL/metis-secretsd" ]]; then
         $SUDO install -Dm755 "$REL/metis-secretsd" "$BIN_DST/metis-secretsd"
+        # Install under Metis share — not /usr/share/dbus-1/services/ (conflicts
+        # with gnome-keyring's packaged org.freedesktop.secrets.service).
+        if [[ "$BIN_DST" == /usr/local/bin ]]; then
+            SECRETS_SHARE="${METIS_SHARE_DIR:-/usr/local/share/metis}"
+        else
+            SECRETS_SHARE="${METIS_SHARE_DIR:-/usr/share/metis}"
+        fi
         $SUDO install -Dm644 "$ASSETS_DIR/org.freedesktop.secrets.service" \
-            /usr/share/dbus-1/services/org.freedesktop.secrets.service
-        # Point D-Bus activation at the installed binary path.
+            "$SECRETS_SHARE/dbus-1/services/org.freedesktop.secrets.service"
         if [[ "$BIN_DST" != /usr/bin ]]; then
             $SUDO sed -i "s|^Exec=.*|Exec=$BIN_DST/metis-secretsd|" \
-                /usr/share/dbus-1/services/org.freedesktop.secrets.service
+                "$SECRETS_SHARE/dbus-1/services/org.freedesktop.secrets.service"
+        fi
+        # Undo a prior --install-session overwrite of the system activation file.
+        if [[ -f /usr/share/dbus-1/services/org.freedesktop.secrets.service ]] \
+            && grep -q metis-secretsd \
+                /usr/share/dbus-1/services/org.freedesktop.secrets.service; then
+            $SUDO rm -f /usr/share/dbus-1/services/org.freedesktop.secrets.service
+            echo "Removed Metis overwrite of system org.freedesktop.secrets.service."
+            echo "  Restore distro copy if needed: sudo apt install --reinstall gnome-keyring"
         fi
     else
         echo "WARNING: metis-secretsd missing — rebuild the workspace to get Metis Secret Service." >&2

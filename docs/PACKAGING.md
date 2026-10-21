@@ -188,7 +188,7 @@ Nix: [`.github/workflows/nix-flake.yml`](../.github/workflows/nix-flake.yml).
 |------|------|
 | `/usr/bin/metis-{compositor,shell,settings,portal,remote,viewer,gamingd,polkit-agent,secretsd}` | Binaries |
 | `/usr/bin/metis-session` | Greeter session launcher |
-| `/usr/share/dbus-1/services/org.freedesktop.secrets.service` | Activates `metis-secretsd` |
+| `/usr/share/metis/dbus-1/services/org.freedesktop.secrets.service` | Activates `metis-secretsd` (Metis-scoped; not `/usr/share/dbus-1/services/`, which gnome-keyring owns) |
 | `/usr/share/wayland-sessions/metis.desktop` | Session entry |
 | `/usr/share/xdg-desktop-portal/…` | Portal backend |
 | `/usr/share/applications/metis-*.desktop` + icons | Settings / Viewer |

@@ -119,8 +119,8 @@ mkdir -p \
   "$STAGE/usr/share/metis/wallpapers" \
   "$STAGE/usr/share/metis/locale" \
   "$STAGE/usr/share/metis/widgets" \
+  "$STAGE/usr/share/metis/dbus-1/services" \
   "$STAGE/usr/share/polkit-1/actions" \
-  "$STAGE/usr/share/dbus-1/services" \
   "$STAGE/etc/pam.d"
 
 rel="$CARGO_TARGET_DIR/release"
@@ -129,8 +129,11 @@ for bin in metis-compositor metis-shell metis-settings metis-portal metis-remote
   install -Dm755 "$rel/$bin" "$STAGE/usr/bin/$bin"
 done
 install -Dm755 "$rel/metis-polkit-agent" "$STAGE/usr/libexec/metis-polkit-agent"
+# Metis-scoped path only — never /usr/share/dbus-1/services/ (that path is owned
+# by gnome-keyring on Ubuntu/Debian and breaks .deb upgrades). metis-session
+# prepends /usr/share/metis to XDG_DATA_DIRS so D-Bus activation still finds it.
 install -Dm644 "$ASSETS_DIR/org.freedesktop.secrets.service" \
-  "$STAGE/usr/share/dbus-1/services/org.freedesktop.secrets.service"
+  "$STAGE/usr/share/metis/dbus-1/services/org.freedesktop.secrets.service"
 
 if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
   stage_gtk4_layer_shell

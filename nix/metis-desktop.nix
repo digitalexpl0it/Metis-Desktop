@@ -116,16 +116,19 @@ rustPlatform.buildRustPackage rec {
       "$out/share/icons/hicolor/256x256/apps" \
       "$out/share/metis/wallpapers" \
       "$out/share/metis/locale" \
+      "$out/share/metis/dbus-1/services" \
       "$out/share/polkit-1/actions" \
-      "$out/share/dbus-1/services" \
       "$out/etc/pam.d"
 
     install -Dm755 "$assets/metis-session" "$out/bin/metis-session"
     if [[ -x "$out/bin/metis-secretsd" ]]; then
+      # Metis-scoped path — avoid share/dbus-1/services (conflicts with gnome-keyring).
       install -Dm644 "$assets/org.freedesktop.secrets.service" \
-        "$out/share/dbus-1/services/org.freedesktop.secrets.service"
-      substituteInPlace "$out/share/dbus-1/services/org.freedesktop.secrets.service" \
+        "$out/share/metis/dbus-1/services/org.freedesktop.secrets.service"
+      substituteInPlace "$out/share/metis/dbus-1/services/org.freedesktop.secrets.service" \
         --replace-fail "Exec=/usr/bin/metis-secretsd" "Exec=$out/bin/metis-secretsd"
+      substituteInPlace "$out/bin/metis-session" \
+        --replace-fail ": # metis-share-dirs" "metis_prepend_data_dir \"$out/share/metis\""
     fi
     install -Dm644 "$assets/metis.desktop" "$out/share/wayland-sessions/metis.desktop"
     install -Dm644 "$assets/metis.portal" "$out/share/xdg-desktop-portal/portals/metis.portal"

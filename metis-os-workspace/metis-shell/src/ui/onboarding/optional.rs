@@ -37,6 +37,10 @@ fn secret_service_available() -> bool {
         || binary_on_path("kwalletd6")
         || binary_on_path("kwalletd5")
         || binary_on_path("gnome-keyring-daemon")
+        || Path::new("/usr/share/metis/dbus-1/services/org.freedesktop.secrets.service").exists()
+        || Path::new("/usr/local/share/metis/dbus-1/services/org.freedesktop.secrets.service")
+            .exists()
+        // Distro gnome-keyring (and legacy Metis installs) still use the system path.
         || Path::new("/usr/share/dbus-1/services/org.freedesktop.secrets.service").exists()
         || Path::new("/usr/local/share/dbus-1/services/org.freedesktop.secrets.service").exists()
 }
