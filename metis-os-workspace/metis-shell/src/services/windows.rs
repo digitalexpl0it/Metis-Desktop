@@ -16,6 +16,8 @@ pub struct WindowsSnapshot {
     pub focused: Option<u32>,
     /// Most-recently-focused window ids (front = most recent).
     pub focus_mru: Vec<u32>,
+    /// Compositor scratchpad stash size (hidden + shown).
+    pub scratchpad_count: u32,
 }
 
 thread_local! {
@@ -67,6 +69,11 @@ fn fire_refresh() {
 /// Current snapshot of known windows.
 pub fn snapshot() -> WindowsSnapshot {
     STORE.with(|s| s.borrow().clone())
+}
+
+/// Number of windows in the compositor scratchpad stash.
+pub fn scratchpad_count() -> u32 {
+    STORE.with(|s| s.borrow().scratchpad_count)
 }
 
 fn note_focus_mru(mru: &mut Vec<u32>, id: u32) {
@@ -194,7 +201,8 @@ pub fn apply_event(evt: &CompositorEvent) {
         }
         CompositorEvent::WindowClosed { id }
         | CompositorEvent::WindowFocused { id }
-        | CompositorEvent::WindowMinimized { id, .. } => {
+        | CompositorEvent::WindowMinimized { id, .. }
+        | CompositorEvent::WindowScratchpad { id, .. } => {
             tracing::info!(id = *id, "windows: applying window event");
         }
         _ => {}
@@ -219,6 +227,7 @@ pub fn apply_event(evt: &CompositorEvent) {
                         rect: *suggested_rect,
                         fullscreen: false,
                         minimized: false,
+                        scratchpad: false,
                         focused: false,
                         output: String::new(),
                         workspace: 0,
@@ -273,6 +282,27 @@ pub fn apply_event(evt: &CompositorEvent) {
                     false
                 }
             }
+            CompositorEvent::WindowScratchpad { id, scratchpad } => {
+                if let Some(w) = store.windows.iter_mut().find(|w| w.id == *id) {
+                    if w.scratchpad != *scratchpad {
+                        w.scratchpad = *scratchpad;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    // Hidden (or not yet listed) — reconcile after this fold.
+                    false
+                }
+            }
+            CompositorEvent::ScratchpadChanged { count } => {
+                if store.scratchpad_count != *count {
+                    store.scratchpad_count = *count;
+                    true
+                } else {
+                    false
+                }
+            }
             CompositorEvent::WindowFullscreen {
                 id,
                 fullscreen,
@@ -304,7 +334,15 @@ pub fn apply_event(evt: &CompositorEvent) {
         }
         _ => {}
     }
-    if changed {
+    // Scratchpad show/hide remaps membership; ListWindows is authoritative for
+    // which stash members are visible (hidden ones are omitted).
+    let needs_reconcile = matches!(
+        evt,
+        CompositorEvent::WindowScratchpad { .. } | CompositorEvent::ScratchpadChanged { .. }
+    );
+    if needs_reconcile {
+        reconcile_now();
+    } else if changed {
         fire_refresh();
     }
 }
@@ -327,6 +365,7 @@ mod tests {
             },
             fullscreen: false,
             minimized: false,
+            scratchpad: false,
             focused: false,
             output: output.into(),
             workspace,

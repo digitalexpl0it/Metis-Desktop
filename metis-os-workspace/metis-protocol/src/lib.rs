@@ -75,6 +75,15 @@ pub enum CompositorCommand {
         id: u32,
         minimized: bool,
     },
+    /// Toggle the global scratchpad (send focused desk window, or show/hide MRU).
+    /// Distinct from minimize: removes the window from the tiling grid.
+    ToggleScratchpad,
+    /// Send a window to the scratchpad stash (`scratchpad: true`) or pop it back
+    /// onto the desk as a floating window (`scratchpad: false`).
+    SetScratchpad {
+        id: u32,
+        scratchpad: bool,
+    },
     /// Bring a window to the foreground: unminimize (if needed), raise, and focus.
     /// Used by the taskbar to surface a background/minimized app.
     ActivateWindow {
@@ -312,6 +321,15 @@ pub enum CompositorEvent {
         id: u32,
         minimized: bool,
     },
+    /// Window entered or left the compositor scratchpad stash.
+    WindowScratchpad {
+        id: u32,
+        scratchpad: bool,
+    },
+    /// Scratchpad stash size changed (hidden + shown members).
+    ScratchpadChanged {
+        count: u32,
+    },
     /// True fullscreen on `output` — shell hides the edge bar until `visible` is true.
     EdgeBarVisible {
         output: String,
@@ -373,6 +391,9 @@ pub enum CompositorEvent {
         make: String,
         #[serde(default)]
         model: String,
+        /// EDID serial when known (empty under nested winit / missing EDID).
+        #[serde(default)]
+        serial: String,
     },
 }
 
@@ -385,6 +406,10 @@ pub struct WindowInfo {
     pub fullscreen: bool,
     #[serde(default)]
     pub minimized: bool,
+    /// Currently shown from the scratchpad stash (floating). Hidden stash members
+    /// are omitted from [`CompositorEvent::WindowList`].
+    #[serde(default)]
+    pub scratchpad: bool,
     #[serde(default)]
     pub focused: bool,
     /// Name of the output (monitor) the window is currently on (e.g. `metis-0`).
@@ -444,6 +469,9 @@ pub struct OutputInfo {
     /// EDID model when known.
     #[serde(default)]
     pub model: String,
+    /// EDID serial when known (empty under nested winit / missing EDID).
+    #[serde(default)]
+    pub serial: String,
     /// This output clones another when mirror mode is active.
     #[serde(default)]
     pub mirrored: bool,

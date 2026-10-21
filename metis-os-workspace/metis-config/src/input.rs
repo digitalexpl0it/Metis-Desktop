@@ -102,6 +102,35 @@ pub struct KeyboardConfig {
     pub num_lock: NumLockStartup,
 }
 
+/// Kinetic scroll-strip flick (Phase 21 §B). Nested under `input.json` because
+/// `desk.json` is grid membership only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScrollStripConfig {
+    /// When false, Super / empty-gap axis never pans the strip.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Exponential friction (1/s) applied each coast frame. Higher = shorter glide.
+    #[serde(default = "default_scroll_strip_friction")]
+    pub friction: f32,
+    /// Soft overshoot + spring at strip ends (ignored when window animations are off).
+    #[serde(default = "default_true")]
+    pub bounce: bool,
+}
+
+fn default_scroll_strip_friction() -> f32 {
+    4.5
+}
+
+impl Default for ScrollStripConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            friction: default_scroll_strip_friction(),
+            bounce: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct InputConfig {
     #[serde(default)]
@@ -110,6 +139,9 @@ pub struct InputConfig {
     pub touchpad: TouchpadConfig,
     #[serde(default)]
     pub keyboard: KeyboardConfig,
+    /// Scroll-workspace kinetic strip (Super+scroll / empty-gap flick).
+    #[serde(default)]
+    pub scroll_strip: ScrollStripConfig,
 }
 
 fn default_pointer_speed() -> f64 {

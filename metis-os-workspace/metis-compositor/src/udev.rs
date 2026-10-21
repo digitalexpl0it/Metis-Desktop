@@ -1018,7 +1018,8 @@ impl MetisState {
         let mode_info = crate::output_modes::drm_mode_info(drm_mode, preferred);
 
         // Persist extend + preferred mode + right-of-primary layout for first
-        // plugs; restore saved layout/mode on replug.
+        // plugs; restore saved layout/mode on replug. Topology-profile match
+        // runs after the output is mapped (see end of this function).
         let cfg = crate::output_prefs::persist_hotplug_connect(self, &name, &mode_info);
         let prefs = metis_config::output_prefs(&cfg, &name);
         let mode_id = crate::output_modes::pick_drm_mode_index(&modes, &prefs);
@@ -1028,7 +1029,7 @@ impl MetisState {
         };
         let wl_mode = WlMode::from(drm_mode);
 
-        let (make, model) = {
+        let (make, model, serial) = {
             let Some(udev) = self.udev.as_ref() else {
                 tracing::warn!(%name, "connector setup: udev state missing");
                 return;
@@ -1045,6 +1046,10 @@ impl MetisState {
                 info.as_ref()
                     .and_then(|i| i.model())
                     .unwrap_or_else(|| "Unknown".into()),
+                info.as_ref()
+                    .and_then(|i| i.serial())
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| name.clone()),
             )
         };
         let (phys_w, phys_h) = connector.size().unwrap_or((0, 0));
@@ -1056,7 +1061,7 @@ impl MetisState {
                 subpixel: Subpixel::Unknown,
                 make,
                 model,
-                serial_number: name.clone(),
+                serial_number: serial,
             },
         );
         let global = output.create_global::<MetisState>(&self.display_handle);
@@ -1212,18 +1217,22 @@ impl MetisState {
         tracing::info!(%name, ?position, "output connected");
 
         self.ensure_desk_for_output(&output);
-        let cfg = self.output_runtime.cached().clone();
-        crate::output_prefs::apply_outputs(self, &cfg);
+        // Prefer a saved dock/office topology when the connected EDID set matches;
+        // otherwise keep connector-keyed prefs from persist_hotplug_connect.
+        if !crate::output_prefs::try_apply_matching_topology_profile(self) {
+            let cfg = self.output_runtime.cached().clone();
+            crate::output_prefs::apply_outputs(self, &cfg);
+        }
         self.damaged = true;
 
-        let make = output.physical_properties().make.clone();
-        let model = output.physical_properties().model.clone();
+        let phys = output.physical_properties();
         self.event_bus
             .emit(&metis_protocol::CompositorEvent::OutputHotplug {
                 connected: true,
                 name: name.clone(),
-                make,
-                model,
+                make: phys.make,
+                model: phys.model,
+                serial: phys.serial_number,
             });
     }
 
@@ -1236,8 +1245,10 @@ impl MetisState {
         if let Some(mut surface) = removed {
             let output = surface.output.clone();
             let name = output.name();
-            let make = output.physical_properties().make.clone();
-            let model = output.physical_properties().model.clone();
+            let phys = output.physical_properties();
+            let make = phys.make.clone();
+            let model = phys.model.clone();
+            let serial = phys.serial_number.clone();
             // Remember live position/mode before unmap so the next plug restores
             // the last working arrangement (e.g. above primary after a drag).
             crate::output_prefs::persist_output_snapshot(self, &output);
@@ -1252,10 +1263,11 @@ impl MetisState {
             }
             self.space.unmap_output(&output);
             tracing::info!(output = %name, "output disconnected");
-            // Refresh wallpaper/layout for the remaining outputs without forcing
-            // a mode poke on every surviving connector.
-            let cfg = self.output_runtime.cached().clone();
-            crate::output_prefs::apply_outputs(self, &cfg);
+            // Remaining set may match a laptop-only (or other) topology profile.
+            if !crate::output_prefs::try_apply_matching_topology_profile(self) {
+                let cfg = self.output_runtime.cached().clone();
+                crate::output_prefs::apply_outputs(self, &cfg);
+            }
             // Drop cached SSD textures so the next frame rebuilds title + buttons
             // against the remaining output's GL context.
             self.decorations.clear_texture_caches();
@@ -1268,6 +1280,7 @@ impl MetisState {
                     name,
                     make,
                     model,
+                    serial,
                 });
         }
     }

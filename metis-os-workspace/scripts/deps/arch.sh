@@ -50,6 +50,11 @@ METIS_PACMAN_PACKAGES=(
   packagekit
   pipewire-pulse
   wireplumber
+  # Phase 20 §A — Wayland IME (Fcitx5 preferred).
+  fcitx5
+  fcitx5-gtk
+  fcitx5-qt
+  fcitx5-configtool
 )
 
 METIS_PACMAN_REMOTE=(

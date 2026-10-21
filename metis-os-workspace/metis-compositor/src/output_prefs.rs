@@ -463,6 +463,7 @@ pub fn output_info_for(
         enabled: active && prefs.enabled,
         make: phys.make,
         model: phys.model,
+        serial: phys.serial_number,
         mirrored: is_mirrored,
         mirror_source: is_mirror_source,
         vrr_available: crate::output_vrr::vrr_available(vrr_support),
@@ -470,4 +471,52 @@ pub fn output_info_for(
         hdr_available,
         hdr_active,
     }
+}
+
+/// After hotplug connect/disconnect settles: if the connected EDID set matches a
+/// saved topology profile, materialize it into `outputs.json` and apply.
+/// Returns true when a profile was applied (caller should skip further layout
+/// defaults that would fight the profile).
+pub fn try_apply_matching_topology_profile(state: &mut MetisState) -> bool {
+    use metis_config::{
+        load_output_profiles_config, materialize_to_outputs, output_identity,
+        save_output_profiles_config, save_outputs_config,
+    };
+    use std::collections::HashMap;
+
+    let mut profiles = load_output_profiles_config();
+    let mut connected: Vec<(String, String)> = Vec::new();
+    let mut connector_by_identity: HashMap<String, String> = HashMap::new();
+    for output in state.connected_outputs() {
+        let name = output.name();
+        let phys = output.physical_properties();
+        let identity = output_identity(&phys.make, &phys.model, &phys.serial_number, &name);
+        connector_by_identity.insert(identity.clone(), name.clone());
+        connected.push((name, identity));
+    }
+    let identities: Vec<String> = connected.iter().map(|(_, id)| id.clone()).collect();
+    let Some(profile) = profiles.find_matching_profile(&identities).cloned() else {
+        return false;
+    };
+
+    let base = state.output_runtime.cached().clone();
+    let cfg = materialize_to_outputs(&profile, &connector_by_identity, &base);
+    if let Err(err) = save_outputs_config(&cfg) {
+        tracing::warn!(%err, profile = %profile.name, "failed to write outputs.json from topology profile");
+        return false;
+    }
+    profiles.last_applied_id = Some(profile.id.clone());
+    if let Err(err) = save_output_profiles_config(&profiles) {
+        tracing::warn!(%err, "failed to update last_applied_id on topology profile");
+    }
+    state.output_runtime.reload_from_disk();
+    let cfg = state.output_runtime.cached().clone();
+    apply_outputs(state, &cfg);
+    tracing::info!(
+        profile = %profile.name,
+        id = %profile.id,
+        monitors = identities.len(),
+        "applied matching display topology profile"
+    );
+    true
 }

@@ -1118,6 +1118,11 @@ impl MetisState {
         if self.capture_overlay_active() && !self.window_is_capture_overlay(id) {
             return;
         }
+        // Scratchpad members: show (or raise) instead of re-tiling onto the desk.
+        if self.scratchpad.contains(id) {
+            self.show_scratchpad(id);
+            return;
+        }
         // Ignore Exclusive shell layers (Alt+Tab overlay) so activation is not
         // treated as a no-op while the switcher still owns the seat briefly.
         let key = self.desk_key_for_window(id);
@@ -1157,7 +1162,7 @@ impl MetisState {
         let Some(record) = self.windows.get(id).cloned() else {
             return;
         };
-        if self.windows.is_minimized(id) {
+        if self.windows.is_minimized(id) || self.scratchpad.is_hidden(id) {
             return;
         }
         if !self.window_visible_on_desktop(id) {
@@ -1241,6 +1246,18 @@ impl MetisState {
         // this guard a bulk `reposition_all_windows` (triggered when restoring a
         // single grid tile) would re-map and un-minimize *every* minimized window.
         if self.windows.is_minimized(id) {
+            return;
+        }
+        // Hidden scratchpad members stay unmapped (do not reuse minimize).
+        if self.scratchpad.is_hidden(id) {
+            if self
+                .space
+                .elements()
+                .any(|w| self.windows.id_for_window(w) == Some(id))
+            {
+                self.space.unmap_elem(&record.window);
+                self.schedule_redraw();
+            }
             return;
         }
         if !self.window_visible_on_desktop(id) {

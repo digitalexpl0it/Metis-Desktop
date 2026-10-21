@@ -56,6 +56,8 @@ pub fn command_denied_while_locked(cmd: &CompositorCommand) -> bool {
             | C::ActivateWindow { .. }
             | C::SetFullscreen { .. }
             | C::SetMinimized { .. }
+            | C::ToggleScratchpad
+            | C::SetScratchpad { .. }
             | C::MoveWindow { .. }
             | C::MoveWindowToWorkspace { .. }
             | C::MoveWindowToOutput { .. }

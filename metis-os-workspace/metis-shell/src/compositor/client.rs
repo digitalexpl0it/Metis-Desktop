@@ -57,6 +57,18 @@ pub fn set_minimized(id: u32, minimized: bool) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Send a window to the scratchpad stash, or pop it back onto the desk.
+pub fn set_scratchpad(id: u32, scratchpad: bool) -> std::io::Result<()> {
+    let _ = send_command(CompositorCommand::SetScratchpad { id, scratchpad })?;
+    Ok(())
+}
+
+/// Toggle the global scratchpad (same as Super+U).
+pub fn toggle_scratchpad() -> std::io::Result<()> {
+    let _ = send_command(CompositorCommand::ToggleScratchpad)?;
+    Ok(())
+}
+
 /// Bring a window to the foreground (restore + raise + focus).
 pub fn activate_window(id: u32) -> std::io::Result<()> {
     let _ = send_command(CompositorCommand::ActivateWindow { id })?;

@@ -410,6 +410,7 @@ impl WindowRegistry {
                 rect: r.target_rect,
                 fullscreen: r.fullscreen,
                 minimized: r.minimized,
+                scratchpad: false,
                 focused: false,
                 output: r.output.clone(),
                 workspace: r.workspace,

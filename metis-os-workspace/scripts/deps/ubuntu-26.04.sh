@@ -66,6 +66,11 @@ METIS_APT_PACKAGES=(
   pipewire
   pipewire-pulse
   wireplumber
+  # Phase 20 §A — Wayland IME (Fcitx5 preferred; engines are Suggests on .deb).
+  fcitx5
+  fcitx5-frontend-gtk4
+  fcitx5-frontend-gtk3
+  fcitx5-config-qt
 )
 
 METIS_APT_REMOTE=(

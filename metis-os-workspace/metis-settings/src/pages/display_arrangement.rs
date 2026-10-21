@@ -305,6 +305,23 @@ impl ArrangementCanvas {
         true
     }
 
+    /// Start a keep/revert trial with an already-materialized config (topology
+    /// profile Restore). Skips origin normalize so saved layout coords stay intact.
+    pub fn begin_trial_with_config(self: &Rc<Self>, new_cfg: OutputsConfig) -> bool {
+        if self.in_trial() {
+            return false;
+        }
+        let backup = load_outputs_config();
+        if let Err(err) = save_outputs_config(&new_cfg) {
+            tracing::warn!(%err, "failed to save topology profile layout");
+            return false;
+        }
+        *self.cfg.borrow_mut() = new_cfg;
+        *self.trial_backup.borrow_mut() = Some(backup);
+        self.set_pending(false);
+        true
+    }
+
     /// Write block positions into cfg with the desktop origin at (0, 0).
     fn normalize_origin_into_cfg(self: &Rc<Self>) {
         let mut blocks = self.blocks.borrow_mut();

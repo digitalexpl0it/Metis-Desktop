@@ -103,6 +103,9 @@ pub struct SessionWindowSnapshot {
     pub maximized: bool,
     #[serde(default)]
     pub minimized: bool,
+    /// Window belonged to the global scratchpad stash when the snapshot was taken.
+    #[serde(default)]
+    pub scratchpad: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -531,6 +534,7 @@ mod tests {
                 fullscreen: false,
                 maximized: false,
                 minimized: false,
+                scratchpad: false,
             }],
         };
         let json = serde_json::to_string_pretty(&snap).expect("serialize");
@@ -561,6 +565,7 @@ mod tests {
                     fullscreen: false,
                     maximized: false,
                     minimized: false,
+                    scratchpad: false,
                 },
                 SessionWindowSnapshot {
                     desktop_id: Some("../evil".into()),
@@ -574,6 +579,7 @@ mod tests {
                     fullscreen: false,
                     maximized: false,
                     minimized: false,
+                    scratchpad: false,
                 },
                 SessionWindowSnapshot {
                     desktop_id: Some("kitty.desktop".into()),
@@ -587,6 +593,7 @@ mod tests {
                     fullscreen: false,
                     maximized: false,
                     minimized: false,
+                    scratchpad: false,
                 },
             ],
         };
@@ -619,6 +626,7 @@ mod tests {
                     fullscreen: false,
                     maximized: false,
                     minimized: false,
+                    scratchpad: false,
                 },
                 SessionWindowSnapshot {
                     desktop_id: Some("b.desktop".into()),
@@ -632,6 +640,7 @@ mod tests {
                     fullscreen: false,
                     maximized: false,
                     minimized: false,
+                    scratchpad: false,
                 },
                 SessionWindowSnapshot {
                     desktop_id: Some("a.desktop".into()),
@@ -645,6 +654,7 @@ mod tests {
                     fullscreen: false,
                     maximized: false,
                     minimized: false,
+                    scratchpad: false,
                 },
             ],
         };
@@ -674,6 +684,7 @@ mod tests {
                 fullscreen: false,
                 maximized: false,
                 minimized: false,
+                scratchpad: false,
             },
             SessionWindowSnapshot {
                 desktop_id: Some("kitty.desktop".into()),
@@ -692,6 +703,7 @@ mod tests {
                 fullscreen: false,
                 maximized: false,
                 minimized: false,
+                scratchpad: false,
             },
         ];
         let mut claimed = vec![false, false];

@@ -44,6 +44,12 @@ uniform float alpha;
 varying vec2 v_coords;
 uniform vec2 tex_size;
 uniform float blur_radius;
+// Stadium / rounded-rect mask: half short-axis for bar pill; 0 disables.
+uniform float corner_radius;
+// Dest (and sample-region) size in pixels for the SDF.
+uniform vec2 rect_size;
+// Top-left of the sample region in wallpaper texel space (src.loc).
+uniform vec2 src_origin;
 
 #if defined(DEBUG_FLAGS)
 uniform float tint;
@@ -56,6 +62,15 @@ float srgb_to_linear(float c) {
         return c / 12.92;
     }
     return pow((c + 0.055) / 1.055, 2.4);
+}
+
+/// Depth inside a rounded rect (positive inside). Matches CPU `pill_depth`.
+float pill_depth(vec2 p, vec2 size, float r) {
+    vec2 half_sz = size * 0.5;
+    vec2 d = abs(p - half_sz) - (half_sz - vec2(r));
+    float outside = length(max(d, 0.0));
+    float inside = min(max(d.x, d.y), 0.0);
+    return r - (outside + inside);
 }
 
 void main() {
@@ -85,6 +100,14 @@ void main() {
 #else
     color = color * alpha;
 #endif
+
+    // Soft stadium mask so frost follows the bar pill ends (CSS border-radius 999px).
+    if (corner_radius > 0.5 && rect_size.x > 0.5 && rect_size.y > 0.5) {
+        vec2 local = v_coords * tex_size - src_origin;
+        float depth = pill_depth(local + vec2(0.5), rect_size, corner_radius);
+        float cov = smoothstep(0.0, 1.0, depth);
+        color *= cov;
+    }
 
 #if defined(DEBUG_FLAGS)
     if (tint == 1.0)
@@ -207,6 +230,9 @@ impl BlurRuntime {
                 UniformName::new("tex_size", UniformType::_2f),
                 UniformName::new("blur_radius", UniformType::_1f),
                 UniformName::new("lift_linear", UniformType::_1f),
+                UniformName::new("corner_radius", UniformType::_1f),
+                UniformName::new("rect_size", UniformType::_2f),
+                UniformName::new("src_origin", UniformType::_2f),
             ],
         ) {
             Ok(program) => {
@@ -220,6 +246,9 @@ impl BlurRuntime {
     /// Build a render element for the bar rect, or `None` if blur is unavailable.
     /// Bumps the commit counter when the rect/radius/texture changes so the
     /// damage tracker repaints only when needed.
+    ///
+    /// `rect` must already be [`Self::confine_to_pill`]'d. Applies a stadium
+    /// corner mask (`min(w,h)/2`) so frost follows the GTK pill ends.
     pub fn element(
         &mut self,
         rect: Rectangle<i32, Physical>,
@@ -231,8 +260,16 @@ impl BlurRuntime {
             return None;
         }
         let program = self.program.clone()?;
+        let corner_radius = stadium_corner_radius(rect.size);
 
-        let sig = signature(rect, self.radius, texture.tex_id(), tex_size, scene_linear);
+        let sig = signature(
+            rect,
+            self.radius,
+            corner_radius,
+            texture.tex_id(),
+            tex_size,
+            scene_linear,
+        );
         if sig != self.last_sig {
             self.last_sig = sig;
             self.commit.increment();
@@ -252,12 +289,14 @@ impl BlurRuntime {
             tex_w: tex_size.w as f32,
             tex_h: tex_size.h as f32,
             radius: self.radius,
+            corner_radius,
             lift_linear: scene_linear,
             program,
         })
     }
 
     /// Hybrid MultiRenderer blur element sampling a [`MultiTexture`] wallpaper.
+    /// Same stadium mask uniforms as [`Self::element`].
     pub fn hybrid_element(
         &mut self,
         rect: Rectangle<i32, Physical>,
@@ -269,9 +308,10 @@ impl BlurRuntime {
             return None;
         }
         let program = self.program.clone()?;
+        let corner_radius = stadium_corner_radius(rect.size);
 
         // MultiTexture has no GLES tex_id; hash size + geometry for damage.
-        let sig = signature(rect, self.radius, 0, tex_size, scene_linear);
+        let sig = signature(rect, self.radius, corner_radius, 0, tex_size, scene_linear);
         if sig != self.last_sig {
             self.last_sig = sig;
             self.commit.increment();
@@ -290,11 +330,17 @@ impl BlurRuntime {
                 src,
                 texture,
                 program,
-                vec![
-                    Uniform::new("tex_size", [tex_size.w as f32, tex_size.h as f32]),
-                    Uniform::new("blur_radius", self.radius),
-                    Uniform::new("lift_linear", if scene_linear { 1.0f32 } else { 0.0 }),
-                ],
+                blur_mask_uniforms(BlurMaskParams {
+                    tex_w: tex_size.w as f32,
+                    tex_h: tex_size.h as f32,
+                    blur_radius: self.radius,
+                    corner_radius,
+                    rect_w: rect.size.w as f32,
+                    rect_h: rect.size.h as f32,
+                    src_x: rect.loc.x as f32,
+                    src_y: rect.loc.y as f32,
+                    scene_linear,
+                }),
                 1.0,
                 smithay::backend::renderer::element::Kind::Unspecified,
             ),
@@ -338,10 +384,40 @@ impl BlurRuntime {
             tex_w: tex_size.w as f32,
             tex_h: tex_size.h as f32,
             radius,
+            // Full-output frost: no stadium mask.
+            corner_radius: 0.0,
             lift_linear: false,
             program,
         })
     }
+}
+
+/// Half the short axis — matches shell CSS `border-radius: 999px` stadium pill.
+fn stadium_corner_radius(size: Size<i32, Physical>) -> f32 {
+    0.5 * (size.w.min(size.h).max(0) as f32)
+}
+
+struct BlurMaskParams {
+    tex_w: f32,
+    tex_h: f32,
+    blur_radius: f32,
+    corner_radius: f32,
+    rect_w: f32,
+    rect_h: f32,
+    src_x: f32,
+    src_y: f32,
+    scene_linear: bool,
+}
+
+fn blur_mask_uniforms(p: BlurMaskParams) -> Vec<Uniform<'static>> {
+    vec![
+        Uniform::new("tex_size", [p.tex_w, p.tex_h]),
+        Uniform::new("blur_radius", p.blur_radius),
+        Uniform::new("lift_linear", if p.scene_linear { 1.0f32 } else { 0.0 }),
+        Uniform::new("corner_radius", p.corner_radius),
+        Uniform::new("rect_size", [p.rect_w, p.rect_h]),
+        Uniform::new("src_origin", [p.src_x, p.src_y]),
+    ]
 }
 
 fn lock_signature(
@@ -374,6 +450,7 @@ fn lock_signature(
 fn signature(
     rect: Rectangle<i32, Physical>,
     radius: f32,
+    corner_radius: f32,
     tex_id: u32,
     tex: Size<i32, Buffer>,
     scene_linear: bool,
@@ -388,6 +465,7 @@ fn signature(
     mix(rect.size.w as i64);
     mix(rect.size.h as i64);
     mix(radius.to_bits() as i64);
+    mix(corner_radius.to_bits() as i64);
     mix(tex_id as i64);
     mix(tex.w as i64);
     mix(tex.h as i64);
@@ -406,6 +484,7 @@ pub struct BlurElement {
     tex_w: f32,
     tex_h: f32,
     radius: f32,
+    corner_radius: f32,
     lift_linear: bool,
     program: GlesTexProgram,
 }
@@ -442,6 +521,17 @@ impl RenderElement<GlesRenderer> for BlurElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
+        let uniforms = blur_mask_uniforms(BlurMaskParams {
+            tex_w: self.tex_w,
+            tex_h: self.tex_h,
+            blur_radius: self.radius,
+            corner_radius: self.corner_radius,
+            rect_w: self.geometry.size.w as f32,
+            rect_h: self.geometry.size.h as f32,
+            src_x: self.src.loc.x as f32,
+            src_y: self.src.loc.y as f32,
+            scene_linear: self.lift_linear,
+        });
         frame.render_texture_from_to(
             &self.texture,
             src,
@@ -451,11 +541,7 @@ impl RenderElement<GlesRenderer> for BlurElement {
             Transform::Normal,
             1.0,
             Some(&self.program),
-            &[
-                Uniform::new("tex_size", [self.tex_w, self.tex_h]),
-                Uniform::new("blur_radius", self.radius),
-                Uniform::new("lift_linear", if self.lift_linear { 1.0f32 } else { 0.0 }),
-            ],
+            &uniforms,
         )
     }
 }

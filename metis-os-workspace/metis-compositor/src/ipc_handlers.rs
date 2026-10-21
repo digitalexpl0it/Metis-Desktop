@@ -85,9 +85,11 @@ impl MetisState {
                 // Use the full registry (includes minimized/unmapped). Walking
                 // `space.elements()` only sees mapped windows and previously
                 // skipped minimized ones, so shell reconcile wiped them from the
-                // task dock and the user could not restore them.
+                // task dock and the user could not restore them. Hidden scratchpad
+                // members are filtered in `annotate_window_infos`.
                 let focused = self.focused_window_id();
                 let mut windows = self.windows.list();
+                self.annotate_window_infos(&mut windows);
                 for w in &mut windows {
                     w.focused = focused == Some(w.id);
                 }
@@ -158,6 +160,20 @@ impl MetisState {
                     } else {
                         self.activate_window_by_id(id);
                     }
+                    CompositorEvent::LayoutApplied
+                }
+            }
+            CompositorCommand::ToggleScratchpad => {
+                self.toggle_scratchpad();
+                CompositorEvent::LayoutApplied
+            }
+            CompositorCommand::SetScratchpad { id, scratchpad } => {
+                if self.windows.get(id).is_none() {
+                    CompositorEvent::Error {
+                        message: format!("window {id} not found"),
+                    }
+                } else {
+                    self.set_scratchpad(id, scratchpad);
                     CompositorEvent::LayoutApplied
                 }
             }

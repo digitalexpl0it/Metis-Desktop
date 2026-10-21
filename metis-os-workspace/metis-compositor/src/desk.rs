@@ -186,6 +186,10 @@ impl MetisState {
     /// Recompute the scroll offset for an output's active workspace so the focused
     /// column is visible. When `animate` is true the viewport eases toward the
     /// target via render-time translation (no per-frame client reconfigure).
+    ///
+    /// Intentional focus changes (`animate = true`) cancel kinetic coast. While
+    /// coasting, incidental refreshes (`animate = false`) skip `desired_scroll_x`
+    /// so a flick is not yanked back to the focused column.
     fn refresh_scroll_offset(&mut self, key: &str, animate: bool) {
         let ws = self.active_workspace_for(key);
         if self.layout_kind_for(key, ws) != metis_grid::LayoutKind::Scroll {
@@ -194,6 +198,20 @@ impl MetisState {
         let zone = self.scroll_zone_for(key);
         let gutter = self.gutter_px as i32;
         if let Some(scroll) = self.desk_mut_or_default(key).scroll.get_mut(&ws) {
+            if animate {
+                scroll.clear_velocity();
+            } else if scroll.has_momentum() {
+                let max = scroll.max_scroll_x(zone, gutter);
+                if scroll.scroll_x > max {
+                    scroll.scroll_x = max;
+                }
+                if scroll.scroll_x < 0 {
+                    scroll.scroll_x = 0;
+                    scroll.clear_velocity();
+                }
+                scroll.scroll_x_target = scroll.scroll_x.clamp(0, max);
+                return;
+            }
             let target = scroll.desired_scroll_x(zone, gutter);
             scroll.set_scroll_target(target, zone, gutter);
             if !animate {
@@ -224,7 +242,7 @@ impl MetisState {
     }
 
     /// Advance scroll-strip animations on every output; returns true while any strip
-    /// is still easing toward its target.
+    /// is still easing toward its target or coasting with kinetic momentum.
     pub fn tick_scroll_animations(&mut self) -> bool {
         let now = std::time::Instant::now();
         let dt = self
@@ -233,6 +251,11 @@ impl MetisState {
             .unwrap_or(0.016);
         self.last_scroll_tick = Some(now);
 
+        let strip = self.input_runtime.cached().scroll_strip.clone();
+        let animations = crate::window_fx::animations_enabled();
+        let friction = strip.friction;
+        let bounce = strip.bounce && animations;
+
         let keys: Vec<String> = self.desks.keys().cloned().collect();
         let mut moved = false;
         for key in keys {
@@ -240,16 +263,101 @@ impl MetisState {
             if self.layout_kind_for(&key, ws) != metis_grid::LayoutKind::Scroll {
                 continue;
             }
-            if let Some(scroll) = self.desk_mut_or_default(&key).scroll.get_mut(&ws)
-                && scroll.scroll_x != scroll.scroll_x_target
-            {
-                moved |= scroll.advance_scroll_animation(dt);
+            let zone = self.scroll_zone_for(&key);
+            let gutter = self.gutter_px as i32;
+            if let Some(scroll) = self.desk_mut_or_default(&key).scroll.get_mut(&ws) {
+                let max = scroll.max_scroll_x(zone, gutter);
+                let overshot = scroll.scroll_x < 0 || scroll.scroll_x > max;
+                if scroll.has_momentum() || overshot {
+                    if animations {
+                        moved |= scroll.advance_scroll_momentum(dt, friction, bounce, zone, gutter);
+                    } else {
+                        scroll.clear_velocity();
+                        scroll.scroll_x = scroll.scroll_x.clamp(0, max);
+                        scroll.scroll_x_target = scroll.scroll_x;
+                        moved = true;
+                    }
+                } else if scroll.scroll_x != scroll.scroll_x_target {
+                    moved |= scroll.advance_scroll_animation(dt);
+                }
             }
         }
         if moved {
             self.request_redraw();
         }
         moved
+    }
+
+    /// Pan the active scroll strip under the pointer by a pointer-axis delta.
+    /// Returns `true` when the event was consumed (caller must not forward axis).
+    pub fn apply_scroll_strip_axis(&mut self, dx_px: f32) -> bool {
+        let strip = self.input_runtime.cached().scroll_strip.clone();
+        if !strip.enabled || !dx_px.is_finite() {
+            return false;
+        }
+        let key = self
+            .output_under_pointer()
+            .map(|o| o.name())
+            .unwrap_or_else(|| self.primary_key());
+        let ws = self.active_workspace_for(&key);
+        if self.layout_kind_for(&key, ws) != metis_grid::LayoutKind::Scroll {
+            return false;
+        }
+        let zone = self.scroll_zone_for(&key);
+        let gutter = self.gutter_px as i32;
+        let coast = crate::window_fx::animations_enabled();
+        let Some(scroll) = self.desk_mut_or_default(&key).scroll.get_mut(&ws) else {
+            return false;
+        };
+        // Zero-delta finger-stop: keep coasting; still swallow so clients do not
+        // see a dangling stop for frames we already consumed.
+        if dx_px.abs() >= f32::EPSILON {
+            scroll.apply_scroll_impulse(dx_px, zone, gutter, coast);
+        }
+        self.damaged = true;
+        self.request_redraw();
+        true
+    }
+
+    /// Steal PointerAxis for the scroll strip when Super is held or the pointer
+    /// is over empty strip gap / wallpaper (not a client window). Maps H+V into
+    /// one horizontal delta. Returns `true` when consumed.
+    pub fn try_scroll_strip_axis(&mut self, horizontal: f32, vertical: f32) -> bool {
+        if !self.input_runtime.cached().scroll_strip.enabled {
+            return false;
+        }
+        let key = self
+            .output_under_pointer()
+            .map(|o| o.name())
+            .unwrap_or_else(|| self.primary_key());
+        let ws = self.active_workspace_for(&key);
+        if self.layout_kind_for(&key, ws) != metis_grid::LayoutKind::Scroll {
+            return false;
+        }
+
+        let super_held = self
+            .seat
+            .get_keyboard()
+            .is_some_and(|k| k.modifier_state().logo);
+
+        let loc = self
+            .seat
+            .get_pointer()
+            .map(|p| p.current_location())
+            .unwrap_or_else(|| Point::from((0.0, 0.0)));
+        let hit = self.classify_hit(loc.x as i32, loc.y as i32);
+        let empty_gap = matches!(
+            hit,
+            crate::desk_input::DeskHit::Empty | crate::desk_input::DeskHit::Gutter
+        );
+
+        if !super_held && !empty_gap {
+            return false;
+        }
+
+        // Combined H+V so a vertical two-finger flick on empty desk pans the strip.
+        let dx = horizontal + vertical;
+        self.apply_scroll_strip_axis(dx)
     }
 
     /// Advance auto-hide titlebar slide animations. Returns true while a reveal or
@@ -400,6 +508,9 @@ impl MetisState {
     /// be mapped (minimized windows are handled separately). Leaving windows in
     /// an in-flight workspace slide stay mapped until the animation ends.
     pub(crate) fn window_visible_on_desktop(&self, id: u32) -> bool {
+        if self.scratchpad.is_hidden(id) {
+            return false;
+        }
         let key = self.desk_key_for_window(id);
         let ws = self.windows.workspace(id).unwrap_or(1);
         if ws == self.active_workspace_for(&key) {
@@ -1290,6 +1401,10 @@ impl MetisState {
 
     /// Reserve a grid slot as soon as an app registers (before its first buffer commit).
     pub(crate) fn ensure_app_tile_for_window(&mut self, id: u32) {
+        // Scratchpad windows never own a desk tile (shown members float).
+        if self.scratchpad.contains(id) {
+            return;
+        }
         let key = self.desk_key_for_window(id);
         let ws = self.windows.workspace(id).unwrap_or(1);
         if self.layout_kind_for(&key, ws) == metis_grid::LayoutKind::Free {

@@ -177,6 +177,7 @@ fn attach_system_events(event_rx: Receiver<SystemEvent>) {
                         name,
                         make,
                         model,
+                        ..
                     } = &evt
                     {
                         crate::ui::bar::notify_display_hotplug(*connected, name, make, model);

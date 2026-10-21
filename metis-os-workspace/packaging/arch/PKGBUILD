@@ -41,6 +41,10 @@ depends=(
   bluez
   packagekit
   polkit
+  fcitx5
+  fcitx5-gtk
+  fcitx5-qt
+  fcitx5-configtool
 )
 optdepends=(
   'gnome-keyring: alternate Secret Service provider (Metis ships metis-secretsd)'
@@ -56,6 +60,10 @@ optdepends=(
   'libva-mesa-driver: Metis Remote VAAPI encode on AMD GPUs'
   'flatpak: Flatpak app support'
   'fwupd: firmware updates in the Metis updater'
+  'ibus: alternate input method framework'
+  'fcitx5-chinese-addons: Chinese input engines for Fcitx5'
+  'fcitx5-mozc: Japanese Mozc engine for Fcitx5'
+  'fcitx5-anthy: Japanese Anthy engine for Fcitx5'
 )
 makedepends=(
   'rust>=1.95'

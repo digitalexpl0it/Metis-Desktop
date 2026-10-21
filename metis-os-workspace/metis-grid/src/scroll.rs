@@ -53,6 +53,17 @@ impl ScrollColumn {
     }
 }
 
+/// Rest threshold (px/s) below which kinetic coast stops.
+pub const SCROLL_VELOCITY_REST_EPS: f32 = 12.0;
+/// Cap on kinetic velocity so a single wild flick cannot runaway.
+const SCROLL_VELOCITY_MAX: f32 = 14_000.0;
+/// Scale from per-event pixel delta → velocity impulse (treat ~1/60s sample).
+const SCROLL_IMPULSE_SCALE: f32 = 55.0;
+/// Soft rubber-band overshoot limit while bouncing (px).
+const SCROLL_MAX_OVERSHOOT_PX: f32 = 96.0;
+/// Spring strength pulling an overshot viewport back inside bounds (1/s²).
+const SCROLL_BOUNCE_SPRING: f32 = 22.0;
+
 /// The scroll-strip arrangement for one workspace.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScrollState {
@@ -66,6 +77,9 @@ pub struct ScrollState {
     /// Target viewport offset; updated by focus changes and clamped to the strip.
     #[serde(default)]
     pub scroll_x_target: i32,
+    /// Kinetic coast velocity (px/s). Runtime-only — not persisted in session.
+    #[serde(skip)]
+    pub velocity_px_s: f32,
 }
 
 impl ScrollState {
@@ -358,8 +372,11 @@ impl ScrollState {
 
     /// Advance the animated viewport toward [`Self::scroll_x_target`]. Returns
     /// `true` when `scroll_x` moved this step.
+    ///
+    /// Focus-ease only — skip while [`Self::has_momentum`] is true so kinetic
+    /// coast owns the viewport.
     pub fn advance_scroll_animation(&mut self, dt_secs: f32) -> bool {
-        if self.scroll_x == self.scroll_x_target {
+        if self.has_momentum() || self.scroll_x == self.scroll_x_target {
             return false;
         }
         const SPEED_PX_PER_SEC: f32 = 3200.0;
@@ -378,6 +395,121 @@ impl ScrollState {
     /// Snap the viewport to the target immediately (no animation).
     pub fn snap_scroll(&mut self) {
         self.scroll_x = self.scroll_x_target;
+        self.clear_velocity();
+    }
+
+    /// True while kinetic coast (or overshoot spring) is still driving the viewport.
+    pub fn has_momentum(&self) -> bool {
+        self.velocity_px_s.abs() > SCROLL_VELOCITY_REST_EPS
+    }
+
+    /// Drop kinetic velocity (focus ease / keybind / animations-off path).
+    pub fn clear_velocity(&mut self) {
+        self.velocity_px_s = 0.0;
+    }
+
+    /// Apply a pointer-axis pixel delta to the strip and accumulate coast velocity.
+    ///
+    /// Keeps `scroll_x_target` glued to `scroll_x` so focus-ease does not fight
+    /// the flick. When `coast` is false (animations off), clamps hard and clears
+    /// velocity.
+    pub fn apply_scroll_impulse(&mut self, dx_px: f32, zone: PixelRect, gutter: i32, coast: bool) {
+        if !dx_px.is_finite() || dx_px.abs() < f32::EPSILON {
+            return;
+        }
+        let max = self.max_scroll_x(zone, gutter);
+        if !coast {
+            self.clear_velocity();
+            let next = (self.scroll_x as f32 + dx_px).round() as i32;
+            self.scroll_x = next.clamp(0, max);
+            self.scroll_x_target = self.scroll_x;
+            return;
+        }
+
+        self.velocity_px_s = (self.velocity_px_s + dx_px * SCROLL_IMPULSE_SCALE)
+            .clamp(-SCROLL_VELOCITY_MAX, SCROLL_VELOCITY_MAX);
+
+        let next = self.scroll_x as f32 + dx_px;
+        // Soft rubber during active flick; hard clamp only past overshoot.
+        let lo = -SCROLL_MAX_OVERSHOOT_PX;
+        let hi = max as f32 + SCROLL_MAX_OVERSHOOT_PX;
+        self.scroll_x = next.clamp(lo, hi).round() as i32;
+        self.scroll_x_target = self.scroll_x.clamp(0, max);
+    }
+
+    /// Integrate kinetic velocity with exponential friction (and optional bounce).
+    ///
+    /// Returns `true` when the viewport moved this step. When `bounce` is false,
+    /// hard-clamps at strip ends and kills outward velocity.
+    pub fn advance_scroll_momentum(
+        &mut self,
+        dt_secs: f32,
+        friction: f32,
+        bounce: bool,
+        zone: PixelRect,
+        gutter: i32,
+    ) -> bool {
+        let dt = dt_secs.clamp(0.0, 0.05);
+        if dt <= 0.0 {
+            return false;
+        }
+        let max = self.max_scroll_x(zone, gutter);
+        let max_f = max as f32;
+        let before = self.scroll_x;
+
+        // Spring pull when overshot (even if velocity has nearly died).
+        let x = self.scroll_x as f32;
+        if bounce {
+            if x < 0.0 {
+                self.velocity_px_s += -x * SCROLL_BOUNCE_SPRING * dt;
+            } else if x > max_f {
+                self.velocity_px_s += (max_f - x) * SCROLL_BOUNCE_SPRING * dt;
+            }
+        }
+
+        if !self.has_momentum() && self.scroll_x >= 0 && self.scroll_x <= max {
+            // Snap target to visual when coast ends inside bounds.
+            self.scroll_x_target = self.scroll_x;
+            self.clear_velocity();
+            return false;
+        }
+
+        let friction = friction.max(0.0);
+        self.velocity_px_s *= (-friction * dt).exp();
+
+        let mut next = x + self.velocity_px_s * dt;
+        if bounce {
+            let lo = -SCROLL_MAX_OVERSHOOT_PX;
+            let hi = max_f + SCROLL_MAX_OVERSHOOT_PX;
+            if next < lo {
+                next = lo;
+                self.velocity_px_s = self.velocity_px_s.max(0.0);
+            } else if next > hi {
+                next = hi;
+                self.velocity_px_s = self.velocity_px_s.min(0.0);
+            }
+            // Settle when nearly inside and slow.
+            if next >= 0.0 && next <= max_f && self.velocity_px_s.abs() <= SCROLL_VELOCITY_REST_EPS
+            {
+                next = next.clamp(0.0, max_f);
+                self.clear_velocity();
+            }
+        } else {
+            if next < 0.0 {
+                next = 0.0;
+                self.velocity_px_s = 0.0;
+            } else if next > max_f {
+                next = max_f;
+                self.velocity_px_s = 0.0;
+            } else if self.velocity_px_s.abs() <= SCROLL_VELOCITY_REST_EPS {
+                self.clear_velocity();
+            }
+        }
+
+        self.scroll_x = next.round() as i32;
+        // Clients stay mapped at the clamped target; visual uses scroll_x (nudge).
+        self.scroll_x_target = self.scroll_x.clamp(0, max);
+        self.scroll_x != before || self.has_momentum()
     }
 
     /// Set the scroll target, clamped to the strip width for `zone`.
@@ -386,6 +518,9 @@ impl ScrollState {
         self.scroll_x_target = target.clamp(0, max);
         if self.scroll_x > max {
             self.scroll_x = max;
+        }
+        if self.scroll_x < 0 {
+            self.scroll_x = 0;
         }
     }
 
@@ -597,5 +732,77 @@ mod tests {
         let placed = s.layout_placed(ZONE, 10);
         assert_eq!(visual[0].1.x, 0);
         assert_eq!(placed[0].1.x, -200);
+    }
+
+    fn wide_strip() -> ScrollState {
+        let mut s = ScrollState::new();
+        for id in 1..=5 {
+            s.insert_window_after_focus(id);
+            s.columns[s.focus_col].width_frac = HALF_COL_FRAC;
+        }
+        s.scroll_x = 400;
+        s.scroll_x_target = 400;
+        s
+    }
+
+    #[test]
+    fn impulse_moves_viewport_and_builds_velocity() {
+        let mut s = wide_strip();
+        let before = s.scroll_x;
+        s.apply_scroll_impulse(40.0, ZONE, 10, true);
+        assert!(s.scroll_x > before);
+        assert!(s.has_momentum());
+        assert_eq!(
+            s.scroll_x_target,
+            s.scroll_x.clamp(0, s.max_scroll_x(ZONE, 10))
+        );
+    }
+
+    #[test]
+    fn impulse_without_coast_clamps_and_clears_velocity() {
+        let mut s = wide_strip();
+        s.velocity_px_s = 500.0;
+        s.apply_scroll_impulse(-10_000.0, ZONE, 10, false);
+        assert_eq!(s.scroll_x, 0);
+        assert_eq!(s.scroll_x_target, 0);
+        assert!(!s.has_momentum());
+    }
+
+    #[test]
+    fn momentum_friction_decays_to_rest() {
+        let mut s = wide_strip();
+        s.apply_scroll_impulse(80.0, ZONE, 10, true);
+        assert!(s.has_momentum());
+        for _ in 0..240 {
+            s.advance_scroll_momentum(1.0 / 60.0, 4.5, false, ZONE, 10);
+        }
+        assert!(!s.has_momentum());
+        assert!(s.scroll_x >= 0);
+        assert!(s.scroll_x <= s.max_scroll_x(ZONE, 10));
+    }
+
+    #[test]
+    fn momentum_hard_clamp_kills_outward_velocity() {
+        let mut s = wide_strip();
+        s.scroll_x = 0;
+        s.scroll_x_target = 0;
+        s.velocity_px_s = -3_000.0;
+        s.advance_scroll_momentum(1.0 / 60.0, 4.5, false, ZONE, 10);
+        assert_eq!(s.scroll_x, 0);
+        assert!(!s.has_momentum());
+    }
+
+    #[test]
+    fn momentum_bounce_returns_inside_bounds() {
+        let mut s = wide_strip();
+        s.scroll_x = -40;
+        s.scroll_x_target = 0;
+        s.velocity_px_s = -200.0;
+        for _ in 0..180 {
+            s.advance_scroll_momentum(1.0 / 60.0, 4.5, true, ZONE, 10);
+        }
+        assert!(s.scroll_x >= 0);
+        assert!(s.scroll_x <= s.max_scroll_x(ZONE, 10));
+        assert!(!s.has_momentum());
     }
 }

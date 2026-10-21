@@ -2205,27 +2205,29 @@ Layout switching via `input.json` / xkb is **not** enough for Fcitx5 / IBus.
 - [x] **IME popup positioning** (2026-10-21) — track `PopupKind::InputMethod`;
       anchor under caret (`text_input_rectangle` bottom edge); parent geometry
       from focused window or layer-shell surface
-- [ ] **Session env** — optionally set `GTK_IM_MODULE` / `QT_IM_MODULE` /
-      `XMODIFIERS` from `metis-session` when Fcitx5/IBus is detected; no bundling
-      of IM frameworks in Metis packages *(USER_GUIDE documents manual env)*
+- [x] **Session env + packaging** (2026-10-21) — `.deb` **Recommends** `fcitx5`
+      (+ GTK3/4 + Qt frontends + config-qt); Arch **depends** on fcitx5 stack;
+      `scripts/deps/` aligned. `metis-session` starts Fcitx5 (IBus fallback)
+      and sets `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS` when unset.
+      Language engines / IBus remain Suggests / optdepends (not bundled).
 - [ ] **QA** — Fcitx5 + IBus smoke on Ubuntu/Debian/Arch: CJK commit, Arabic /
       Indic, Electron/GTK/Firefox under Metis Wayland (not XWayland-only)
-- [x] **Docs** (2026-10-21) — USER_GUIDE Input / IME; CHANGELOG
+- [x] **Docs** (2026-10-21) — USER_GUIDE Input / IME; CHANGELOG; PACKAGING
 
 ### B. Scratchpads (P1)
 
 Bar layer-shell dropdowns ≠ window scratchpads.
 
-- [ ] **Compositor scratchpad set** — stash / restore windows off the tiling /
-      scroll grid without breaking desk alignment (`metis-grid` + desk stash)
-- [ ] **Global hotkey** — default chord (e.g. Super+U) + `keybinds.json` action;
-      Settings → Keyboard list entry
-- [ ] **Shell / Menu** — optional “Send to scratchpad” / “Show scratchpad” in
-      window chrome or Task View; indicate hidden scratchpad count lightly
-- [ ] **Config** — `desk.json` or sibling file: which window ids / app rules
-      prefer scratchpad; survive compositor restart when session restore (M1)
-      is on
-- [ ] **Docs** — USER_GUIDE tiling section + CHANGELOG
+- [x] **Compositor scratchpad set** (2026-10-21) — `ScratchpadState`: send/show/hide
+      /toggle; `remove_app_tile_everywhere` + unmap without minimize/genie
+- [x] **Global hotkey** (2026-10-21) — `KeybindAction::ToggleScratchpad` default
+      Super+U; Settings → Keyboard via `KeybindAction::all()`; IPC
+      `ToggleScratchpad` / `SetScratchpad`
+- [x] **Shell / Menu** (2026-10-21) — Task View card + dock context menu “Send to
+      scratchpad”; shelf count when stash non-empty
+- [x] **Config** (2026-10-21) — sibling `scratchpad.json` `prefer_app_ids`;
+      `SessionWindowSnapshot.scratchpad` for crash restore
+- [x] **Docs** (2026-10-21) — USER_GUIDE shortcuts / Scratchpad + CHANGELOG
 
 ### C. Display topology profiles (P1)
 
@@ -2233,16 +2235,14 @@ Bar layer-shell dropdowns ≠ window scratchpads.
 `layout_y`, and hotplug re-applies by **connector name**. Missing: remember
 **home dock vs office** when the same laptop sees different EDID sets.
 
-- [ ] **Stable identity** — key profiles by EDID serial / make+model+serial
-      (fallback to connector name when EDID missing)
-- [ ] **Profile store** — e.g. `outputs.json` `profiles[]` or
-      `output-profiles.json`: named topology → output prefs + layout
-- [ ] **Auto-apply on hotplug** — when the connected set matches a saved
-      profile, apply without forcing the keep/revert dialog every time (still
-      offer manual Save / Restore in Settings → Display)
-- [ ] **Settings UX** — “Save this setup as…” / list profiles / delete; show
-      which profile is active
-- [ ] **Docs** — USER_GUIDE Display docking; CHANGELOG
+- [x] **Stable identity** (2026-10-21) — EDID `make|model|serial` via
+      `output_identity`; `OutputInfo.serial` + hotplug serial; connector fallback
+- [x] **Profile store** (2026-10-21) — sibling `output-profiles.json`
+- [x] **Auto-apply on hotplug** (2026-10-21) — exact identity-set match →
+      materialize into `outputs.json` + `apply_outputs` (no keep/revert)
+- [x] **Settings UX** (2026-10-21) — Display setups: Save as / Restore (trial) /
+      Delete + active chip
+- [x] **Docs** (2026-10-21) — USER_GUIDE Display docking + CHANGELOG
 
 ### D. Handheld / power deepen (P2 — stretch)
 
@@ -2288,10 +2288,10 @@ only — do not put it above IME (Phase 20 §A) or corner-mask blur.
 **Already landed (do not reopen as greenfield):**
 
 - Bar backdrop Gaussian blur over wallpaper (`blur.rs`, `bar.json` `blur` /
-  `blur_radius`) — CHANGELOG notes **rounded-corner masking** as deferred
+  `blur_radius`) — **§A stadium SDF mask landed** 2026-10-21
 - Minimize genie + maximize wobble (`window_fx`); workspace slide (~280ms)
 - Scroll-strip focus easing via `scroll_x` → `scroll_x_target` (`metis-grid` /
-  `desk.rs`)
+  `desk.rs`) — **§B kinetic Super/empty-gap flick landed** 2026-10-21
 - Token themes (`themes/light.json` / `dark.json`) + live `reload-theme`
 
 **Goals:** stadium-safe frost; flickable scroll strip; animations that never
@@ -2303,28 +2303,28 @@ capture blur (Metis frosts wallpaper under the exclusive zone on purpose).
 
 ### A. Backdrop blur corner / stadium mask (P0)
 
-- [ ] **Shader mask** — fragment discard / smoothstep by distance to rounded
-      rect (or stencil) so blur does not leak a sharp square behind bar stadium
-      ends and floating panels
-- [ ] **Match shell radii** — use the same corner radius as GTK CSS / bar chrome
-      (incl. notched / floating layouts)
-- [ ] **Lock-screen blur** — same mask path if the lock frost uses the bar
-      shader family
-- [ ] **Docs** — CHANGELOG; note in USER_GUIDE bar blur if behaviour changes
+- [x] **Shader mask** (2026-10-21) — fragment SDF `smoothstep` in `BLUR_SHADER`
+      so frost does not leak a sharp square behind bar stadium ends
+- [x] **Match shell radii** (2026-10-21) — `min(w,h)/2` after `confine_to_pill`
+      (CSS `border-radius: 999px` stadium)
+- [x] **Lock-screen blur** (2026-10-21) — same shader; full-output frost passes
+      `corner_radius = 0` (mask off)
+- [x] **Docs** (2026-10-21) — CHANGELOG; USER_GUIDE `blur` / `blur_radius` note
 
 ### B. Kinetic scroll-strip momentum (P0)
 
-Focus easing already exists; touchpad/wheel **flick** does not.
+Focus easing already exists; touchpad/wheel **flick** landed 2026-10-21.
 
-- [ ] **Velocity + friction** — pointer/touchpad axis and mouse wheel accumulate
-      velocity; coast `scroll_x` toward rest with configurable friction
-- [ ] **Edge bounce** — subtle elastic overshoot at strip bounds (honour
-      `window_animations` / VM compatibility off-switch)
-- [ ] **Coexist with focus ease** — flick and Super/focus target animation must
-      not fight; cancel or blend cleanly
-- [ ] **Config** — optional `desk.json` / `input.json` knobs (friction, bounce);
-      defaults feel good with zero Settings work
-- [ ] **Docs** — USER_GUIDE tiling / scroll layout; CHANGELOG
+- [x] **Velocity + friction** (2026-10-21) — Super+scroll or empty-gap axis
+      accumulates velocity; coast with exponential friction (`ScrollState`)
+- [x] **Edge bounce** (2026-10-21) — soft overshoot + spring; gated on
+      `window_animations` / graphics compatibility (else snap clamp)
+- [x] **Coexist with focus ease** (2026-10-21) — kinetic clears on intentional
+      focus; incidental `desired_scroll_x` skipped while coasting
+- [x] **Config** (2026-10-21) — `input.json` `scroll_strip` (`enabled`,
+      `friction`, `bounce`); defaults with no Settings UI (`desk.json` is
+      grid membership only)
+- [x] **Docs** (2026-10-21) — USER_GUIDE scrolling layout; CHANGELOG
 
 ### C. Input-passthrough during window FX (P1)
 
@@ -2399,9 +2399,11 @@ recent hosts; no passwords).
 | `gaming-flatpak.json` | *(Phase 11)* Record of applied Flatpak gaming overrides |
 | `game-rules.json` | Float / fullscreen rules for Steam/Proton games (built-in defaults if absent) |
 | `screenshot.json` | *(Phase 12)* Native screenshot defaults: mode, pointer, delay, after-capture, save dir |
-| `input.json` | Mouse, touchpad, and keyboard settings (compositor live-reload) |
+| `scratchpad.json` | *(Phase 20 §B)* Scratchpad `prefer_app_ids` (auto-stash on map); not `desk.json` |
+| `output-profiles.json` | *(Phase 20 §C)* Named EDID topology profiles; auto-apply on hotplug |
+| `input.json` | Mouse, touchpad, keyboard, scroll-strip kinetic (`scroll_strip`) (live-reload) |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action |
-| `outputs.json` | Per-output scale, enabled, layout, saved video mode, night-light prefs; *(Phase 20 §C)* topology profiles by EDID when added |
+| `outputs.json` | Per-output scale, enabled, layout, saved video mode, night-light prefs (live connector-keyed map; profiles live in `output-profiles.json`) |
 
 ### `bar.json` (defaults)
 

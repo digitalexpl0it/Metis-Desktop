@@ -53,6 +53,8 @@ pub enum KeybindAction {
     Maximize,
     Fullscreen,
     Minimize,
+    /// Send focused window to the scratchpad / show or hide the MRU stash entry.
+    ToggleScratchpad,
     ExitFullscreenStack,
     LayoutGrid,
     LayoutFree,
@@ -110,6 +112,7 @@ impl KeybindAction {
             Self::Maximize => "Maximize",
             Self::Fullscreen => "Fullscreen",
             Self::Minimize => "Minimize",
+            Self::ToggleScratchpad => "Toggle scratchpad",
             Self::ExitFullscreenStack => "Exit fullscreen / maximize / tile",
             Self::LayoutGrid => "Enable grid tiling",
             Self::LayoutFree => "Disable tiling (free desktop)",
@@ -162,6 +165,7 @@ impl KeybindAction {
             | Self::Maximize
             | Self::Fullscreen
             | Self::Minimize
+            | Self::ToggleScratchpad
             | Self::ExitFullscreenStack => KeybindGroup::Windows,
             Self::LayoutGrid | Self::LayoutFree => KeybindGroup::Layout,
             Self::Screenshot | Self::ScreenshotFull | Self::ScreenshotWindow => {
@@ -285,6 +289,7 @@ const ALL_ACTIONS: &[KeybindAction] = &[
     KeybindAction::Maximize,
     KeybindAction::Fullscreen,
     KeybindAction::Minimize,
+    KeybindAction::ToggleScratchpad,
     KeybindAction::ExitFullscreenStack,
     KeybindAction::LayoutGrid,
     KeybindAction::LayoutFree,
@@ -582,6 +587,7 @@ pub fn default_chord(action: KeybindAction, mod_key: ModKey) -> Chord {
         KeybindAction::Maximize => m(false, "F"),
         KeybindAction::Fullscreen => m(true, "F"),
         KeybindAction::Minimize => m(false, "M"),
+        KeybindAction::ToggleScratchpad => m(false, "U"),
         KeybindAction::ExitFullscreenStack => m(false, "Escape"),
         KeybindAction::LayoutGrid => m(false, "slash"),
         KeybindAction::LayoutFree => m(false, "backslash"),
@@ -694,6 +700,13 @@ mod tests {
         assert_eq!(prev.display(), "Shift+Super+Tab");
         let overview = default_chord(KeybindAction::WorkspaceOverview, ModKey::Super);
         assert_eq!(overview.display(), "Super+Tab");
+    }
+
+    #[test]
+    fn default_toggle_scratchpad_is_super_u() {
+        let chord = default_chord(KeybindAction::ToggleScratchpad, ModKey::Super);
+        assert_eq!(chord.display(), "Super+U");
+        assert!(chord.super_key && !chord.shift && chord.key == "U");
     }
 
     #[test]

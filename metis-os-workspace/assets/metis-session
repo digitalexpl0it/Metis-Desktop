@@ -105,6 +105,36 @@ export NO_AT_BRIDGE="${NO_AT_BRIDGE:-1}"
 # Default logging if the session leaves it unset.
 export RUST_LOG="${RUST_LOG:-metis_shell=debug,metis_compositor=info,warn}"
 
+# --- Input method (Fcitx5 preferred; IBus fallback) ------------------------
+# Metis advertises text-input-v3 / input-method-v2; the framework is a distro
+# package (Recommends: fcitx5). Set module env for XWayland/GTK/Qt unless the
+# user already configured them. Native Wayland clients talk IM via the
+# compositor protocols.
+metis_start_ime() {
+    if command -v fcitx5 >/dev/null 2>&1; then
+        export GTK_IM_MODULE="${GTK_IM_MODULE:-fcitx}"
+        export QT_IM_MODULE="${QT_IM_MODULE:-fcitx}"
+        export XMODIFIERS="${XMODIFIERS:-@im=fcitx}"
+        if ! pgrep -u "$(id -u)" -x fcitx5 >/dev/null 2>&1; then
+            fcitx5 -d >/dev/null 2>&1 &
+            echo "metis-session: started fcitx5" >&2
+        fi
+        return 0
+    fi
+    if command -v ibus-daemon >/dev/null 2>&1; then
+        export GTK_IM_MODULE="${GTK_IM_MODULE:-ibus}"
+        export QT_IM_MODULE="${QT_IM_MODULE:-ibus}"
+        export XMODIFIERS="${XMODIFIERS:-@im=ibus}"
+        if ! pgrep -u "$(id -u)" -x ibus-daemon >/dev/null 2>&1; then
+            ibus-daemon -drx >/dev/null 2>&1 &
+            echo "metis-session: started ibus-daemon" >&2
+        fi
+        return 0
+    fi
+    return 0
+}
+metis_start_ime
+
 # --- secret service / keyring ----------------------------------------------
 # Metis owns the default provider (`metis-secretsd` → org.freedesktop.secrets).
 # If another provider already owns the bus, leave it alone. Fallbacks are

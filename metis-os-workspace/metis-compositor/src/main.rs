@@ -49,6 +49,7 @@ mod rudp_auth_guard;
 mod rudp_guard;
 mod rudp_host;
 mod rudp_identity;
+mod scratchpad;
 mod screenshot_overlay;
 mod session_lock;
 mod session_restore;

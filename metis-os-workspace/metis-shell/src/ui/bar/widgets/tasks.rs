@@ -696,6 +696,15 @@ fn show_window_menu(row: &gtk::Button, id: u32, title: &str) {
         });
     });
 
+    let scratch = menu_item("Send to scratchpad");
+    scratch.connect_clicked(move |_| {
+        dismiss_task_popover();
+        if let Err(err) = crate::compositor::set_scratchpad(id, true) {
+            tracing::warn!(%err, id, "failed to send window to scratchpad");
+        }
+    });
+    panel.append(&scratch);
+
     let item = menu_item("Close window");
     item.connect_clicked(move |_| {
         // Close the menu and the picker behind it, then close the window.
@@ -768,6 +777,22 @@ fn attach_context_menu(btn: &gtk::Button, group: &Group) {
                 // unparent runs too late (lower priority than the timeout).
                 dismiss_task_popover();
                 toggle_taskbar_pin(&id);
+            });
+            panel.append(&item);
+        }
+
+        if !window_ids.is_empty() {
+            let item = menu_item("Send to scratchpad");
+            let popover_c = popover.clone();
+            let ids = window_ids.clone();
+            item.connect_clicked(move |_| {
+                popover_c.popdown();
+                // Stash every window in the group (multi-window apps).
+                for wid in &ids {
+                    if let Err(err) = crate::compositor::set_scratchpad(*wid, true) {
+                        tracing::warn!(%err, id = *wid, "failed to send window to scratchpad");
+                    }
+                }
             });
             panel.append(&item);
         }

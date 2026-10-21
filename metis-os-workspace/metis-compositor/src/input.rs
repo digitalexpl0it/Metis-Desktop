@@ -284,6 +284,10 @@ fn dispatch_keybind(state: &mut MetisState, action: KeybindAction) -> bool {
             }
             true
         }
+        KeybindAction::ToggleScratchpad => {
+            state.toggle_scratchpad();
+            true
+        }
         KeybindAction::Lock => {
             state.lock_session();
             true
@@ -911,6 +915,12 @@ impl MetisState {
                 let vertical_amount = event.amount(Axis::Vertical).unwrap_or_else(|| {
                     event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.
                 }) * mult;
+
+                // Phase 21 §B: Super+scroll or empty-gap flick pans the scroll
+                // strip (swallow). Over a client window without Super → forward.
+                if self.try_scroll_strip_axis(horizontal_amount as f32, vertical_amount as f32) {
+                    return;
+                }
 
                 let mut frame = AxisFrame::new(event.time()).source(source);
                 if horizontal_amount != 0.0 {

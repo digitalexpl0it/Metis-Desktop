@@ -25,6 +25,8 @@ pub mod launch_tweaks;
 pub mod locale;
 pub mod lock;
 pub mod menu;
+pub mod output_identity;
+pub mod output_profiles;
 pub mod outputs;
 pub mod persist;
 pub mod power;
@@ -32,6 +34,7 @@ pub mod remote;
 pub mod reset;
 pub mod rudp;
 pub mod sanitize;
+pub mod scratchpad;
 pub mod screenshot;
 pub mod session;
 pub mod startup;
@@ -52,6 +55,15 @@ pub use icons::{
     install_icon_theme_archive, load_icons_config, remove_user_icon_theme,
     resolve_app_icon_override, resolve_brand_launcher_path, resolve_brand_settings_path,
     save_icons_config, sync_session_icon_theme_from_config,
+};
+pub use output_identity::{output_identity, topology_fingerprint};
+pub use output_profiles::{
+    OutputProfilesConfig, OutputTopologyProfile, ProfileMonitor, load_output_profiles_config,
+    materialize_to_outputs, new_profile_id, output_profiles_config_path, profile_from_live,
+    save_output_profiles_config,
+};
+pub use scratchpad::{
+    ScratchpadConfig, load_scratchpad_config, save_scratchpad_config, scratchpad_config_path,
 };
 pub use session::{
     SESSION_SNAPSHOT_VERSION, SessionConfig, SessionOutputSnapshot, SessionPixelRect,
@@ -520,7 +532,8 @@ pub use graphics::{
 };
 pub use input::{
     AccelProfile, CapsLockBehavior, ComposeKey, InputConfig, KeyboardConfig, MouseConfig,
-    NumLockStartup, TouchpadConfig, input_config_path, load_input_config, save_input_config,
+    NumLockStartup, ScrollStripConfig, TouchpadConfig, input_config_path, load_input_config,
+    save_input_config,
 };
 pub use keybinds::{
     Chord, KeybindAction, KeybindGroup, KeybindsConfig, ModKey, default_chord,

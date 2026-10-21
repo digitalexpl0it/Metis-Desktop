@@ -697,9 +697,25 @@ the switch (wallpaper stays put).
 
 Task View replaces the older separate Alt+Tab strip and workspace-overview grid.
 It is sticky (like Windows Task View): open with `Super`+`Tab`, release Super to
-use the mouse, then click or press Enter to activate.
+use the mouse, then click or press Enter to activate. Each card also has a
+**Send to scratchpad** control; the shelf shows a light stash count when
+non-empty.
 
 Keybinds and clicks act on the monitor under the pointer.
+
+### Scratchpad
+
+The scratchpad is an i3-style stash for real windows — **not** minimize. Minimize
+(`Super`+`M`) keeps a grid tile and a dock entry; the scratchpad **removes** the
+window from the tiling/scroll layout and hides it until you toggle again.
+
+- `Super`+`U` — send the focused desk window into the stash; if focus is already
+  a shown scratchpad window (or nothing is focused), hide or show the
+  most-recent stash entry as a floating window on the active workspace.
+- Dock / Task View — **Send to scratchpad** on the window context menu or card.
+- Optional auto-stash: list Wayland app ids under
+  `~/.config/metis/scratchpad.json` → `prefer_app_ids` (empty by default).
+- With crash recovery on, stash membership is stored in the session snapshot.
 
 ### Per-output behaviour
 
@@ -782,6 +798,13 @@ appends a column. New windows open at half-width.
 These scrolling keybinds are only active while the focused workspace is in
 scrolling mode; in grid mode they're inert.
 
+**Flick the strip:** hold **Super** and scroll (wheel or two-finger), or flick
+over empty gap / wallpaper between columns — the viewport coasts with friction
+and a light edge bounce. Scrolling over a window without Super still goes to
+the app. Turn off **Window animations** (or use graphics compatibility mode)
+for instant pan with no coast. Optional knobs live in `input.json` under
+`scroll_strip` (`enabled`, `friction`, `bounce`).
+
 ---
 
 ## 8. Keyboard shortcuts reference
@@ -803,6 +826,7 @@ and cannot be rebound.
 | `Super`+`Shift`+`F` | Toggle true fullscreen |
 | `Super`+`Q` | Close the focused window |
 | `Super`+`M` | Minimize the focused window |
+| `Super`+`U` | Toggle scratchpad — stash the focused window off the desk, or show/hide the most recent stash entry |
 | `Super`+`L` | Lock the session |
 | `Super`+`T` | Open the default terminal (Settings → Metis Menu) |
 | `Super`+`Esc` | Exit fullscreen / maximize / tile |
@@ -911,6 +935,11 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   sync** (VRR), and **HDR** (when the monitor EDID advertises HDR10 / ST.2084
   or HLG — many laptop panels do not) apply live;
   duplicate mode, arrangement, and resolution changes are batched behind save.
+  **Display setups** (dock vs laptop / office) save the current EDID monitor set
+  under `output-profiles.json`. Plug the same set again and Metis restores that
+  layout/modes automatically without the keep/revert dialog; **Restore** from the
+  list still confirms like Save. Identity is `make|model|serial` (connector name
+  when EDID is missing).
   Night-light preferences apply live in the compositor (warm overlay; also
   available on HDR encode and Mixed scene-linear desktops — skipped only for
   HDR-only / fullscreen pass-through, exclusive fullscreen games, and capture
@@ -1067,13 +1096,13 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   reload). **Shortcuts** (sidebar) is a searchable read-only chord guide with a
   jump to the editor; System VT/quit chords are listed but not editable.
   **Input methods (IME):** Metis exposes Wayland `text-input-v3` and
-  `input-method-v2` so **Fcitx5** or **IBus** can compose CJK and other complex
-  scripts in native Wayland clients. Install the framework from your distro
-  (e.g. `fcitx5` + language engines, or `ibus` + `ibus-anthy` / `ibus-libpinyin`),
-  enable its user service / autostart, and set the usual module env if needed
-  (`GTK_IM_MODULE`, `QT_IM_MODULE`, `XMODIFIERS` — Fcitx5 docs often recommend
-  `fcitx` / `ibus`). Metis does **not** bundle an IME engine; layout switching in
-  Settings → Input remains xkb-only. Candidate popups anchor under the caret.
+  `input-method-v2`. The Metis **`.deb` Recommends Fcitx5** (GTK/Qt frontends +
+  config tool); `metis-session` starts it when present and sets
+  `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS` unless you already did.
+  Add language engines yourself (Suggests: `fcitx5-chinese-addons`,
+  `fcitx5-mozc`, `fcitx5-anthy`, …) or use **IBus** if you prefer. Layout
+  switching in Settings → Input remains xkb-only. Candidate popups anchor
+  under the caret.
 - **Bluetooth** — adapter on/off, scan for devices (toggle stop, auto-stops after
   30s), pair / connect / trust / remove. Device list uses zebra rows. Battery
   percentage and charging state appear when the device or driver reports them.
@@ -1591,10 +1620,11 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `wallpaper.json` | Background picture / colour / gradient, plus per-output overrides; live crossfade. Decode cache: `~/.cache/metis/wallpaper-rgba/` |
 | `weather.json` | Weather unit, auto-detect, IP-geolocation, saved locations (fetched only while bar/desktop Weather UI is enabled) |
 | `desk.json` | Compositor window-grid layout (widget tiles) |
+| `scratchpad.json` | Scratchpad prefer-list (`prefer_app_ids`); auto-stashes matching apps on map. Distinct from minimize and from `desk.json` |
 | `desktop-widgets.json` | Wallpaper desktop widgets: enable, edit mode, chrome, instances |
 | `dismissed.json` | Dismissed calendar reminder IDs |
 | `briefing.json` | Login-briefing weather coordinates + RSS feed (optional) |
-| `input.json` | Mouse, touchpad, and keyboard layout/repeat (compositor live-reload) |
+| `input.json` | Mouse, touchpad, keyboard layout/repeat, and scroll-strip kinetic (`scroll_strip`) (compositor live-reload) |
 | `keybinds.json` | Desktop shortcuts (chords → actions); browse in Settings → Shortcuts, edit under Keyboard → Shortcuts |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action, dim-on-battery (compositor overlay) |
 | `startup.json` | Session startup apps: master enable + desktop ids (empty by default; Settings → Startup) |
@@ -1608,6 +1638,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `gaming-flatpak.json` | Record of applied Flatpak gaming overrides (managed by `metis-gaming`) |
 | `game-rules.json` | Float / fullscreen rules for games and launchers (built-in defaults if absent) |
 | `outputs.json` | Per-output scale, resolution/refresh, arrangement (`layout_x`/`layout_y`), `display_mode` / `mirror_source`, VRR / HDR toggles, night-light prefs |
+| `output-profiles.json` | Named display topology profiles (EDID identity sets → prefs/layout); auto-apply on hotplug |
 
 ### Key `bar.json` fields
 
@@ -1620,7 +1651,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `length_percent` | Along-edge length 40–100% (centered; 100 = full edge) |
 | `opacity` | Bar background opacity (`< 1` = see-through) |
 | `menu_opacity` | App launcher panel opacity |
-| `blur` / `blur_radius` | Compositor backdrop blur behind the bar |
+| `blur` / `blur_radius` | Compositor backdrop blur behind the bar (frost follows the pill’s rounded ends; not a sharp square) |
 | `bar_fill` | Pill fill: theme / solid / gradient + `gradient_direction` |
 | `auto_hide` / `auto_hide_peek_px` | Auto-hide to a peek strip; bar **overlays** windows (no maximize reflow on show/hide). Move to the peek edge to open; top-bar title controls use the band just below the peek |
 | `window_gap_px` | Padding around maximized / edge-snapped windows (0–10) |

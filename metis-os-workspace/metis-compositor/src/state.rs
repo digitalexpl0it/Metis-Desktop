@@ -25,6 +25,7 @@ use smithay::{
         fractional_scale::FractionalScaleManagerState,
         idle_inhibit::IdleInhibitManagerState,
         idle_notify::IdleNotifierState,
+        input_method::InputMethodManagerState,
         output::OutputManagerState,
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         session_lock::SessionLockManagerState,
@@ -34,7 +35,6 @@ use smithay::{
         },
         shm::ShmState,
         socket::ListeningSocketSource,
-        input_method::InputMethodManagerState,
         text_input::TextInputManagerState,
         viewporter::ViewporterState,
     },
@@ -184,6 +184,8 @@ pub struct MetisState {
     /// Windows the user has manually dragged out of the grid by their titlebar.
     /// They keep their free position (no grid snap-back) until closed.
     pub floating: std::collections::HashSet<u32>,
+    /// Global i3-style scratchpad stash (not minimize / not workspace tile stash).
+    pub(crate) scratchpad: crate::scratchpad::ScratchpadState,
     /// Windows whose top edge meets the edge bar (maximized, or snapped left /
     /// right / top-corner), plus grid-tiled SSD windows: their titlebar auto-hides
     /// and re-appears as a translucent overlay on the client's top strip.
@@ -220,7 +222,9 @@ pub struct MetisState {
     /// Crash-recovery snapshot + pending restore slots (maturity M1).
     pub(crate) session_restore: crate::session_restore::SessionRestoreRuntime,
     /// After restore placement: `(fullscreen, maximized, minimized)` applied once ready.
-    pub(crate) pending_session_restore_chrome: std::collections::HashMap<u32, (bool, bool, bool)>,
+    /// Deferred session-restore chrome: (fullscreen, maximized, minimized, scratchpad).
+    pub(crate) pending_session_restore_chrome:
+        std::collections::HashMap<u32, (bool, bool, bool, bool)>,
 
     /// Per-output desktops, keyed by output name. Created lazily as outputs map;
     /// the first (primary) output's desk is seeded from `desk.json` (widgets),
@@ -584,6 +588,7 @@ impl MetisState {
             fs_offset_warned: std::collections::HashSet::new(),
             windows: WindowRegistry::new(),
             floating: std::collections::HashSet::new(),
+            scratchpad: crate::scratchpad::ScratchpadState::default(),
             auto_hide_titlebar: std::collections::HashSet::new(),
             revealed_titlebar: None,
             titlebar_reveal_window: None,
@@ -4207,6 +4212,10 @@ impl MetisState {
         }
 
         self.apply_pending_session_restore_chrome(id);
+        // Prefer-list auto-scratchpad after chrome restore (restore wins when set).
+        if !self.scratchpad.contains(id) {
+            self.maybe_auto_scratchpad(id);
+        }
         self.mark_session_snapshot_dirty();
     }
 
@@ -4392,6 +4401,7 @@ impl MetisState {
         self.unregister_capture_overlay(id);
         self.save_window_geometry(id);
         self.floating.remove(&id);
+        self.on_scratchpad_window_destroyed(id);
         self.pending_game_fullscreen.remove(&id);
         self.clear_remote_viewer_placement(id);
         self.clear_auto_hide(id);

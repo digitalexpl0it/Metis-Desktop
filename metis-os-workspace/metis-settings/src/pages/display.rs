@@ -4,6 +4,8 @@
 mod display_arrangement;
 #[path = "display_confirm.rs"]
 mod display_confirm;
+#[path = "display_profiles.rs"]
+mod display_profiles;
 #[path = "display_schedule.rs"]
 mod display_schedule;
 
@@ -373,6 +375,9 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
         })
     };
 
+    type ProfilesRefreshSlot = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+    let profiles_refresh_slot: ProfilesRefreshSlot = Rc::new(RefCell::new(None));
+
     let refresh_detected_outputs: Rc<dyn Fn()> = {
         let outputs = outputs.clone();
         let selected_name = selected_name.clone();
@@ -382,6 +387,7 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
         let empty_hint = empty_hint.clone();
         let set_display_pending = set_display_pending.clone();
         let rebuild_detail = rebuild_detail.clone();
+        let profiles_refresh_slot = profiles_refresh_slot.clone();
         Rc::new(move || {
             update_arrangement_view(
                 &outputs,
@@ -393,11 +399,25 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
                 &set_display_pending,
                 &rebuild_detail,
             );
+            if let Some(refresh) = profiles_refresh_slot.borrow().as_ref() {
+                refresh();
+            }
         })
     };
 
     rebuild_arrangement();
     *rebuild_arrangement_slot.borrow_mut() = Some(rebuild_arrangement.clone());
+
+    let (profiles_card, profiles_refresh) = display_profiles::build_section(
+        parent,
+        cfg.clone(),
+        outputs.clone(),
+        canvas_slot.clone(),
+        rebuild_detail.clone(),
+        refresh_save_buttons.clone(),
+    );
+    content.insert_child_after(&profiles_card, Some(&arrange_card));
+    *profiles_refresh_slot.borrow_mut() = Some(profiles_refresh);
 
     {
         let cfg = cfg.clone();

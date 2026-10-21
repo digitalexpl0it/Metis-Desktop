@@ -265,6 +265,7 @@ impl MetisState {
                 fullscreen: rec.fullscreen,
                 maximized: rec.maximized,
                 minimized: rec.minimized,
+                scratchpad: self.scratchpad.contains(id),
             });
         }
 
@@ -340,10 +341,17 @@ impl MetisState {
 
         self.windows.set_placement_chosen(id, true);
 
-        // Defer FS/max/min until the window is ready (activate_window).
-        if slot.fullscreen || slot.maximized || slot.minimized {
-            self.pending_session_restore_chrome
-                .insert(id, (slot.fullscreen, slot.maximized, slot.minimized));
+        // Defer FS/max/min/scratchpad until the window is ready (activate_window).
+        if slot.fullscreen || slot.maximized || slot.minimized || slot.scratchpad {
+            self.pending_session_restore_chrome.insert(
+                id,
+                (
+                    slot.fullscreen,
+                    slot.maximized,
+                    slot.minimized,
+                    slot.scratchpad,
+                ),
+            );
         }
 
         tracing::info!(
@@ -352,6 +360,7 @@ impl MetisState {
             output = %slot.output,
             workspace = slot.workspace,
             floating = slot.floating,
+            scratchpad = slot.scratchpad,
             "session restore: placed window from snapshot"
         );
         self.mark_session_snapshot_dirty();
@@ -381,7 +390,7 @@ impl MetisState {
     }
 
     pub(crate) fn apply_pending_session_restore_chrome(&mut self, id: u32) {
-        let Some((fullscreen, maximized, minimized)) =
+        let Some((fullscreen, maximized, minimized, scratchpad)) =
             self.pending_session_restore_chrome.remove(&id)
         else {
             return;
@@ -393,6 +402,9 @@ impl MetisState {
         }
         if minimized {
             self.minimize_by_id(id);
+        }
+        if scratchpad {
+            self.send_to_scratchpad(id);
         }
     }
 }
@@ -430,6 +442,7 @@ mod tests {
             fullscreen: false,
             maximized: false,
             minimized: false,
+            scratchpad: false,
         }];
         let mut claimed = vec![false];
         assert!(match_restore_slot(&mut pending, &mut claimed, Some("x"), None).is_some());

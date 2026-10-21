@@ -239,6 +239,7 @@ mod tests {
             enabled: true,
             make: String::new(),
             model: String::new(),
+            serial: String::new(),
             mirrored: false,
             mirror_source: false,
             vrr_available: false,

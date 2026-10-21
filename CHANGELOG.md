@@ -26,11 +26,32 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Phase 21 §B — Kinetic scroll-strip momentum** — on scrolling workspaces,
+  **Super+scroll** or a flick over empty strip gap / wallpaper pans the viewport
+  with velocity + friction coast and light edge bounce. Axis over a client
+  window without Super still goes to the app. Honours `window_animations` /
+  graphics compatibility (snap, no coast). Optional `input.json` `scroll_strip`
+  (`enabled`, `friction`, `bounce`); no Settings UI this phase.
+- **Phase 21 §A — Bar blur stadium mask** — backdrop Gaussian frost follows the
+  edge-bar pill ends (SDF `smoothstep`, radius = half short axis) instead of a
+  sharp square; GLES and MultiRenderer hybrid paths. Lock-screen full frost
+  unchanged (`corner_radius = 0`).
+- **Phase 20 §C — Display topology profiles** — EDID-keyed dock/office setups in
+  `output-profiles.json`. Hotplug auto-applies a matching profile (no keep/revert);
+  Settings → Display → **Display setups** saves / restores / deletes named setups.
+  `OutputInfo` / hotplug events expose EDID `serial`.
+- **Phase 20 §B — Scratchpads** — compositor-owned i3-style stash (not minimize):
+  removes the window from the tiling/scroll grid, unmaps without genie FX, and
+  restores floating on toggle. Default **`Super`+`U`** (`ToggleScratchpad`);
+  IPC `ToggleScratchpad` / `SetScratchpad`; `scratchpad.json` `prefer_app_ids`;
+  session snapshot `scratchpad` flag. Task View card + dock menu “Send to
+  scratchpad”; light stash count on the Task View shelf.
 - **Phase 20 §A — Wayland IME protocols** — compositor advertises
   `zwp_text_input_v3` + `zwp_input_method_v2` (same-UID clients). Seat focus
   wires text-input enter/leave when an IM is bound; IME candidate popups are
-  tracked and anchored under the caret. Enables Fcitx5/IBus on Metis Wayland
-  (framework still installed separately).
+  tracked and anchored under the caret. **`.deb` Recommends Fcitx5** (+ GTK/Qt
+  frontends); Arch PKGBUILD depends on `fcitx5`; `metis-session` starts it and
+  sets IM module env when installed. Language engines stay Suggests.
 
 ## [2026-10-20]
 

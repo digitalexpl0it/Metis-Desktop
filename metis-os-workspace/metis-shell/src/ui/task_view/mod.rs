@@ -5,6 +5,8 @@
 //! - App grid scrolls above a **pinned** workspace shelf so desktops stay on-screen.
 //! - Drag an app onto a shelf tile to move it without closing early.
 //! - Close (×) on each card closes that window; Task View stays open.
+//! - Scratchpad button stashes the window off the desk (Super+U); shelf shows a
+//!   light count when the stash is non-empty.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -459,6 +461,14 @@ fn rebuild(tv: &Rc<TaskView>) {
         let tile = build_shelf_tile(tv, ws, active, ws_thumbs.as_ref());
         tv.shelf.append(&tile);
     }
+    let stash = windows::scratchpad_count();
+    if stash > 0 {
+        let hint = gtk::Label::new(Some(&format!("Scratchpad · {stash}")));
+        hint.add_css_class("metis-task-view-scratchpad-hint");
+        hint.set_halign(gtk::Align::Center);
+        hint.set_margin_top(6);
+        tv.shelf.append(&hint);
+    }
 }
 
 /// Compact cards so a row of apps fits above the pinned shelf.
@@ -501,6 +511,32 @@ fn build_app_card(
     title.set_halign(gtk::Align::Start);
     title.set_can_target(false);
     header.append(&title);
+
+    let scratch = gtk::Button::from_icon_name("view-paged-symbolic");
+    scratch.add_css_class("metis-task-view-card-close");
+    scratch.set_tooltip_text(Some("Send to scratchpad"));
+    scratch.set_valign(gtk::Align::Center);
+    scratch.set_focus_on_click(false);
+    scratch.set_can_focus(false);
+    scratch.set_has_frame(false);
+    let scratch_claim = gtk::GestureClick::new();
+    scratch_claim.set_button(1);
+    scratch_claim.set_propagation_phase(gtk::PropagationPhase::Capture);
+    scratch_claim.connect_pressed(|gesture, _, _, _| {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+    });
+    scratch.add_controller(scratch_claim);
+    let scratch_id = w.id;
+    scratch.connect_clicked(move |_| {
+        if let Err(err) = crate::compositor::set_scratchpad(scratch_id, true) {
+            tracing::warn!(id = scratch_id, %err, "task view scratchpad failed");
+        }
+        glib::idle_add_local_once(|| {
+            windows::reconcile_now();
+            schedule_refresh_after_change();
+        });
+    });
+    header.append(&scratch);
 
     let close = gtk::Button::from_icon_name("window-close-symbolic");
     close.add_css_class("metis-task-view-card-close");
