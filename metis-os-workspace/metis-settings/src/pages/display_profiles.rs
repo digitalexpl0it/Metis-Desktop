@@ -61,8 +61,9 @@ pub fn build_section(
     active_chip.set_margin_top(4);
     body.append(&active_chip);
 
-    let list_host = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    list_host.set_margin_top(8);
+    let list_host = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    list_host.add_css_class("metis-settings-list");
+    list_host.add_css_class("metis-settings-zebra-list");
     body.append(&list_host);
 
     let save_as_btn = gtk::Button::with_label(&tr("Save this setup as…"));
@@ -127,8 +128,8 @@ pub fn build_section(
                 refresh_save_buttons: refresh_save_buttons.clone(),
                 refresh: refresh_cb,
             };
-            for profile in store.profiles.iter() {
-                list_host.append(&build_profile_row(profile, &fp, &ctx));
+            for (i, profile) in store.profiles.iter().enumerate() {
+                list_host.append(&build_profile_row(profile, &fp, &ctx, i % 2 == 1));
             }
         })
     };
@@ -162,14 +163,26 @@ fn build_profile_row(
     profile: &OutputTopologyProfile,
     current_fp: &str,
     ctx: &ProfileUiCtx,
+    alt: bool,
 ) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("metis-settings-zebra-row");
+    if alt {
+        row.add_css_class("metis-settings-zebra-row-alt");
+    }
     row.set_hexpand(true);
+
+    let icon = gtk::Image::from_icon_name("video-display-symbolic");
+    icon.set_pixel_size(16);
+    icon.add_css_class("metis-settings-row-icon");
+    icon.set_valign(gtk::Align::Center);
+    row.append(&icon);
 
     let labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
     labels.set_hexpand(true);
     let title = gtk::Label::new(Some(&profile.name));
     title.set_xalign(0.0);
+    title.add_css_class("metis-settings-row-title");
     labels.append(&title);
     let matches = OutputProfilesConfig::fingerprint_for(profile) == current_fp;
     let sub = if matches {
