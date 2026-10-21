@@ -12,6 +12,7 @@ glib = "0.22"
 gio = "0.22"
 gio-unix = "0.22"
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros", "time"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls-no-provider", "blocking"] }
 # ring (not reqwest's aws-lc default): smaller binaries, no C++ toolchain.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

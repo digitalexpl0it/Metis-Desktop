@@ -19,6 +19,7 @@ mod device_input;
 mod events;
 mod focus;
 mod foreign_toplevel;
+mod foreign_toplevel_mgmt;
 mod grabs;
 mod handlers;
 mod hdr_encode;

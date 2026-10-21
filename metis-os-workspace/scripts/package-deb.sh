@@ -115,7 +115,7 @@ write_control() {
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, pipewire, pipewire-pulse, wireplumber, network-manager-openvpn, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, pipewire, pipewire-pulse, wireplumber, network-manager-openvpn, openssh-client, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
       suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools, ibus, fcitx5-chinese-addons, fcitx5-mozc, fcitx5-anthy"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."
@@ -128,7 +128,7 @@ write_control() {
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, pipewire, pipewire-pulse, wireplumber, network-manager-openvpn, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, pipewire, pipewire-pulse, wireplumber, network-manager-openvpn, openssh-client, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
       suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools, ibus, fcitx5-chinese-addons, fcitx5-mozc, fcitx5-anthy"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."

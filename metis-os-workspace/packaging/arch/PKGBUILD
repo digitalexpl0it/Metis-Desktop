@@ -45,6 +45,7 @@ depends=(
   fcitx5-gtk
   fcitx5-qt
   fcitx5-configtool
+  openssh
 )
 optdepends=(
   'gnome-keyring: alternate Secret Service provider (Metis ships metis-secretsd)'

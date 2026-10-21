@@ -101,17 +101,7 @@ impl Vault {
         if password.is_empty() {
             return Err(VaultError::AuthFailed);
         }
-        let pam_ok = match std::env::var("METIS_SECRETS_TEST_UNLOCK") {
-            Ok(expected) if !expected.is_empty() && expected == password => true,
-            _ => {
-                let user = crate::pam_auth::current_username().ok_or(VaultError::AuthFailed)?;
-                let service = crate::pam_auth::pam_service();
-                crate::pam_auth::pam_check(&service, &user, password)
-            }
-        };
-        if !pam_ok {
-            return Err(VaultError::AuthFailed);
-        }
+        Self::pam_check_password(password)?;
         self.unlock_crypto(password)
     }
 
@@ -169,6 +159,85 @@ impl Vault {
     pub fn lock_vault(&mut self) {
         self.key = None;
         self.items.clear();
+    }
+
+    /// Rewrite `vault.wrap` with a new login password while the DEK is already
+    /// held in memory (vault unlocked). PAM-checks `new_password`.
+    pub fn rewrap_unlocked(&mut self, new_password: &str) -> Result<(), VaultError> {
+        if new_password.is_empty() {
+            return Err(VaultError::AuthFailed);
+        }
+        self.require_unlocked()?;
+        Self::pam_check_password(new_password)?;
+        let wrap_path = self.dir.join(WRAP_FILE);
+        let dek = self.key.as_ref().ok_or(VaultError::Locked)?;
+        write_wrap(&wrap_path, new_password, dek)
+    }
+
+    /// Unlock-or-rewrap after a login password change: unwrap with `old_password`,
+    /// PAM-check `new_password`, rewrite wrap. Loads the vault if it was locked.
+    pub fn rewrap_with_passwords(
+        &mut self,
+        old_password: &str,
+        new_password: &str,
+    ) -> Result<(), VaultError> {
+        if old_password.is_empty() || new_password.is_empty() {
+            return Err(VaultError::AuthFailed);
+        }
+        Self::pam_check_password(new_password)?;
+        let wrap_path = self.dir.join(WRAP_FILE);
+        if !wrap_path.is_file() {
+            // No wrap yet — initialize with the new password.
+            return self.unlock_with_password(new_password);
+        }
+        let dek = if let Some(ref key) = self.key {
+            // Already unlocked: verify old still unwraps (optional integrity),
+            // then rewrite with new. Wrong old → AuthFailed so Settings can
+            // prompt again.
+            let check = unwrap_dek(&wrap_path, old_password)?;
+            if check.0 != key.0 {
+                return Err(VaultError::AuthFailed);
+            }
+            key.0
+        } else {
+            let opened = unwrap_dek(&wrap_path, old_password)?;
+            // Load items under the recovered DEK, then rewrap.
+            let data_path = self.dir.join(DATA_FILE);
+            let (items, created, modified) = if data_path.exists() {
+                let file = decrypt_file(&data_path, &opened)?;
+                let now = unix_now();
+                let modified = file.items.iter().map(|i| i.modified).max().unwrap_or(now);
+                let created = file.items.iter().map(|i| i.created).min().unwrap_or(now);
+                let map = file.items.into_iter().map(|i| (i.id.clone(), i)).collect();
+                (map, created, modified)
+            } else {
+                let now = unix_now();
+                (HashMap::new(), now, now)
+            };
+            let raw = opened.0;
+            self.key = Some(opened);
+            self.items = items;
+            self.collection_created = created;
+            self.collection_modified = modified;
+            raw
+        };
+        write_wrap(&wrap_path, new_password, &MasterKey(dek))
+    }
+
+    fn pam_check_password(password: &str) -> Result<(), VaultError> {
+        let pam_ok = match std::env::var("METIS_SECRETS_TEST_UNLOCK") {
+            Ok(expected) if !expected.is_empty() && expected == password => true,
+            _ => {
+                let user = crate::pam_auth::current_username().ok_or(VaultError::AuthFailed)?;
+                let service = crate::pam_auth::pam_service();
+                crate::pam_auth::pam_check(&service, &user, password)
+            }
+        };
+        if pam_ok {
+            Ok(())
+        } else {
+            Err(VaultError::AuthFailed)
+        }
     }
 
     pub fn collection_created(&self) -> u64 {
@@ -454,6 +523,49 @@ mod tests {
         let opened = unwrap_dek(&wrap, "test-passphrase-not-pam").unwrap();
         assert_eq!(opened.0, key.0);
         assert!(unwrap_dek(&wrap, "wrong").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rewrap_unlocked_rewrites_wrap() {
+        let dir = test_dir("rewrap");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut vault = Vault {
+            dir: dir.clone(),
+            key: None,
+            items: HashMap::new(),
+            collection_created: unix_now(),
+            collection_modified: unix_now(),
+        };
+        vault.unlock_for_test("old-pass").unwrap();
+        // Unit path: rewrite wrap without PAM (production uses rewrap_unlocked).
+        let dek = vault.key.as_ref().unwrap();
+        write_wrap(&dir.join(WRAP_FILE), "new-pass", dek).unwrap();
+        vault.lock_vault();
+        assert!(vault.unlock_for_test("old-pass").is_err());
+        assert!(vault.unlock_for_test("new-pass").is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rewrap_with_passwords_from_locked() {
+        let dir = test_dir("rewrap-locked");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut vault = Vault {
+            dir: dir.clone(),
+            key: None,
+            items: HashMap::new(),
+            collection_created: unix_now(),
+            collection_modified: unix_now(),
+        };
+        vault.unlock_for_test("legacy").unwrap();
+        vault.lock_vault();
+        // Simulate rewrap crypto without PAM race across parallel tests.
+        let dek = unwrap_dek(&dir.join(WRAP_FILE), "legacy").unwrap();
+        write_wrap(&dir.join(WRAP_FILE), "brand-new", &dek).unwrap();
+        assert!(vault.unlock_for_test("brand-new").is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -73,7 +73,7 @@ daemons, …) must appear in `Depends` / `Recommends` / `Suggests` (and in
 |-------|------|
 | **Depends** | Required for a usable Metis session **and** first-class shell/Settings surfaces that are empty or wrong without the host (GTK ≥ 4.18, layer-shell, seat, DRM, PipeWire libs, kitty, portals, polkit, **NetworkManager**, OCR/FFmpeg, …) |
 | **Bundled** | Nothing by default; `BUNDLE_GTK4_LAYER_SHELL=1` is a fallback for build images without `libgtk4-layer-shell-dev` |
-| **Recommends** | Installed by default with apt: portal helpers, volumes, **nftables**, **UPower**, **BlueZ**, **PackageKit** (`pkcon`), PipeWire session audio (`pipewire` / `pipewire-pulse` / `wireplumber`), OpenVPN NM plugin, **Fcitx5** (+ GTK/Qt frontends + config tool) for Wayland IME |
+| **Recommends** | Installed by default with apt: portal helpers, volumes, **nftables**, **UPower**, **BlueZ**, **PackageKit** (`pkcon`), PipeWire session audio (`pipewire` / `pipewire-pulse` / `wireplumber`), OpenVPN NM plugin, **openssh-client** (session `ssh-agent` / vault SSH keys), **Fcitx5** (+ GTK/Qt frontends + config tool) for Wayland IME |
 | **Suggests** | Optional / heavy: gnome-keyring (alternate Secret Service; Metis ships `metis-secretsd`), GRD, FreeRDP client, GameMode, Flatpak, fwupd, printers, biometrics, `wireguard-tools`, IBus, Fcitx5 language engines (`fcitx5-chinese-addons`, `fcitx5-mozc`, …) |
 
 WSL / containers that already manage networking outside NetworkManager can
@@ -195,7 +195,7 @@ Nix: [`.github/workflows/nix-flake.yml`](../.github/workflows/nix-flake.yml).
 
 | Path | Role |
 |------|------|
-| `/usr/bin/metis-{compositor,shell,settings,portal,remote,viewer,gamingd,polkit-agent,secretsd}` | Binaries |
+| `/usr/bin/metis-{compositor,shell,settings,portal,remote,viewer,gamingd,polkit-agent,secretsd,ssh-askpass}` | Binaries |
 | `/usr/bin/metis-session` | Greeter session launcher |
 | `/usr/share/metis/dbus-1/services/org.freedesktop.secrets.service` | Activates `metis-secretsd` (Metis-scoped; not `/usr/share/dbus-1/services/`, which gnome-keyring owns) |
 | `/usr/share/wayland-sessions/metis.desktop` | Session entry |

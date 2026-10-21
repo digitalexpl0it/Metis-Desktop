@@ -253,6 +253,28 @@ metis_start_secret_service() {
 }
 metis_start_secret_service
 
+# --- OpenSSH agent (Phase 22 §C) --------------------------------------------
+# When Metis owns secrets (or always for Metis sessions), ensure an ssh-agent
+# so vault-backed keys can be loaded after unlock. Do not clobber a pre-set agent.
+metis_ensure_ssh_agent() {
+    if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
+        ks_log "SSH_AUTH_SOCK already set — leaving existing agent"
+        return 0
+    fi
+    if ! command -v ssh-agent >/dev/null 2>&1; then
+        ks_log "ssh-agent not on PATH — install openssh-client for SSH keys"
+        return 0
+    fi
+    eval "$(ssh-agent -s)" >/dev/null
+    export SSH_AUTH_SOCK SSH_AGENT_PID
+    if command -v metis-ssh-askpass >/dev/null 2>&1; then
+        export SSH_ASKPASS="$(command -v metis-ssh-askpass)"
+        export SSH_ASKPASS_REQUIRE="${SSH_ASKPASS_REQUIRE:-prefer}"
+    fi
+    ks_log "started ssh-agent (SSH_AUTH_SOCK=${SSH_AUTH_SOCK:-})"
+}
+metis_ensure_ssh_agent
+
 # --- remote desktop autostart (Phase 7) ------------------------------------
 # Best-effort: when remote.json has enabled + auto_start, start headless RDP.
 # Skipped in nested/dev sessions unless METIS_BACKEND=drm (real login session).

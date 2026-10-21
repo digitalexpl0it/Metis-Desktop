@@ -117,13 +117,17 @@ gnome-keyring, …), Metis leaves it alone.
 Vault files live under `~/.local/share/metis/secrets/`: `vault.bin` (encrypted
 items) plus `vault.wrap` (Argon2id-wrapped DEK). The daemon starts **locked**;
 unlock with the login password via D-Bus `org.metis.Secrets1.UnlockWithPassword`
-(shell prompt on first client need). Legacy plaintext `vault.key` migrates away
-on first successful unlock. Portal `org.freedesktop.impl.portal.Secret` is
-implemented by `metis-portal`. SSH agent integration remains a residual.
+or Secret Service `Prompt` (shell listens for `UnlockPromptNeeded`). Legacy
+plaintext `vault.key` migrates away on first successful unlock. Portal
+`org.freedesktop.impl.portal.Secret` is implemented by `metis-portal`. After a
+login password change, call `RewrapUnlocked` / `RewrapWithPasswords` (Settings →
+Users does this). `metis-session` starts OpenSSH `ssh-agent` and sets
+`SSH_ASKPASS=metis-ssh-askpass`; vault SSH keys load on unlock.
 
 **What Metis stores there:** CalDAV passwords, Microsoft 365 refresh tokens,
-Viewer host passwords, and portal per-app secrets (`metis-secrets`). Account
-lists in `calendars.json` / `viewer.json` hold no secrets.
+Viewer host passwords, portal per-app secrets, and optional SSH private keys
+(`metis-secrets`). Account lists in `calendars.json` / `viewer.json` hold no
+secrets.
 
 ### Phase 4 runtime tools (standalone session)
 

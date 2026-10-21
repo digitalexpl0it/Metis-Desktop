@@ -15,6 +15,9 @@ profiles) **A–C complete** 2026-10-21; **§D handheld deferred** (no Deck/Ally
 product push) — see Phase 20 below.
 **Phase 21** (Visual / interaction polish — blur corner mask, kinetic scroll,
 genie hit-test, ambient tint) **A–D landed** 2026-10-21 — see Phase 21 below.
+**Phase 22** (Secrets identity + dock interop — vault rewrap/Prompt, wlr
+foreign-toplevel management, SSH agent) **§A–C complete 2026-10-21** — see
+Phase 22 below.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -165,12 +168,12 @@ called out as residuals only. Prefer working top→bottom.
 
 #### Interop & ecosystem
 
-- [x] **M4. `ext-foreign-toplevel-list-v1` (and related)** (2026-10-20) —
-      read-only Wayland projection of the window registry (identifier
-      `metis-{id}`, title/app_id); same-euid bind filter. Metis taskbar stays
-      on `metis-protocol` IPC. **Residual:** management protocol
-      (activate/minimize/close) for third-party docks deferred.
-      → [`docs/decisions/foreign-toplevel-list.md`](../docs/decisions/foreign-toplevel-list.md).
+- [x] **M4. `ext-foreign-toplevel-list-v1` (and related)** (2026-10-20;
+      management 2026-10-21) — list + `zwlr_foreign_toplevel_management_v1`
+      (activate/minimize/maximize/fullscreen/close + state); same-euid bind
+      filter. Metis taskbar stays on `metis-protocol` IPC.
+      → [`docs/decisions/foreign-toplevel-list.md`](../docs/decisions/foreign-toplevel-list.md)
+      / Phase 22 §B.
 - [x] **M5. MetisNative RDP GA** (2026-10-20) — multi-monitor virtual-desktop
       atlas (`rdp-layout.json` + multi-stream ScreenCast); FreeRDP
       `EnumMonitors`; MetisNative session autostart without `grdctl`;
@@ -2397,6 +2400,68 @@ engine. Landed 2026-10-21.
 
 **Dependencies:** Phase 1 bar blur; Phase 3 scroll desks; `window_fx`; hybrid
 Multi blur path; honour `window_animations` / graphics compatibility mode.
+
+---
+
+## Phase 22 — Secrets identity + dock interop
+
+**Status 2026-10-21:** **§A–C complete** (vault rewrap + Secret.Prompt +
+Settings hook; `zwlr_foreign_toplevel_management_v1`; session ssh-agent +
+vault keys + `metis-ssh-askpass`). §D remains deferred.
+
+Opened **2026-10-21** from maturity residuals (Secret Service ADR + M4 Phase B).
+Complements Phases 20–21 (power-user / visual polish).
+
+**Goals:** vault re-wrap after login password change; stock Secret Service
+`Prompt` so libsecret/`oo7` Unlock works; third-party docks via
+`zwlr_foreign_toplevel_management_v1`; session OpenSSH `ssh-agent` with
+vault-backed keys.
+
+**Non-goals:** RUDP/LattePanda encode latency; colour-protocol M2; handheld 20 §D;
+portal foreign-toplevel capture; replacing Metis shell IPC; full SS ACL/DH/
+multi-collection UI.
+
+### A. Vault re-wrap + Secret Service Prompt (P0) — done
+
+- [x] **Rewrap API** — `org.metis.Secrets1.RewrapWithPasswords` /
+      `RewrapUnlocked`; PAM-check new; never rewrite wrap without old KEK or
+      held DEK
+- [x] **Settings chpasswd hook** — same-user password change triggers rewrap
+- [x] **`org.freedesktop.Secret.Prompt`** — real Prompt for `Service.Unlock`;
+      shell completes via `UnlockPromptNeeded`; keep `UnlockWithPassword`
+- [x] **Lock floor** — locked Search/GetSecrets fail closed; `Service.Lock`
+- [x] **Docs** — ADR, USER_GUIDE Keyring, CHANGELOG
+
+### B. `zwlr_foreign_toplevel_management_v1` (P0) — done
+
+- [x] **Advertise management** — same-euid filter; handle on `WindowRecord`
+- [x] **State sync** — activated / minimized / maximized / fullscreen (+
+      outputs when available)
+- [x] **Requests** — activate / minimize / close / maximize / fullscreen →
+      existing compositor ops; `set_rectangle` no-op documented
+- [x] **QA** — nested + foreign-toplevel dock client (activate / minimize /
+      close; minimized still listed) — smoke on next session
+- [x] **Docs** — foreign-toplevel ADR Phase B, USER_GUIDE, CHANGELOG, M4 tick
+
+### C. SSH agent (P1) — done
+
+- [x] **Session ssh-agent** — `metis-session` / `run-metis.sh` export
+      `SSH_AUTH_SOCK` (don’t clobber pre-set agent)
+- [x] **Load on unlock** — vault `ssh_private_key` items → `ssh-add` (pipe;
+      no PEM under `/tmp`)
+- [x] **Settings → Users → SSH keys** — add/remove OpenSSH keys in vault
+- [x] **`SSH_ASKPASS`** — `metis-ssh-askpass` GTK helper
+- [x] **Docs** — USER_GUIDE, ADR SSH residual cleared (PKCS11 still deferred)
+
+### D. Explicitly deferred / rejected
+
+- RUDP / LattePanda encode latency (post-deb retest)
+- Default-on `wp_color_management_v1` (M2)
+- Phase 20 §D handheld; foreign-toplevel image capture / portal picker
+- Replacing Metis shell IPC; full per-app SS ACL / DH / multi-collection UI
+
+**Dependencies:** `metis-secretsd` vault v2; shell `secrets_unlock`; M4 list
+protocol; OpenSSH `ssh-agent` / `ssh-add` on PATH.
 
 ---
 

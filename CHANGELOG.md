@@ -9,6 +9,20 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Phase 22 §A — Vault re-wrap + Secret Service Prompt** — after a login
+  password change, Settings rewraps `vault.wrap` via
+  `org.metis.Secrets1.RewrapUnlocked` / `RewrapWithPasswords`. Stock
+  libsecret/`oo7` Unlock gets a real `org.freedesktop.Secret.Prompt` (shell
+  listens for `UnlockPromptNeeded`); `UnlockWithPassword` stays the Metis fast
+  path. Locked Search/GetSecrets fail closed.
+- **Phase 22 §B — `zwlr_foreign_toplevel_management_v1`** — third-party docks
+  (same-UID) can activate / minimize / maximize / fullscreen / close windows
+  with state events; Metis taskbar stays on private IPC. Complements
+  `ext-foreign-toplevel-list-v1`.
+- **Phase 22 §C — Session SSH agent** — `metis-session` / `run-metis.sh` start
+  OpenSSH `ssh-agent` (no clobber), set `SSH_ASKPASS=metis-ssh-askpass`, and
+  load vault SSH keys after unlock. Settings → Users → **SSH keys** stores
+  private keys in the Metis keyring.
 - **Cursor themes in Settings → Icons** — pick an XCursor pack and pointer
   size (16–64); persist `icons.json` `cursor_theme` / `cursor_size`; apply via
   gsettings and compositor `ReloadCursors` so the DRM seat pointer updates

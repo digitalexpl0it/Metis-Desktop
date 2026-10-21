@@ -36,6 +36,7 @@ impl MetisState {
             .foreign_toplevel_list_state
             .new_toplevel_with_identifier::<MetisState>(title, app_id, identifier);
         self.windows.set_foreign_toplevel(id, Some(handle));
+        self.foreign_mgmt_announce(id);
     }
 
     /// Push title/app_id changes to an existing foreign handle.
@@ -52,6 +53,7 @@ impl MetisState {
         handle.send_title(&title);
         handle.send_app_id(&app_id);
         handle.send_done();
+        self.foreign_mgmt_sync(id);
     }
 
     /// Close the foreign handle when the window leaves the registry.
@@ -60,5 +62,15 @@ impl MetisState {
             return;
         };
         self.foreign_toplevel_list_state.remove_toplevel(&handle);
+    }
+
+    /// Close list + management handles for `id`.
+    pub(crate) fn foreign_toplevel_close_id(
+        &mut self,
+        id: u32,
+        handle: Option<ForeignToplevelHandle>,
+    ) {
+        self.foreign_mgmt_close(id);
+        self.foreign_toplevel_close(handle);
     }
 }

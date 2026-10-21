@@ -730,9 +730,10 @@ Settings → Appearance → Edge bar → *Workspaces*:
   so all displays stay on the same virtual desktop number.
 
 The taskbar dock always follows its own bar's output and active workspace.
-(Third-party tools can *list* windows via Wayland
-`ext-foreign-toplevel-list-v1`; activate/minimize/close for those docks is not
-exported yet — the Metis dock uses the private compositor IPC.)
+Third-party docks can list windows via `ext-foreign-toplevel-list-v1` and
+activate / minimize / maximize / fullscreen / close via
+`zwlr_foreign_toplevel_management_v1` (same-UID clients). The Metis dock still
+uses the private compositor IPC.
 
 ### Moving windows between monitors
 
@@ -1097,7 +1098,13 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   `metis-secrets` / oo7 (Metis’s `metis-secretsd` provider by default), not in
   the JSON file. Removing an account also deletes its keyring entries. After
   login, unlock the Metis vault with your account password when prompted (PAM);
-  secrets stay unavailable until unlock.
+  secrets stay unavailable until unlock. Stock libsecret/`oo7` Unlock uses a
+  Secret Service **Prompt** (shell shows the same dialog). Changing your login
+  password in **Users** re-wraps the vault (enter the previous password so
+  CalDAV/Viewer secrets keep working). **SSH keys:** Settings → Users → **SSH
+  keys** stores OpenSSH private keys in the vault; `metis-session` starts
+  `ssh-agent` and loads those keys after unlock (`metis-ssh-askpass` for
+  passphrases).
 - **Input** — mouse, touchpad, and keyboard layout/repeat settings (`input.json`),
   plus **Keyboard → Shortcuts** to edit desktop keybinds (`keybinds.json`, live
   reload). **Shortcuts** (sidebar) is a searchable read-only chord guide with a

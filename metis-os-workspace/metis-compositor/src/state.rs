@@ -131,6 +131,7 @@ pub struct MetisState {
     pub _viewporter_state: ViewporterState,
     pub _fractional_scale_manager_state: FractionalScaleManagerState,
     pub foreign_toplevel_list_state: ForeignToplevelListState,
+    pub foreign_toplevel_mgmt: crate::foreign_toplevel_mgmt::ForeignToplevelMgmtState,
     pub seat_state: SeatState<MetisState>,
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
@@ -483,6 +484,8 @@ impl MetisState {
                 Err(_) => false,
             },
         );
+        let foreign_toplevel_mgmt =
+            crate::foreign_toplevel_mgmt::ForeignToplevelMgmtState::new(&dh);
         let data_device_state = DataDeviceState::new::<MetisState>(&dh);
         let primary_selection_state = PrimarySelectionState::new::<MetisState>(&dh);
         let xwayland_shell_state =
@@ -568,6 +571,7 @@ impl MetisState {
             _viewporter_state: viewporter_state,
             _fractional_scale_manager_state: fractional_scale_manager_state,
             foreign_toplevel_list_state,
+            foreign_toplevel_mgmt,
             seat_state,
             data_device_state,
             primary_selection_state,
@@ -2168,9 +2172,17 @@ impl MetisState {
         if self.capture_overlay_active() && !self.window_is_capture_overlay(id) {
             return;
         }
+        let prev = self.last_focused_window;
         self.last_focused_window = Some(id);
         // Keep Alt+Tab thumbnails fresh whenever a window is brought forward.
         self.queue_window_thumb(id);
+        // Docks watching zwlr foreign-toplevel need Activated state updates.
+        if prev != Some(id) {
+            if let Some(old) = prev {
+                self.foreign_mgmt_sync(old);
+            }
+            self.foreign_mgmt_sync(id);
+        }
     }
 
     /// True for a *running game* — as opposed to a launcher/store (Steam, Lutris,
@@ -4463,7 +4475,7 @@ impl MetisState {
             self.save_window_geometry(id);
             if let Some(record) = self.windows.unregister(id) {
                 self.space.unmap_elem(&record.window);
-                self.foreign_toplevel_close(record.foreign_toplevel);
+                self.foreign_toplevel_close_id(id, record.foreign_toplevel);
             }
             self.on_window_destroyed(id);
         }

@@ -2,7 +2,7 @@
 
 **Status:** accepted  
 **Date:** 2026-10-07  
-**Updated:** 2026-10-21  
+**Updated:** 2026-10-21 (Phase 22 §A/§C)  
 **Related:** [`metis-secrets`](../../metis-os-workspace/metis-secrets/),
 [`metis-secretsd`](../../metis-os-workspace/metis-secretsd/),
 [UBUNTU_DEV.md](../UBUNTU_DEV.md) (Keyring section)
@@ -30,19 +30,21 @@ implements `org.freedesktop.secrets` on the user bus.
   install into `/usr/share/dbus-1/services/` — that path is owned by
   `gnome-keyring` on Ubuntu/Debian and breaks package upgrades.
 - **At rest:** DEK wraps with Argon2id(login password) in `vault.wrap`; unlock via
-  `org.metis.Secrets1.UnlockWithPassword` (PAM). Legacy plaintext `vault.key` is
-  migrated on first unlock. Shell prompts at startup when locked.
+  `org.metis.Secrets1.UnlockWithPassword` (PAM) or Secret Service `Prompt`
+  (shell completes). Legacy plaintext `vault.key` is migrated on first unlock.
+  Shell prompts at startup when locked and on `UnlockPromptNeeded`.
+- **Re-wrap:** after login password change, `RewrapUnlocked` / `RewrapWithPasswords`
+  (Settings → Users hooks the same-user change flow).
 - **Portal Secret:** `metis-portal` implements
   `org.freedesktop.impl.portal.Secret` and is pinned in `metis-portals.conf`;
   per-app keys live in Session SS (`portal_secret` kind).
+- **SSH:** session starts OpenSSH `ssh-agent` + `metis-ssh-askpass`; vault items
+  with kind `ssh_private_key` load via `ssh-add` after unlock.
 
 ## Residuals
 
-- SSH agent (not required for Metis credentials; optional gnome-keyring
-  `--components=ssh` fallback remains)
-- Full Secret Service feature parity (extra aliases, Prompt UX, ACLs)
-- Re-wrap after login password change (user must unlock with old wrap password
-  until a rewrap path lands)
+- Full Secret Service feature parity (per-app ACLs, DH sessions, multi-collection UI)
+- PKCS#11 / smartcard SSH
 
 ## Alternatives considered
 

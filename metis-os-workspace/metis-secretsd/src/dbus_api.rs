@@ -2,8 +2,9 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use zbus::fdo;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
@@ -26,6 +27,9 @@ pub struct AppState {
     sessions: Arc<Mutex<HashMap<String, ()>>>,
     next_session: Arc<Mutex<u64>>,
     next_item: Arc<Mutex<u64>>,
+    next_prompt: Arc<AtomicU64>,
+    /// Wake waiters in `Prompt.Prompt` after unlock / dismiss / rewrap.
+    pub unlock_notify: Arc<Notify>,
 }
 
 impl AppState {
@@ -36,8 +40,19 @@ impl AppState {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             next_session: Arc::new(Mutex::new(1)),
             next_item: Arc::new(Mutex::new(1)),
+            next_prompt: Arc::new(AtomicU64::new(1)),
+            unlock_notify: Arc::new(Notify::new()),
         }
     }
+
+    fn alloc_prompt_id(&self) -> u64 {
+        self.next_prompt.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+fn prompt_path(id: u64) -> OwnedObjectPath {
+    OwnedObjectPath::try_from(format!("/org/freedesktop/secrets/prompt/{id}"))
+        .expect("valid prompt path")
 }
 
 fn empty_path() -> OwnedObjectPath {
@@ -183,11 +198,24 @@ impl ServiceIface {
         objects: Vec<OwnedObjectPath>,
     ) -> fdo::Result<(Vec<OwnedObjectPath>, OwnedObjectPath)> {
         let vault = self.state.vault.lock().await;
-        if vault.is_locked() {
-            // Password unlock via org.metis.Secrets1.UnlockWithPassword.
-            return Ok((Vec::new(), empty_path()));
+        if !vault.is_locked() {
+            return Ok((objects, empty_path()));
         }
-        Ok((objects, empty_path()))
+        drop(vault);
+        let id = self.state.alloc_prompt_id();
+        let path = prompt_path(id);
+        let iface = PromptIface {
+            state: self.state.clone(),
+            id,
+            pending_objects: objects,
+        };
+        self.state
+            .connection
+            .object_server()
+            .at(path.clone(), iface)
+            .await
+            .map_err(|e| fdo::Error::Failed(e.to_string()))?;
+        Ok((Vec::new(), path))
     }
 
     async fn lock(
@@ -195,6 +223,7 @@ impl ServiceIface {
         _objects: Vec<OwnedObjectPath>,
     ) -> fdo::Result<(Vec<OwnedObjectPath>, OwnedObjectPath)> {
         self.state.vault.lock().await.lock_vault();
+        self.state.unlock_notify.notify_waiters();
         Ok((Vec::new(), empty_path()))
     }
 
@@ -501,7 +530,7 @@ impl ItemIface {
     }
 }
 
-/// Metis extension: password unlock (Secret Service Prompt is not used in MVP).
+/// Metis extension: password unlock / rewrap (complements Secret Service Prompt).
 pub struct MetisSecretsIface {
     pub state: AppState,
 }
@@ -514,7 +543,11 @@ impl MetisSecretsIface {
     }
 
     /// Unlock with the login password (PAM) or initialize/migrate the wrap.
-    async fn unlock_with_password(&self, password: &str) -> fdo::Result<()> {
+    async fn unlock_with_password(
+        &self,
+        password: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> fdo::Result<()> {
         let mut vault = self.state.vault.lock().await;
         vault.unlock_with_password(password).map_err(|e| match e {
             crate::vault::VaultError::AuthFailed => {
@@ -523,15 +556,150 @@ impl MetisSecretsIface {
             other => fdo::Error::Failed(other.to_string()),
         })?;
         drop(vault);
-        // Re-export item objects after unlock.
         let _ = register_existing_items(&self.state).await;
+        self.state.unlock_notify.notify_waiters();
+        let _ = MetisSecretsIface::unlocked(&emitter).await;
+        Ok(())
+    }
+
+    /// Rewrite `vault.wrap` while unlocked (after login password change).
+    async fn rewrap_unlocked(&self, new_password: &str) -> fdo::Result<()> {
+        self.state
+            .vault
+            .lock()
+            .await
+            .rewrap_unlocked(new_password)
+            .map_err(map_vault_auth)
+    }
+
+    /// Unwrap with the old wrap password and re-wrap with the new login password.
+    async fn rewrap_with_passwords(
+        &self,
+        old_password: &str,
+        new_password: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> fdo::Result<()> {
+        {
+            let mut vault = self.state.vault.lock().await;
+            vault
+                .rewrap_with_passwords(old_password, new_password)
+                .map_err(map_vault_auth)?;
+        }
+        let _ = register_existing_items(&self.state).await;
+        self.state.unlock_notify.notify_waiters();
+        let _ = MetisSecretsIface::unlocked(&emitter).await;
         Ok(())
     }
 
     async fn lock(&self) -> fdo::Result<()> {
         self.state.vault.lock().await.lock_vault();
+        self.state.unlock_notify.notify_waiters();
         Ok(())
     }
+
+    /// Emitted when a Secret Service Prompt needs the shell unlock UI.
+    #[zbus(signal)]
+    async fn unlock_prompt_needed(
+        emitter: &SignalEmitter<'_>,
+        prompt_path: OwnedObjectPath,
+    ) -> zbus::Result<()>;
+
+    /// Emitted after a successful unlock / rewrap that opens the vault.
+    #[zbus(signal)]
+    async fn unlocked(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+fn map_vault_auth(e: crate::vault::VaultError) -> fdo::Error {
+    match e {
+        crate::vault::VaultError::AuthFailed => {
+            fdo::Error::AccessDenied("authentication failed".into())
+        }
+        crate::vault::VaultError::Locked => fdo::Error::AccessDenied(e.to_string()),
+        other => fdo::Error::Failed(other.to_string()),
+    }
+}
+
+pub struct PromptIface {
+    state: AppState,
+    id: u64,
+    pending_objects: Vec<OwnedObjectPath>,
+}
+
+#[interface(name = "org.freedesktop.Secret.Prompt")]
+impl PromptIface {
+    /// Show / wait for the unlock UI. Shell listens for `UnlockPromptNeeded`.
+    async fn prompt(
+        &self,
+        _window_id: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> fdo::Result<()> {
+        let path = prompt_path(self.id);
+        // Ask the Metis shell (or any listener) to show the unlock dialog.
+        if let Ok(metis_emitter) = SignalEmitter::new(&self.state.connection, SERVICE_PATH) {
+            let _ = MetisSecretsIface::unlock_prompt_needed(&metis_emitter, path.clone()).await;
+        }
+
+        // Wait until unlock succeeds or the vault stays locked after a notify
+        // (dismiss / lock). Cap wait so a missing shell cannot hang clients forever.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+        loop {
+            if !self.state.vault.lock().await.is_locked() {
+                let result = Value::from(self.pending_objects.clone())
+                    .try_to_owned()
+                    .map_err(|e| fdo::Error::Failed(e.to_string()))?;
+                let _ = PromptIface::completed(&emitter, false, result).await;
+                let _ = self
+                    .state
+                    .connection
+                    .object_server()
+                    .remove::<PromptIface, _>(path.as_ref())
+                    .await;
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let notified = self.state.unlock_notify.notified();
+            if tokio::time::timeout(remaining, notified).await.is_err() {
+                break;
+            }
+        }
+        let empty = Value::from(Vec::<OwnedObjectPath>::new())
+            .try_to_owned()
+            .map_err(|e| fdo::Error::Failed(e.to_string()))?;
+        let _ = PromptIface::completed(&emitter, true, empty).await;
+        let _ = self
+            .state
+            .connection
+            .object_server()
+            .remove::<PromptIface, _>(path.as_ref())
+            .await;
+        Ok(())
+    }
+
+    async fn dismiss(&self, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) -> fdo::Result<()> {
+        self.state.unlock_notify.notify_waiters();
+        let path = prompt_path(self.id);
+        let empty = Value::from(Vec::<OwnedObjectPath>::new())
+            .try_to_owned()
+            .map_err(|e| fdo::Error::Failed(e.to_string()))?;
+        let _ = PromptIface::completed(&emitter, true, empty).await;
+        let _ = self
+            .state
+            .connection
+            .object_server()
+            .remove::<PromptIface, _>(path.as_ref())
+            .await;
+        Ok(())
+    }
+
+    #[zbus(signal)]
+    async fn completed(
+        emitter: &SignalEmitter<'_>,
+        dismissed: bool,
+        result: OwnedValue,
+    ) -> zbus::Result<()>;
 }
 
 #[interface(name = "org.freedesktop.Secret.Session")]

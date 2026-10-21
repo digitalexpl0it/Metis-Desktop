@@ -6,6 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 description = "Metis Shell — configurable edge bar and command overlay"
 
+[[bin]]
+name = "metis-shell"
+path = "src/main.rs"
+
+[[bin]]
+name = "metis-ssh-askpass"
+path = "src/bin/ssh_askpass.rs"
+
 [dependencies]
 gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
 glib = "0.22"

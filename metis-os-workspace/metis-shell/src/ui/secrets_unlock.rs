@@ -20,7 +20,9 @@ thread_local! {
 }
 
 /// After the bar is up, check whether the vault is locked and prompt once.
+/// Also listen for Secret Service `UnlockPromptNeeded` (libsecret Unlock path).
 pub fn maybe_prompt_at_startup() {
+    spawn_unlock_prompt_listener();
     glib::timeout_add_seconds_local_once(3, || {
         let (tx, rx) = mpsc::sync_channel::<bool>(1);
         std::thread::Builder::new()
@@ -38,6 +40,52 @@ pub fn maybe_prompt_at_startup() {
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
         });
+    });
+}
+
+/// Background thread: show the unlock UI when secretsd emits `UnlockPromptNeeded`.
+fn spawn_unlock_prompt_listener() {
+    let (tx, rx) = mpsc::sync_channel::<()>(4);
+    std::thread::Builder::new()
+        .name("metis-secrets-prompt".into())
+        .spawn(move || {
+            let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            rt.block_on(async move {
+                let Ok(conn) = zbus::Connection::session().await else {
+                    return;
+                };
+                let Ok(proxy) = zbus::Proxy::new(
+                    &conn,
+                    "org.freedesktop.secrets",
+                    "/org/freedesktop/secrets",
+                    "org.metis.Secrets1",
+                )
+                .await
+                else {
+                    return;
+                };
+                let Ok(mut stream) = proxy.receive_signal("UnlockPromptNeeded").await else {
+                    return;
+                };
+                use futures_util::StreamExt;
+                while stream.next().await.is_some() {
+                    let _ = tx.send(());
+                }
+            });
+        })
+        .ok();
+    glib::timeout_add_local(Duration::from_millis(250), move || match rx.try_recv() {
+        Ok(()) => {
+            ask();
+            glib::ControlFlow::Continue
+        }
+        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
     });
 }
 
@@ -215,6 +263,7 @@ pub fn ask() {
             glib::timeout_add_local(Duration::from_millis(100), move || match rx.try_recv() {
                 Ok(Ok(())) => {
                     window.close();
+                    load_ssh_keys_after_unlock();
                     glib::ControlFlow::Break
                 }
                 Ok(Err(err)) => {
@@ -277,4 +326,54 @@ fn dismiss() {
             win.close();
         }
     });
+}
+
+/// Pipe vault-stored OpenSSH private keys into `ssh-add` (Phase 22 §C).
+fn load_ssh_keys_after_unlock() {
+    if std::env::var_os("SSH_AUTH_SOCK").is_none() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("metis-ssh-add".into())
+        .spawn(|| {
+            let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            let keys = rt
+                .block_on(metis_secrets::list_ssh_key_secrets())
+                .unwrap_or_default();
+            for (label, pem) in keys {
+                if pem.trim().is_empty() {
+                    continue;
+                }
+                let mut child = match std::process::Command::new("ssh-add")
+                    .arg("-")
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(c) => c,
+                    Err(err) => {
+                        tracing::debug!(%err, "ssh-add not available");
+                        return;
+                    }
+                };
+                if let Some(mut stdin) = child.stdin.take() {
+                    use std::io::Write;
+                    let _ = stdin.write_all(pem.as_bytes());
+                }
+                match child.wait() {
+                    Ok(status) if status.success() => {
+                        tracing::info!(%label, "loaded SSH key into agent");
+                    }
+                    Ok(_) => tracing::warn!(%label, "ssh-add failed for vault key"),
+                    Err(err) => tracing::warn!(%err, %label, "ssh-add wait failed"),
+                }
+            }
+        })
+        .ok();
 }

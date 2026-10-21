@@ -159,6 +159,9 @@ pub fn build() -> gtk::Widget {
     profile_body.append(&actions);
     content.append(&profile_card);
 
+    // ---- SSH keys (Phase 22 §C) -------------------------------------------
+    content.append(&build_ssh_keys_section());
+
     // ---- Other users ------------------------------------------------------
     let (users_card, users_body) =
         ui::section_with_icon(&tr("Other users"), "system-users-symbolic");
@@ -459,6 +462,22 @@ fn build_user_row(
 }
 fn open_password_sheet(user: &str, accounts: Rc<RefCell<Vec<AccountInfo>>>, list_box: gtk::Box) {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    let is_self = std::env::var("USER").ok().as_deref() == Some(user);
+    let old_pw = gtk::PasswordEntry::builder()
+        .show_peek_icon(true)
+        .placeholder_text(tr("Current password (keyring)"))
+        .hexpand(true)
+        .build();
+    if is_self {
+        let hint = gtk::Label::new(Some(&tr(
+            "After changing your login password, Metis re-wraps the keyring so saved secrets keep working.",
+        )));
+        hint.add_css_class("metis-settings-hint");
+        hint.set_wrap(true);
+        hint.set_xalign(0.0);
+        body.append(&hint);
+        body.append(&old_pw);
+    }
     let p1 = gtk::PasswordEntry::builder()
         .show_peek_icon(true)
         .placeholder_text(tr("New password"))
@@ -484,29 +503,52 @@ fn open_password_sheet(user: &str, accounts: Rc<RefCell<Vec<AccountInfo>>>, list
     apply.connect_clicked(move |_| {
         let mut a = p1.text().to_string();
         let mut b = p2.text().to_string();
+        let mut old = old_pw.text().to_string();
         if a.is_empty() {
             err.set_label(&tr("Password must not be empty."));
             a.zeroize();
             b.zeroize();
+            old.zeroize();
             return;
         }
         if a != b {
             err.set_label(&tr("Passwords do not match."));
             a.zeroize();
             b.zeroize();
+            old.zeroize();
             return;
         }
         b.zeroize();
+        if is_self && old.is_empty() {
+            err.set_label(&tr("Enter your current password to re-wrap the keyring."));
+            a.zeroize();
+            old.zeroize();
+            return;
+        }
         let user = user.clone();
         let accounts = accounts.clone();
         let list_box = list_box.clone();
         let err = err.clone();
+        let rewrap_self = is_self;
         bg::run_bg(
             move || {
                 let result = metis_remote::set_account_password(&user, &a);
+                let rewrap_err = if result.is_ok() && rewrap_self {
+                    secrets_rewrap_after_password_change(&old, &a)
+                } else {
+                    Ok(())
+                };
                 let mut a = a;
+                let mut old = old;
                 a.zeroize();
-                result
+                old.zeroize();
+                match (result, rewrap_err) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(e), _) => Err(e),
+                    (Ok(()), Err(e)) => Err(format!(
+                        "{e} (login password changed; unlock keyring with the previous password if needed)"
+                    )),
+                }
             },
             move |result| match result {
                 Ok(()) => {
@@ -522,6 +564,40 @@ fn open_password_sheet(user: &str, accounts: Rc<RefCell<Vec<AccountInfo>>>, list
     });
 
     let _ = dialog::present(&tr("Change password"), &body, Rc::new(|| {}));
+}
+
+/// Re-wrap `vault.wrap` after the session owner's login password changes.
+fn secrets_rewrap_after_password_change(old: &str, new: &str) -> Result<(), String> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let conn = zbus::Connection::session()
+            .await
+            .map_err(|e| e.to_string())?;
+        let proxy = zbus::Proxy::new(
+            &conn,
+            "org.freedesktop.secrets",
+            "/org/freedesktop/secrets",
+            "org.metis.Secrets1",
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        // Prefer unlocked rewrap when the vault is already open.
+        let locked = proxy.get_property::<bool>("Locked").await.unwrap_or(true);
+        if !locked {
+            match proxy.call_method("RewrapUnlocked", &(new,)).await {
+                Ok(_) => return Ok(()),
+                Err(e) => tracing::debug!(%e, "RewrapUnlocked failed; trying RewrapWithPasswords"),
+            }
+        }
+        proxy
+            .call_method("RewrapWithPasswords", &(old, new))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
 }
 
 fn open_add_user_sheet(accounts: Rc<RefCell<Vec<AccountInfo>>>, list_box: gtk::Box) {
@@ -611,4 +687,181 @@ fn open_add_user_sheet(accounts: Rc<RefCell<Vec<AccountInfo>>>, list_box: gtk::B
     });
 
     let _ = dialog::present(&tr("Add User"), &body, Rc::new(|| {}));
+}
+
+fn build_ssh_keys_section() -> gtk::Widget {
+    let (card, body) = ui::section_with_icon(&tr("SSH keys"), "network-server-symbolic");
+    let hint = gtk::Label::new(Some(&tr(
+        "Private keys stored in the Metis keyring are loaded into ssh-agent after unlock. Requires SSH_AUTH_SOCK from the session.",
+    )));
+    hint.add_css_class("metis-settings-hint");
+    hint.set_wrap(true);
+    hint.set_xalign(0.0);
+    body.append(&hint);
+
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    list.add_css_class("metis-settings-list");
+    body.append(&list);
+    reload_ssh_key_list(&list);
+
+    let add = gtk::Button::with_label(&tr("Add private key…"));
+    add.add_css_class("suggested-action");
+    add.set_halign(gtk::Align::End);
+    add.set_margin_top(8);
+    {
+        let list = list.clone();
+        add.connect_clicked(move |_| {
+            open_add_ssh_key_sheet(list.clone());
+        });
+    }
+    body.append(&add);
+    card.upcast()
+}
+
+fn reload_ssh_key_list(list: &gtk::Box) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    let list = list.clone();
+    bg::run_bg(
+        || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?;
+            rt.block_on(metis_secrets::list_ssh_key_labels())
+                .map_err(|e| e.to_string())
+        },
+        move |result| match result {
+            Ok(labels) if labels.is_empty() => {
+                let empty = gtk::Label::new(Some(&tr("No SSH keys in the keyring yet.")));
+                empty.add_css_class("metis-settings-hint");
+                empty.set_xalign(0.0);
+                list.append(&empty);
+            }
+            Ok(labels) => {
+                for label in labels {
+                    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                    row.add_css_class("metis-settings-row");
+                    let name = gtk::Label::new(Some(&label));
+                    name.set_hexpand(true);
+                    name.set_xalign(0.0);
+                    let remove = gtk::Button::with_label(&tr("Remove"));
+                    remove.add_css_class("flat");
+                    remove.add_css_class("destructive-action");
+                    let label_rm = label.clone();
+                    let list_rm = list.clone();
+                    remove.connect_clicked(move |_| {
+                        let label_rm = label_rm.clone();
+                        let list_rm = list_rm.clone();
+                        bg::run_bg(
+                            move || {
+                                let rt = tokio::runtime::Builder::new_current_thread()
+                                    .enable_all()
+                                    .build()
+                                    .map_err(|e| e.to_string())?;
+                                rt.block_on(metis_secrets::delete(
+                                    &label_rm,
+                                    metis_secrets::SSH_PRIVATE_KEY,
+                                ))
+                                .map_err(|e| e.to_string())
+                            },
+                            move |result| {
+                                if let Err(err) = result {
+                                    tracing::warn!(%err, "failed to remove SSH key");
+                                }
+                                reload_ssh_key_list(&list_rm);
+                            },
+                        );
+                    });
+                    row.append(&name);
+                    row.append(&remove);
+                    list.append(&row);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(%err, "list SSH keys failed");
+                let empty = gtk::Label::new(Some(&tr("Unlock the keyring to manage SSH keys.")));
+                empty.add_css_class("metis-settings-hint");
+                empty.set_xalign(0.0);
+                list.append(&empty);
+            }
+        },
+    );
+}
+
+fn open_add_ssh_key_sheet(list: gtk::Box) {
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    let label = gtk::Entry::builder()
+        .placeholder_text(tr("Label (e.g. github)"))
+        .hexpand(true)
+        .build();
+    let pem = gtk::TextView::new();
+    pem.set_hexpand(true);
+    pem.set_vexpand(true);
+    pem.set_wrap_mode(gtk::WrapMode::WordChar);
+    let scrolled = gtk::ScrolledWindow::builder()
+        .child(&pem)
+        .min_content_height(160)
+        .hexpand(true)
+        .build();
+    let hint = gtk::Label::new(Some(&tr(
+        "Paste an OpenSSH private key (PEM). It stays in the Metis keyring and loads into ssh-agent after unlock.",
+    )));
+    hint.add_css_class("metis-settings-hint");
+    hint.set_wrap(true);
+    hint.set_xalign(0.0);
+    body.append(&hint);
+    body.append(&label);
+    body.append(&scrolled);
+    let err = gtk::Label::new(None);
+    err.add_css_class("metis-settings-hint");
+    err.set_xalign(0.0);
+    body.append(&err);
+    let save = gtk::Button::with_label(&tr("Store key"));
+    save.add_css_class("suggested-action");
+    save.set_halign(gtk::Align::End);
+    body.append(&save);
+
+    save.connect_clicked(move |_| {
+        let name = label.text().to_string().trim().to_string();
+        let buffer = pem.buffer();
+        let (start, end) = buffer.bounds();
+        let mut text = buffer.text(&start, &end, false).to_string();
+        if name.is_empty() || text.trim().is_empty() {
+            err.set_label(&tr("Label and private key are required."));
+            text.zeroize();
+            return;
+        }
+        let list = list.clone();
+        let err = err.clone();
+        bg::run_bg(
+            move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                let result = rt.block_on(metis_secrets::store(
+                    &name,
+                    metis_secrets::SSH_PRIVATE_KEY,
+                    &text,
+                ));
+                let mut text = text;
+                text.zeroize();
+                result.map_err(|e| e.to_string())
+            },
+            move |result| match result {
+                Ok(()) => {
+                    dialog::dismiss(false);
+                    reload_ssh_key_list(&list);
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "store SSH key failed");
+                    err.set_label(&e);
+                }
+            },
+        );
+    });
+
+    let _ = dialog::present(&tr("Add SSH key"), &body, Rc::new(|| {}));
 }

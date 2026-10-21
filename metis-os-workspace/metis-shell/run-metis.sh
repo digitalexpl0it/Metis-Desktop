@@ -384,6 +384,9 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
     if [[ -x "$REL/metis-gamingd" ]]; then
         $SUDO install -Dm755 "$REL/metis-gamingd" "$BIN_DST/metis-gamingd"
     fi
+    if [[ -x "$REL/metis-ssh-askpass" ]]; then
+        $SUDO install -Dm755 "$REL/metis-ssh-askpass" "$BIN_DST/metis-ssh-askpass"
+    fi
     if [[ -x "$REL/metis-secretsd" ]]; then
         $SUDO install -Dm755 "$REL/metis-secretsd" "$BIN_DST/metis-secretsd"
         # Install under Metis share — not /usr/share/dbus-1/services/ (conflicts
@@ -788,6 +791,41 @@ metis_start_secret_service() {
     fi
 }
 
+# OpenSSH agent for Metis-owned secrets path (Phase 22 §C).
+metis_ensure_ssh_agent() {
+    if [[ -n "${SSH_AUTH_SOCK:-}" && -S "${SSH_AUTH_SOCK}" ]]; then
+        log "SSH: SSH_AUTH_SOCK already set — leaving existing agent"
+        return 0
+    fi
+    if ! command -v ssh-agent >/dev/null 2>&1; then
+        log "SSH: ssh-agent not on PATH"
+        return 0
+    fi
+    eval "$(ssh-agent -s)" >/dev/null
+    export SSH_AUTH_SOCK SSH_AGENT_PID
+    local askpass=""
+    if command -v metis-ssh-askpass >/dev/null 2>&1; then
+        askpass="$(command -v metis-ssh-askpass)"
+    else
+        local cand
+        for cand in \
+            "${CARGO_TARGET_DIR:-$WORKSPACE/target}/release/metis-ssh-askpass" \
+            "${CARGO_TARGET_DIR:-$WORKSPACE/target}/debug/metis-ssh-askpass" \
+            "$WORKSPACE/target/release/metis-ssh-askpass" \
+            "$WORKSPACE/target/debug/metis-ssh-askpass"; do
+            if [[ -x "$cand" ]]; then
+                askpass="$cand"
+                break
+            fi
+        done
+    fi
+    if [[ -n "$askpass" ]]; then
+        export SSH_ASKPASS="$askpass"
+        export SSH_ASKPASS_REQUIRE="${SSH_ASKPASS_REQUIRE:-prefer}"
+    fi
+    log "SSH: started ssh-agent"
+}
+
 # --- environment -----------------------------------------------------------
 
 ensure_cargo_in_path
@@ -1075,6 +1113,7 @@ export RUST_LOG="${RUST_LOG:-metis_shell=info,metis_compositor=info,warn}"
         # serves org.freedesktop.secrets on the shared user bus.
         if [[ "$DRM" -eq 1 ]] || ! nested_host_session; then
             metis_start_secret_service
+            metis_ensure_ssh_agent
         fi
 
         log "Starting Metis compositor session (spawns shell automatically) …"
