@@ -3470,7 +3470,7 @@ impl MetisState {
             let Some(id) = self.windows.id_for_window(window) else {
                 continue;
             };
-            if self.windows.is_minimized(id) {
+            if self.pointer_ignores_window(id) {
                 continue;
             }
             if self

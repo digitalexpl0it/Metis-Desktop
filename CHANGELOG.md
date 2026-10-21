@@ -26,6 +26,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Phase 21 §C — Input-passthrough during window FX** — minimize genie and
+  workspace-slide *leaving* windows are ignored by pointer hit-tests (including
+  `classify_hit` / `element_under` fallbacks and resize chrome) so clicks reach
+  windows below; maximize wobble clears on xdg and X11 move/resize grabs
+  (parity with SSD titlebar/edge).
 - **Phase 21 §B — Kinetic scroll-strip momentum** — on scrolling workspaces,
   **Super+scroll** or a flick over empty strip gap / wallpaper pans the viewport
   with velocity + friction coast and light edge bounce. Axis over a client

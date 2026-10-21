@@ -646,6 +646,8 @@ client needs `@/tmp/.X11-unix/...`.
 
 - **Move** — drag the titlebar.
 - **Close / minimize / maximize** — the three titlebar buttons (× / − / +).
+  While the minimize genie animation runs, clicks pass through to windows below
+  (the shrinking window no longer steals hits).
 - **Resize** — drag a window border or corner; tiled windows float out of the
   grid when you resize them, and the new geometry is remembered.
 - **Snap zones** — drag a window to a screen edge for a live translucent preview,
@@ -674,7 +676,7 @@ all configurable in Settings → Appearance → Windows.
 Each workspace is a separate set of app windows. Switch between them with the bar
 dots or the keyboard. When window animations are enabled (default; Settings →
 Appearance → Edge bar), the desktop **slides** horizontally in the direction of
-the switch (wallpaper stays put).
+the switch (wallpaper stays put). Outgoing windows do not steal clicks mid-slide.
 
 - `Super`+`1` .. `Super`+`9` — switch to that workspace.
 - `Super`+`Shift`+`1` .. `9` — move the focused window to that workspace.

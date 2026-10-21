@@ -103,6 +103,8 @@ impl XdgShellHandler for MetisState {
                 keyboard.set_focus(self, Some(window.clone().into()), serial);
             }
             if let Some(id) = self.windows.id_for_window(&window) {
+                // Parity with SSD titlebar move: don't fight maximize wobble relocate.
+                self.clear_maximize_fx(id);
                 self.event_bus
                     .emit(&metis_protocol::CompositorEvent::WindowFocused { id });
             }
@@ -160,6 +162,9 @@ impl XdgShellHandler for MetisState {
                 return;
             };
             let initial_window_size = window.geometry().size;
+            if let Some(id) = self.windows.id_for_window(&window) {
+                self.clear_maximize_fx(id);
+            }
 
             surface.with_pending_state(|state| {
                 state.states.set(xdg_toplevel::State::Resizing);

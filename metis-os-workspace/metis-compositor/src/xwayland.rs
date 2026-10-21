@@ -1289,6 +1289,8 @@ impl XwmHandler for MetisState {
             {
                 return;
             }
+            // Parity with SSD / xdg move: don't fight maximize wobble relocate.
+            self.clear_maximize_fx(id);
             // Float it so the drag has no snap-back to a grid tile.
             self.floating.insert(id);
         }

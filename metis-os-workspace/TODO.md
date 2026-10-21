@@ -2289,7 +2289,8 @@ only — do not put it above IME (Phase 20 §A) or corner-mask blur.
 
 - Bar backdrop Gaussian blur over wallpaper (`blur.rs`, `bar.json` `blur` /
   `blur_radius`) — **§A stadium SDF mask landed** 2026-10-21
-- Minimize genie + maximize wobble (`window_fx`); workspace slide (~280ms)
+- Minimize genie + maximize wobble (`window_fx`); workspace slide (~280ms) —
+  **§C pointer ignore during genie/slide-leave + wobble grab clear** 2026-10-21
 - Scroll-strip focus easing via `scroll_x` → `scroll_x_target` (`metis-grid` /
   `desk.rs`) — **§B kinetic Super/empty-gap flick landed** 2026-10-21
 - Token themes (`themes/light.json` / `dark.json`) + live `reload-theme`
@@ -2328,14 +2329,13 @@ Focus easing already exists; touchpad/wheel **flick** landed 2026-10-21.
 
 ### C. Input-passthrough during window FX (P1)
 
-- [ ] **Genie / minimize** — while `MinimizeGenieFx` runs, hit-test as if the
-      window were already gone (or bounds follow the clip rect) so clicks pass
-      through to windows below; finish still calls `minimize_window_now`
-- [ ] **Workspace slide** — during `WorkspaceSlideFx`, do not leave stale full
-      rects stealing clicks on the outgoing desk
-- [ ] **Wobble** — maximize wobble must not restart forever or block drag after
-      unmaximize (partially fixed 2026-07; audit residual grab edge cases)
-- [ ] **Tests / QA** — click-through during minimize; no stuck grab after FX
+- [x] **Genie / minimize** (2026-10-21) — `pointer_ignores_window` excludes
+      genie ids from all hit paths; finish still `minimize_window_now`
+- [x] **Workspace slide** (2026-10-21) — leaving skip extended to `classify_hit`,
+      `element_under` fallbacks, and `resize_edge_at`
+- [x] **Wobble** (2026-10-21) — `clear_maximize_fx` on xdg + X11 move/resize
+      grab start (parity with SSD titlebar/edge; 2026-07 debounce retained)
+- [x] **Docs** (2026-10-21) — CHANGELOG; USER_GUIDE minimize / workspace slide
 
 ### D. Ambient wallpaper tint (P2 — stretch)
 

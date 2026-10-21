@@ -463,10 +463,22 @@ fn rebuild(tv: &Rc<TaskView>) {
     }
     let stash = windows::scratchpad_count();
     if stash > 0 {
-        let hint = gtk::Label::new(Some(&format!("Scratchpad · {stash}")));
+        let hint = gtk::Button::with_label(&format!("Scratchpad · {stash}"));
         hint.add_css_class("metis-task-view-scratchpad-hint");
         hint.set_halign(gtk::Align::Center);
         hint.set_margin_top(6);
+        hint.set_has_frame(false);
+        hint.set_focus_on_click(false);
+        hint.set_tooltip_text(Some("Show or hide scratchpad (Super+U)"));
+        hint.connect_clicked(|_| {
+            if let Err(err) = crate::compositor::toggle_scratchpad() {
+                tracing::warn!(%err, "task view toggle scratchpad failed");
+            }
+            glib::idle_add_local_once(|| {
+                windows::reconcile_now();
+                schedule_refresh_after_change();
+            });
+        });
         tv.shelf.append(&hint);
     }
 }

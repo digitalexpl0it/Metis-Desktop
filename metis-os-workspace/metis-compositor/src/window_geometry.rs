@@ -517,6 +517,17 @@ impl MetisState {
         self.minimize_genie_fx.contains_key(&id)
     }
 
+    /// Windows that must not receive pointer hits (Phase 21 §C).
+    ///
+    /// Minimized surfaces stay mapped only briefly; minimize-genie and
+    /// workspace-slide *leaving* windows stay mapped for the FX but should
+    /// already feel gone so clicks pass through to windows below.
+    pub(crate) fn pointer_ignores_window(&self, id: u32) -> bool {
+        self.windows.is_minimized(id)
+            || self.is_minimize_genie_active(id)
+            || self.is_workspace_slide_leaving(id)
+    }
+
     /// Usable desktop band for grid tiling on `output` (below/ beside the edge bar).
     pub(crate) fn grid_placement_zone_for(&self, output: &smithay::output::Output) -> PixelRect {
         let mut zone = self.window_placement_zone_for(output);

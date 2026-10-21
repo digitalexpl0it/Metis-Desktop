@@ -156,6 +156,9 @@ impl MetisState {
         // widget tiles (which sit behind the windows).
         if self.active_layout_kind(&key) == metis_grid::LayoutKind::Scroll {
             for (wid, full) in self.scroll_frames_for(&key) {
+                if self.pointer_ignores_window(wid) {
+                    continue;
+                }
                 if !point_in_rect(x, y, full) {
                     continue;
                 }
@@ -203,6 +206,9 @@ impl MetisState {
                     window_id: Some(wid),
                     ..
                 } => {
+                    if self.pointer_ignores_window(*wid) {
+                        continue;
+                    }
                     let body = if self.window_uses_ssd(*wid) {
                         app_tile_body_rect(full)
                     } else {
@@ -305,9 +311,13 @@ impl MetisState {
         self.topmost_window_at_pointer(pos)
             .and_then(|(window, _)| self.windows.id_for_window(&window))
             .or_else(|| {
-                self.space
-                    .element_under(pos)
-                    .and_then(|(window, _)| self.windows.id_for_window(window))
+                self.space.element_under(pos).and_then(|(window, _)| {
+                    let id = self.windows.id_for_window(window)?;
+                    if self.pointer_ignores_window(id) {
+                        return None;
+                    }
+                    Some(id)
+                })
             })
     }
 
@@ -327,11 +337,8 @@ impl MetisState {
             let Some(id) = self.windows.id_for_window(window) else {
                 continue;
             };
-            if self.windows.is_minimized(id) {
-                continue;
-            }
-            // Leaving desk during a workspace slide: ignore pointer (exiting).
-            if self.is_workspace_slide_leaving(id) {
+            // Minimized, mid-genie, or workspace-slide leaving: already "gone".
+            if self.pointer_ignores_window(id) {
                 continue;
             }
             let Some(record) = self.windows.get(id) else {
@@ -425,9 +432,12 @@ impl MetisState {
             }
         }
         let (window, _location) = self.topmost_window_at_pointer(pos).or_else(|| {
-            self.space
-                .element_under(pos)
-                .map(|(window, location)| (window.clone(), location))
+            let (window, location) = self.space.element_under(pos)?;
+            let id = self.windows.id_for_window(window)?;
+            if self.pointer_ignores_window(id) {
+                return None;
+            }
+            Some((window.clone(), location))
         })?;
         self.window_surface_for(pos, &window)
     }
