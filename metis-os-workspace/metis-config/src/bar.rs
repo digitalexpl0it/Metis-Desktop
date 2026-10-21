@@ -580,6 +580,10 @@ pub struct BarConfig {
     /// the bar when `blur` is enabled. Consumed by the compositor via bar.json.
     #[serde(default = "default_blur_radius")]
     pub blur_radius: f32,
+    /// Subtle wallpaper-derived colour lift on Control Center / Notification
+    /// Center frost (shell CSS). Compositor samples CPU wallpaper pixels.
+    #[serde(default = "default_true")]
+    pub ambient_tint: bool,
     /// When false, compositor window effects (minimize genie, maximize wobble,
     /// titlebar slide) run instantly.
     #[serde(default = "default_true")]
@@ -712,6 +716,7 @@ impl Default for BarConfig {
             auto_hide_peek_px: default_auto_hide_peek_px(),
             blur: default_true(),
             blur_radius: default_blur_radius(),
+            ambient_tint: default_true(),
             window_animations: default_true(),
             window_gap_px: default_window_gap_px(),
             tray_icon_mode: TrayIconMode::default(),

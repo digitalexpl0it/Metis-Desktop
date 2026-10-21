@@ -1,5 +1,6 @@
 //! Edge bar: position, per-display placement, workspace + layout behaviour,
-//! tray mode, distance from the screen edge, opacity, backdrop blur, and the
+//! tray mode, distance from the screen edge, opacity, backdrop blur, ambient
+//! tint, and the
 //! bar's pill border. All fields live in `bar.json`, which the shell watches.
 
 use std::cell::{Cell, RefCell};
@@ -164,6 +165,24 @@ pub fn build() -> gtk::Widget {
     blur_hint.set_wrap(true);
     blur_hint.add_css_class("metis-settings-hint");
     bar_body.append(&blur_hint);
+
+    let ambient = gtk::Switch::new();
+    ambient.set_active(bar.ambient_tint);
+    ambient.set_halign(gtk::Align::End);
+    ambient.set_valign(gtk::Align::Center);
+    bar_body.append(&ui::row_with_icon(
+        "colorimeter-colorhug-symbolic",
+        &tr("Ambient tint"),
+        &ambient,
+    ));
+    let ambient_hint = gtk::Label::new(Some(&tr(
+        "Tints Control Center and Notification Center frost slightly from the \
+         wallpaper. Themes stay the source of truth — this is only a subtle lift.",
+    )));
+    ambient_hint.set_xalign(0.0);
+    ambient_hint.set_wrap(true);
+    ambient_hint.add_css_class("metis-settings-hint");
+    bar_body.append(&ambient_hint);
 
     // -- Bar fill (theme / solid / gradient) --
     let bf = bar.bar_fill.clone();
@@ -565,6 +584,9 @@ pub fn build() -> gtk::Widget {
     });
     ui::defer_switch_active_notify(&blur, move |active| {
         update_bar(move |c| c.blur = active);
+    });
+    ui::defer_switch_active_notify(&ambient, move |active| {
+        update_bar(move |c| c.ambient_tint = active);
     });
     blur_radius.connect_value_changed(move |s| {
         let v = s.value() as f32;

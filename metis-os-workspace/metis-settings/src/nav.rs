@@ -147,7 +147,7 @@ pub const NAV: &[NavItem] = &[
         title: "Edge bar",
         icon: Some("preferences-system-symbolic"),
         hue: Some(NavHue::Teal),
-        subtitle: Some("Position, opacity, blur, workspaces, and the bar border"),
+        subtitle: Some("Position, opacity, blur, ambient tint, workspaces, and the bar border"),
         category: Some("desktop"),
     },
     NavItem {

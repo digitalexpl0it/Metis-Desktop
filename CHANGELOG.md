@@ -9,6 +9,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- **IME binds the live Wayland display** — `metis-session` no longer starts
+  Fcitx5/IBus before the compositor socket exists (or reuses a stale daemon
+  from a prior seat). It waits for `wayland-*`, restarts the IM with
+  `WAYLAND_DISPLAY` set, and drops it on compositor exit so crash restarts
+  rebind `input-method-v2`.
 - **`.deb` upgrade vs gnome-keyring** — stop installing
   `org.freedesktop.secrets.service` into `/usr/share/dbus-1/services/` (dpkg
   conflict with `gnome-keyring`). Ship it under
@@ -26,6 +31,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- **Phase 21 §D — Ambient wallpaper tint** — compositor samples retained CPU
+  wallpaper pixels and pushes `AmbientTint` over IPC; shell applies a USER-
+  priority CSS lift on Control Center and Notification Center frost. Toggle in
+  **Settings → Edge bar** (`bar.json` `ambient_tint`, default on); themes stay
+  authoritative. Fail-soft when pixels are unavailable; last sample is replayed
+  when the shell (re)subscribes so tint is not lost after startup race.
 - **Phase 21 §C — Input-passthrough during window FX** — minimize genie and
   workspace-slide *leaving* windows are ignored by pointer hit-tests (including
   `classify_hit` / `element_under` fallbacks and resize chrome) so clicks reach

@@ -110,30 +110,85 @@ export RUST_LOG="${RUST_LOG:-metis_shell=debug,metis_compositor=info,warn}"
 # package (Recommends: fcitx5). Set module env for XWayland/GTK/Qt unless the
 # user already configured them. Native Wayland clients talk IM via the
 # compositor protocols.
-metis_start_ime() {
+#
+# Important: do **not** start the IM daemon before the compositor creates its
+# Wayland socket. Fcitx5/IBus bind `zwp_input_method_v2` as Wayland clients; a
+# daemon left over from a prior seat (or started with no WAYLAND_DISPLAY) never
+# rebinds and CJK candidates silently fail. Export module env early, then
+# (re)start the daemon once a wayland-* socket exists (see metis_ensure_ime).
+metis_ime_env() {
     if command -v fcitx5 >/dev/null 2>&1; then
         export GTK_IM_MODULE="${GTK_IM_MODULE:-fcitx}"
         export QT_IM_MODULE="${QT_IM_MODULE:-fcitx}"
         export XMODIFIERS="${XMODIFIERS:-@im=fcitx}"
-        if ! pgrep -u "$(id -u)" -x fcitx5 >/dev/null 2>&1; then
-            fcitx5 -d >/dev/null 2>&1 &
-            echo "metis-session: started fcitx5" >&2
-        fi
         return 0
     fi
     if command -v ibus-daemon >/dev/null 2>&1; then
         export GTK_IM_MODULE="${GTK_IM_MODULE:-ibus}"
         export QT_IM_MODULE="${QT_IM_MODULE:-ibus}"
         export XMODIFIERS="${XMODIFIERS:-@im=ibus}"
-        if ! pgrep -u "$(id -u)" -x ibus-daemon >/dev/null 2>&1; then
-            ibus-daemon -drx >/dev/null 2>&1 &
-            echo "metis-session: started ibus-daemon" >&2
-        fi
         return 0
     fi
     return 0
 }
-metis_start_ime
+
+# Wait for the compositor Wayland socket, then restart Fcitx5/IBus so
+# input-method-v2 binds *this* display. Runs in the background (non-blocking).
+metis_ensure_ime() {
+    (
+        local runtime display sock tries=0
+        runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+        display=""
+        while (( tries < 75 )); do
+            if [[ -n "${WAYLAND_DISPLAY:-}" && -S "${runtime}/${WAYLAND_DISPLAY}" ]]; then
+                display="$WAYLAND_DISPLAY"
+                break
+            fi
+            shopt -s nullglob
+            for sock in "${runtime}"/wayland-*; do
+                if [[ -S "$sock" ]]; then
+                    display="$(basename "$sock")"
+                    break 2
+                fi
+            done
+            sleep 0.2
+            tries=$((tries + 1))
+        done
+        if [[ -z "$display" ]]; then
+            echo "metis-session: IME skipped — no Wayland socket after wait" >&2
+            exit 0
+        fi
+        export WAYLAND_DISPLAY="$display"
+        if command -v fcitx5 >/dev/null 2>&1; then
+            export GTK_IM_MODULE="${GTK_IM_MODULE:-fcitx}"
+            export QT_IM_MODULE="${QT_IM_MODULE:-fcitx}"
+            export XMODIFIERS="${XMODIFIERS:-@im=fcitx}"
+            pkill -u "$(id -u)" -x fcitx5 >/dev/null 2>&1 || true
+            sleep 0.2
+            fcitx5 -d >/dev/null 2>&1 &
+            echo "metis-session: started fcitx5 (WAYLAND_DISPLAY=${display})" >&2
+            exit 0
+        fi
+        if command -v ibus-daemon >/dev/null 2>&1; then
+            export GTK_IM_MODULE="${GTK_IM_MODULE:-ibus}"
+            export QT_IM_MODULE="${QT_IM_MODULE:-ibus}"
+            export XMODIFIERS="${XMODIFIERS:-@im=ibus}"
+            pkill -u "$(id -u)" -x ibus-daemon >/dev/null 2>&1 || true
+            sleep 0.2
+            ibus-daemon -drx >/dev/null 2>&1 &
+            echo "metis-session: started ibus-daemon (WAYLAND_DISPLAY=${display})" >&2
+            exit 0
+        fi
+        exit 0
+    ) &
+}
+
+metis_stop_ime() {
+    pkill -u "$(id -u)" -x fcitx5 >/dev/null 2>&1 || true
+    pkill -u "$(id -u)" -x ibus-daemon >/dev/null 2>&1 || true
+}
+
+metis_ime_env
 
 # --- secret service / keyring ----------------------------------------------
 # Metis owns the default provider (`metis-secretsd` → org.freedesktop.secrets).
@@ -244,6 +299,7 @@ SESSION_VARS=(
     XDG_SESSION_ID DISPLAY GDK_BACKEND METIS_SHELL_GSK_RENDERER GTK_A11Y NO_AT_BRIDGE
     SSH_AUTH_SOCK XDG_DATA_DIRS XDG_CONFIG_DIRS
     ELECTRON_OZONE_PLATFORM_HINT CLAUDE_USE_WAYLAND
+    GTK_IM_MODULE QT_IM_MODULE XMODIFIERS
     METIS_SESSION_RESTORE
 )
 metis_export_activation_env() {
@@ -314,9 +370,14 @@ while true; do
     fi
 
     metis_export_activation_env
+    # Bind / rebind Fcitx5|IBus to this compositor's Wayland socket (async).
+    metis_ensure_ime
 
     "$COMP_BIN" "$@" >>"$SESSION_LOG" 2>&1
     code=$?
+
+    # Drop the IM so a supervised restart cannot keep a daemon on a dead socket.
+    metis_stop_ime
 
     attempt=$((attempt + 1))
 

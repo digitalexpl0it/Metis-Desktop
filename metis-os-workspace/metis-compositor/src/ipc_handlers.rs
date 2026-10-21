@@ -307,6 +307,9 @@ impl MetisState {
                 let (full, regions) = self.wallpaper_layout();
                 self.wallpaper.set_layout(full, regions);
                 self.wallpaper.start_async_decode();
+                // Force a re-sample once the new compose lands.
+                self.ambient.last_gen = 0;
+                self.ambient.last_rgb = None;
                 self.damaged = true;
                 self.request_redraw();
                 CompositorEvent::Pong

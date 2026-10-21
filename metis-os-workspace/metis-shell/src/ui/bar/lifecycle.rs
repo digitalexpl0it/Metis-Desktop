@@ -728,6 +728,8 @@ fn apply_config_diff(
     }
     sync_bar_weather_interest(new);
     crate::ui::theme::reload_stylesheet();
+    // Ambient tint kill-switch: clear or restore USER provider from bar.json.
+    crate::ui::theme::sync_ambient_from_bar_config();
     // Toggle ON from Settings: hide immediately so the user sees the effect
     // without waiting for a pointer leave (and despite a stale pointer_over).
     if enabling_auto_hide {

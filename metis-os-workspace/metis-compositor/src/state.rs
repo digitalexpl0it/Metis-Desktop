@@ -291,6 +291,7 @@ pub struct MetisState {
     pub wallpaper: crate::wallpaper::Wallpaper,
     /// Hybrid MultiRenderer wallpaper ImportMem cache (Wave B); dropped on GPU reset.
     pub hybrid_wallpaper_cache: Option<crate::hybrid_multi::HybridWallpaperCache>,
+    pub ambient: crate::ambient::AmbientTintRuntime,
     pub blur: crate::blur::BlurRuntime,
     pub hdr_encode: crate::hdr_encode::HdrEncodeRuntime,
     pub color_lut: crate::color_lut::ColorLutRuntime,
@@ -643,6 +644,7 @@ impl MetisState {
             snap_preview: None,
             wallpaper: crate::wallpaper::Wallpaper::new(),
             hybrid_wallpaper_cache: None,
+            ambient: crate::ambient::AmbientTintRuntime::default(),
             blur: crate::blur::BlurRuntime::default(),
             hdr_encode: crate::hdr_encode::HdrEncodeRuntime::default(),
             color_lut: crate::color_lut::ColorLutRuntime::default(),

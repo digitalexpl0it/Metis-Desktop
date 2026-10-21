@@ -110,6 +110,7 @@ impl MetisState {
         self.decorations.set_scene_linear(scene_linear);
 
         self.wallpaper.poll_decode();
+        self.maybe_refresh_ambient_tint();
         let skip_underlay = self.output_has_fullscreen(target.output_name);
         let wallpaper_elems = if skip_underlay {
             // Fullscreen game covers the output — skip wallpaper decode/upload and

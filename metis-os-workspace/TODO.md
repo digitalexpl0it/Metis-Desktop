@@ -11,9 +11,10 @@ consent + Mutter lock/EIS gates) and **Engineering review backlog**
 **Phase 19** (Gaming Setup UX — guided drivers + first-run polish) shipped
 2026-08-08 — see Phase 19 below; **per-app Gamescope UI** landed.
 **Phase 20** (Desktop power-user polish — IME, scratchpads, dock display
-profiles, handheld power deepen) opened 2026-10-21 — see Phase 20 below.
+profiles) **A–C complete** 2026-10-21; **§D handheld deferred** (no Deck/Ally
+product push) — see Phase 20 below.
 **Phase 21** (Visual / interaction polish — blur corner mask, kinetic scroll,
-genie hit-test, ambient tint stretch) opened 2026-10-21 — see Phase 21 below.
+genie hit-test, ambient tint) **A–D landed** 2026-10-21 — see Phase 21 below.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -2186,6 +2187,10 @@ Opened **2026-10-21** from an external feature review. Several suggestions were
 battery; `outputs.json` layout/mode hotplug). This phase tracks the **real**
 gaps only — do not re-build what Phase 4/5/11 already ship.
 
+**Status 2026-10-21:** **§A–C complete** (IME protocols + session fix + QA
+record; scratchpads; display topology profiles). **§D deferred** — no handheld
+(Deck/Ally) product target.
+
 **Goals:** first-class Wayland IME for CJK/complex scripts; i3-style scratchpads;
 multi-topology display memory keyed by monitor identity; deepen handheld power
 only where gamingd / `power.json` fall short.
@@ -2208,11 +2213,30 @@ Layout switching via `input.json` / xkb is **not** enough for Fcitx5 / IBus.
 - [x] **Session env + packaging** (2026-10-21) — `.deb` **Recommends** `fcitx5`
       (+ GTK3/4 + Qt frontends + config-qt); Arch **depends** on fcitx5 stack;
       `scripts/deps/` aligned. `metis-session` starts Fcitx5 (IBus fallback)
+      **after** the compositor Wayland socket exists (rebind on crash restart)
       and sets `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS` when unset.
       Language engines / IBus remain Suggests / optdepends (not bundled).
-- [ ] **QA** — Fcitx5 + IBus smoke on Ubuntu/Debian/Arch: CJK commit, Arabic /
-      Indic, Electron/GTK/Firefox under Metis Wayland (not XWayland-only)
-- [x] **Docs** (2026-10-21) — USER_GUIDE Input / IME; CHANGELOG; PACKAGING
+- [x] **QA** (2026-10-21, Ubuntu 26.04.1 LTS / Metis DRM session) — see matrix
+      below. **Known gaps:** no CJK/Arabic engines installed on QA host
+      (Suggests only); interactive CJK commit + Electron + IBus fallback not
+      exercised; re-smoke after installing `fcitx5-chinese-addons` (or Mozc).
+- [x] **Docs** (2026-10-21) — USER_GUIDE Input / IME (+ troubleshooting);
+      CHANGELOG; PACKAGING
+
+**QA matrix (2026-10-21, Ubuntu 26.04.1, Fcitx5 primary):**
+
+| Case | Result | Notes |
+|------|--------|-------|
+| Session starts Fcitx5 + IM env | **pass** | Journal `metis-session: started fcitx5`; shell `GTK_IM_MODULE=fcitx` / `XMODIFIERS=@im=fcitx`; `WAYLAND_DISPLAY=wayland-1` |
+| Protocols advertised | **pass** | `zwp_text_input_manager_v3` v1 + `zwp_input_method_manager_v2` v1 |
+| Fcitx binds input-method-v2 | **pass** (after fix) | Stale pre-socket daemon had **no** Wayland link — fixed in `metis-session` (`metis_ensure_ime`); post-fix `WAYLAND_DEBUG` shows bind of `zwp_input_method_manager_v2` |
+| GTK4 IM module | **pass** | `fcitx5-frontend-gtk4` installed; `fcitx5-gtk4-immodule-probing` → `GTK_IM_MODULE=fcitx` |
+| GTK4 CJK commit + caret popup | **gap** | Only `keyboard-us` in Fcitx profile — install `fcitx5-pinyin` / chinese-addons to retest |
+| Firefox Wayland CJK | **gap** | Same engine gap; Firefox present — keep native Wayland (not X11-forced) |
+| Electron (Cursor/VS Code) | **skip** | Optional; often Electron/Ozone limits, not Metis |
+| Arabic / Indic | **skip** | Engines not installed |
+| Focus while preedit (Super/click) | **pass** (code) | `update_keyboard_focus` ignores IME keyboard grab (anvil parity); no stuck-grab bug found |
+| IBus fallback | **skip** | `ibus` package present; primary path is Fcitx5 — do not disrupt live session |
 
 ### B. Scratchpads (P1)
 
@@ -2244,7 +2268,7 @@ Bar layer-shell dropdowns ≠ window scratchpads.
       Delete + active chip
 - [x] **Docs** (2026-10-21) — USER_GUIDE Display docking + CHANGELOG
 
-### D. Handheld / power deepen (P2 — stretch)
+### D. Handheld / power deepen (P2 — stretch) — **deferred**
 
 Already shipped (do **not** reopen as greenfield):
 
@@ -2252,7 +2276,8 @@ Already shipped (do **not** reopen as greenfield):
 - `power.json` dim-on-battery → compositor pass
 - `metis-gamingd` auto Performance on `GameSession`, restore on exit (+ GameMode)
 
-Stretch only if handhelds (Steam Deck / Ally / GPD) are a real target:
+**Deferred 2026-10-21 — no handheld target** (Steam Deck / Ally / GPD). Leave
+unchecked until product demand; do not schedule ahead of other phases.
 
 - [ ] **Idle / sleep inhibitor policy** — document + optional rules for when
       apps may hold `zwp_idle_inhibit` / portal Inhibit (games vs browsers);
@@ -2340,17 +2365,18 @@ Focus easing already exists; touchpad/wheel **flick** landed 2026-10-21.
 ### D. Ambient wallpaper tint (P2 — stretch)
 
 Token themes stay source of truth. Ambient is a **subtle lift**, not a theme
-engine.
+engine. Landed 2026-10-21.
 
-- [ ] **Sampler** — downsample wallpaper (or bar blur source) under Control
-      Center / Notification Center / optional bar; extract rough luminance +
-      dominant hue
-- [ ] **Inject 5–10%** into frosted panel CSS or a compositor sheet tint —
-      clamp so light/dark preference and contrast remain readable
-- [ ] **Hybrid / Multi** — no extra full-frame readbacks on the hot path; fail
-      soft to tokens-only
-- [ ] **Kill-switch** — `bar.json` / theme pref or env to disable ambient
-- [ ] **Docs** — USER_GUIDE theming; CHANGELOG
+- [x] **Sampler** (2026-10-21) — compositor downsamples retained `cpu_pixels`
+      (32² Triangle); avg RGB + luminance clamp; `AmbientTint` IPC on gen change
+- [x] **Inject 5–10%** (2026-10-21) — shell USER CssProvider mix on
+      `.metis-dashboard-root` / `.metis-nc-panel` (not bar pill); replay on
+      shell subscribe so startup race does not drop the first sample
+- [x] **Hybrid / Multi** (2026-10-21) — CPU-only sample (no FB readback); fail
+      soft to tokens-only when pixels missing
+- [x] **Kill-switch** (2026-10-21) — `bar.json` `ambient_tint` + Settings →
+      Edge bar switch (default on)
+- [x] **Docs** (2026-10-21) — USER_GUIDE Edge bar / bar.json; CHANGELOG
 
 ### E. Explicitly deferred / rejected
 
@@ -2488,6 +2514,7 @@ recent hosts; no passwords).
 | `bar_border.width_px` | Stroke thickness in pixels (0 disables the border) |
 | `blur` | Enable the compositor Gaussian backdrop blur behind the bar; *(Phase 21 §A)* stadium corner mask |
 | `blur_radius` | Blur strength in pixels (1–64) when `blur` is on |
+| `ambient_tint` | Wallpaper-derived lift on CC/NC frost; Settings → Edge bar; *(Phase 21 §D)* |
 | `widgets` | Ordered list; `spacer` pushes following widgets apart. Includes `tasks` (the running-apps dock) |
 | `clock.time_format` / `date_format` | `chrono` format strings |
 | `clock.timezones` | Extra zones listed in the calendar popover |

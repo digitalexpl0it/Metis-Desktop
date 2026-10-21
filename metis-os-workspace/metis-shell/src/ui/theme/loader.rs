@@ -20,6 +20,10 @@ thread_local! {
     static BAR_POSITION: Cell<BarPosition> = const { Cell::new(BarPosition::Top) };
     static MENU_BG_PROVIDER: CssProvider = CssProvider::new();
     static MENU_OPACITY: Cell<f32> = const { Cell::new(1.0) };
+    /// Wallpaper-sampled lift for CC / NC (Phase 21 §D).
+    static AMBIENT_PROVIDER: CssProvider = CssProvider::new();
+    static AMBIENT_RGB: Cell<Option<(u8, u8, u8)>> = const { Cell::new(None) };
+    static AMBIENT_ENABLED: Cell<bool> = const { Cell::new(true) };
 }
 
 struct ThemeState {
@@ -31,6 +35,7 @@ pub fn init_theme() -> ThemeTokens {
     // Keep org.gnome.desktop.interface in sync for Nautilus / other GTK apps.
     metis_config::sync_session_appearance_from_config();
     apply_icon_theme_from_config();
+    AMBIENT_ENABLED.with(|e| e.set(metis_config::load_bar_config().ambient_tint));
     let tokens = load_active_theme();
     apply_tokens(&tokens);
     tokens
@@ -98,11 +103,109 @@ fn apply_tokens(tokens: &ThemeTokens) {
         BAR_POSITION.with(Cell::get),
     );
     apply_menu_opacity(MENU_OPACITY.with(Cell::get));
+    // Re-apply ambient lift after tokens so theme reload keeps the wallpaper tint.
+    reapply_ambient_provider();
     crate::ui::desktop_widgets::on_theme_changed();
     crate::ui::dashboard::on_theme_changed();
     crate::ui::screenshot::on_theme_changed();
     crate::ui::notification_center::on_theme_changed();
     crate::ui::updater::on_theme_changed();
+}
+
+/// Mix fraction of wallpaper RGB into frosted Control Center / Notification Center.
+/// Strong enough to read on typical wallpapers; still a lift, not a retheme.
+const AMBIENT_MIX: f32 = 0.18;
+
+/// Apply or clear the wallpaper ambient tint from a compositor event.
+pub fn apply_ambient_tint(r: u8, g: u8, b: u8, enabled: bool) {
+    AMBIENT_ENABLED.with(|e| e.set(enabled));
+    if !enabled {
+        AMBIENT_RGB.with(|c| c.set(None));
+        clear_ambient_provider();
+        return;
+    }
+    if !metis_config::load_bar_config().ambient_tint {
+        AMBIENT_RGB.with(|c| c.set(None));
+        clear_ambient_provider();
+        return;
+    }
+    AMBIENT_RGB.with(|c| c.set(Some((r, g, b))));
+    reapply_ambient_provider();
+}
+
+/// Honour `bar.json` `ambient_tint` on live reload (Settings Edge bar switch).
+pub fn sync_ambient_from_bar_config() {
+    let on = metis_config::load_bar_config().ambient_tint;
+    AMBIENT_ENABLED.with(|e| e.set(on));
+    if !on {
+        clear_ambient_provider();
+    } else {
+        reapply_ambient_provider();
+    }
+}
+
+fn clear_ambient_provider() {
+    AMBIENT_PROVIDER.with(|provider| {
+        provider.load_from_string("");
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                provider,
+                STYLE_PROVIDER_PRIORITY_USER,
+            );
+        }
+    });
+    tracing::info!("ambient tint CSS cleared");
+    crate::ui::dashboard::on_theme_changed();
+    crate::ui::notification_center::on_theme_changed();
+}
+
+fn reapply_ambient_provider() {
+    if !AMBIENT_ENABLED.with(Cell::get) || !metis_config::load_bar_config().ambient_tint {
+        clear_ambient_provider();
+        return;
+    }
+    let Some((ar, ag, ab)) = AMBIENT_RGB.with(Cell::get) else {
+        clear_ambient_provider();
+        return;
+    };
+    let tokens = active_tokens();
+    let is_light = tokens.mode.eq_ignore_ascii_case("light");
+    let panel_alpha = if is_light { 0.72_f32 } else { 0.82 };
+    let surface = parse_rgb_triplet(&tokens.surface_rgb());
+    let (sr, sg, sb) = surface.unwrap_or((30, 30, 46));
+    let t = AMBIENT_MIX;
+    let r = ((sr as f32) * (1.0 - t) + (ar as f32) * t).round() as u8;
+    let g = ((sg as f32) * (1.0 - t) + (ag as f32) * t).round() as u8;
+    let b = ((sb as f32) * (1.0 - t) + (ab as f32) * t).round() as u8;
+    // GTK CssProvider does NOT support `!important` (parser: "Junk at end of
+    // value for background-color") — rely on USER priority over APPLICATION.
+    let css = format!(
+        ".metis-dashboard-root, .metis-nc-panel {{\
+            background-color: rgba({r}, {g}, {b}, {panel_alpha:.3});\
+         }}"
+    );
+    AMBIENT_PROVIDER.with(|provider| {
+        provider.load_from_string(&css);
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                provider,
+                STYLE_PROVIDER_PRIORITY_USER,
+            );
+        }
+    });
+    tracing::info!(r, g, b, panel_alpha, "ambient tint CSS applied");
+    crate::ui::dashboard::on_theme_changed();
+    crate::ui::notification_center::on_theme_changed();
+}
+
+fn parse_rgb_triplet(s: &str) -> Option<(u8, u8, u8)> {
+    let mut parts = s.split(',').map(|p| p.trim().parse::<u8>().ok());
+    let r = parts.next()??;
+    let g = parts.next()??;
+    let b = parts.next()??;
+    Some((r, g, b))
 }
 
 /// Apply the edge bar's fill (theme / solid / gradient), opacity, and border.

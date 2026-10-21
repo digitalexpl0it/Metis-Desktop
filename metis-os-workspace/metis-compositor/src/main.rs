@@ -1,5 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
+mod ambient;
 mod bar_reflow;
 mod battery_dim;
 mod blur;

@@ -172,6 +172,12 @@ fn attach_system_events(event_rx: Receiver<SystemEvent>) {
                             image_path.clone(),
                         );
                     }
+                    if let metis_protocol::CompositorEvent::AmbientTint {
+                        r, g, b, enabled, ..
+                    } = &evt
+                    {
+                        crate::ui::theme::apply_ambient_tint(*r, *g, *b, *enabled);
+                    }
                     if let metis_protocol::CompositorEvent::OutputHotplug {
                         connected,
                         name,

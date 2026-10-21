@@ -383,6 +383,19 @@ pub enum CompositorEvent {
         #[serde(default)]
         pid: Option<u32>,
     },
+    /// Wallpaper-sampled lift for frosted shell chrome (Phase 21 §D).
+    /// When `enabled` is false the shell clears the ambient CssProvider.
+    AmbientTint {
+        r: u8,
+        g: u8,
+        b: u8,
+        #[serde(default)]
+        luminance: f32,
+        #[serde(default)]
+        generation: u64,
+        #[serde(default = "default_true")]
+        enabled: bool,
+    },
     /// A physical display was plugged in or unplugged (DRM hotplug).
     OutputHotplug {
         connected: bool,

@@ -994,7 +994,9 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
 - **Edge bar** — position (top/bottom/left/right),
   distance from the edge, **bar length** (40–100%, centered), **bar background**
   (theme / solid / gradient + direction; custom gradient respects **Opacity** on
-  every colour stop), **auto-hide** (slides to a peek and
+  every colour stop), **backdrop blur**, **ambient tint** (subtle wallpaper-derived
+  lift on Control Center and Notification Center frost; themes stay the source of
+  truth — turn off anytime), **auto-hide** (slides to a peek and
   **overlays** maximized windows — peek/reveal does not resize them; move to the
   thin edge strip to open again; with a top bar, use the titlebar band just below
   the peek for window controls),
@@ -1099,12 +1101,15 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   jump to the editor; System VT/quit chords are listed but not editable.
   **Input methods (IME):** Metis exposes Wayland `text-input-v3` and
   `input-method-v2`. The Metis **`.deb` Recommends Fcitx5** (GTK/Qt frontends +
-  config tool); `metis-session` starts it when present and sets
-  `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS` unless you already did.
-  Add language engines yourself (Suggests: `fcitx5-chinese-addons`,
-  `fcitx5-mozc`, `fcitx5-anthy`, …) or use **IBus** if you prefer. Layout
-  switching in Settings → Input remains xkb-only. Candidate popups anchor
-  under the caret.
+  config tool); `metis-session` starts it **after** the compositor Wayland
+  socket exists and sets `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS`
+  unless you already did. Add language engines yourself (Suggests:
+  `fcitx5-chinese-addons`, `fcitx5-mozc`, `fcitx5-anthy`, …) or use **IBus**
+  if you prefer. Layout switching in Settings → Input remains xkb-only.
+  Candidate popups anchor under the caret. **Troubleshooting:** Firefox must
+  run as Wayland (not X11-forced); install a language engine before expecting
+  CJK commit; if candidates never appear after a crash restart, log out/in so
+  `metis-session` rebinds Fcitx5 to the current display.
 - **Bluetooth** — adapter on/off, scan for devices (toggle stop, auto-stops after
   30s), pair / connect / trust / remove. Device list uses zebra rows. Battery
   percentage and charging state appear when the device or driver reports them.
@@ -1612,7 +1617,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 
 | File | Purpose |
 |------|---------|
-| `bar.json` | Edge bar position/size/opacity/blur, widget order, workspaces, borders, default layout |
+| `bar.json` | Edge bar position/size/opacity/blur/ambient tint, widget order, workspaces, borders, default layout |
 | `clock.json` | World clocks and alarms |
 | `calendars.json` | Calendar accounts (no passwords — secrets in Keyring / Secret Service) |
 | `themes/dark.json`, `themes/light.json` | Design tokens — accents, semantic colors, `text_on_accent`, shadows/glows (seeded once; your edits are kept across logins) |
@@ -1654,6 +1659,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `opacity` | Bar background opacity (`< 1` = see-through) |
 | `menu_opacity` | App launcher panel opacity |
 | `blur` / `blur_radius` | Compositor backdrop blur behind the bar (frost follows the pill’s rounded ends; not a sharp square) |
+| `ambient_tint` | Wallpaper-sampled lift on Control Center / Notification Center frost (Settings → Edge bar; default on) |
 | `bar_fill` | Pill fill: theme / solid / gradient + `gradient_direction` |
 | `auto_hide` / `auto_hide_peek_px` | Auto-hide to a peek strip; bar **overlays** windows (no maximize reflow on show/hide). Move to the peek edge to open; top-bar title controls use the band just below the peek |
 | `window_gap_px` | Padding around maximized / edge-snapped windows (0–10) |

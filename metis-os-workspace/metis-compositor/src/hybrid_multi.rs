@@ -636,6 +636,7 @@ fn build_hybrid_elements<'a>(
     let skip_underlay = state.output_has_fullscreen(target.output_name);
     if !skip_underlay {
         state.wallpaper.poll_decode();
+        state.maybe_refresh_ambient_tint();
         state.wallpaper.request_decode_if_needed();
         ensure_hybrid_wallpaper(state, renderer)?;
 
