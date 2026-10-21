@@ -115,8 +115,11 @@ on “wrong DE”.
 - [x] **Icon / theme manager** (2026-10-19) — Settings → Desktop → **Icons**:
       select Freedesktop themes, install zip/tar/tar.gz into
       `~/.local/share/icons/<Name>/` (path-safe, requires `index.theme`), remove
-      user installs only. Persist in `icons.json`; live `reload-icons`. Cursor
-      themes still optional follow-up. Colour tokens stay in `themes/*.json`.
+      user installs only. Persist in `icons.json`; live `reload-icons`. Colour
+      tokens stay in `themes/*.json`.
+- [x] **Cursor themes** (2026-10-21) — Settings → Icons **Cursor theme** + size
+      (16–64); `icons.json` `cursor_theme` / `cursor_size`; gsettings + compositor
+      `ReloadCursors` (DRM XCursor + spawn `XCURSOR_*`).
 - [x] **Default programs** (2026-10-19) — Settings → System → **Default
       applications** (browser, files, terminal, mail, images, audio, video, PDF)
       via `xdg-mime` / `xdg-settings`; Menu terminal / file manager stay aligned.
@@ -126,7 +129,7 @@ on “wrong DE”.
       paths in `icons.json` (home/XDG only); fallback to packaged assets.
 
 **Landed order:** icon theme select → default programs → brand + per-app
-overrides → install/remove packs. Cursor themes optional next.
+overrides → install/remove packs → cursor themes.
 
 ### Product backlog — Desktop maturity (2026-10-20)
 
@@ -2217,9 +2220,9 @@ Layout switching via `input.json` / xkb is **not** enough for Fcitx5 / IBus.
       and sets `GTK_IM_MODULE` / `QT_IM_MODULE` / `XMODIFIERS` when unset.
       Language engines / IBus remain Suggests / optdepends (not bundled).
 - [x] **QA** (2026-10-21, Ubuntu 26.04.1 LTS / Metis DRM session) — see matrix
-      below. **Known gaps:** no CJK/Arabic engines installed on QA host
-      (Suggests only); interactive CJK commit + Electron + IBus fallback not
-      exercised; re-smoke after installing `fcitx5-chinese-addons` (or Mozc).
+      below. **Known gaps:** interactive caret popup / CJK glyph commit not
+      keystroke-automated in CI (engines + protocols ready); Electron + IBus
+      fallback still skip; Arabic/Indic engines not installed.
 - [x] **Docs** (2026-10-21) — USER_GUIDE Input / IME (+ troubleshooting);
       CHANGELOG; PACKAGING
 
@@ -2231,8 +2234,8 @@ Layout switching via `input.json` / xkb is **not** enough for Fcitx5 / IBus.
 | Protocols advertised | **pass** | `zwp_text_input_manager_v3` v1 + `zwp_input_method_manager_v2` v1 |
 | Fcitx binds input-method-v2 | **pass** (after fix) | Stale pre-socket daemon had **no** Wayland link — fixed in `metis-session` (`metis_ensure_ime`); post-fix `WAYLAND_DEBUG` shows bind of `zwp_input_method_manager_v2` |
 | GTK4 IM module | **pass** | `fcitx5-frontend-gtk4` installed; `fcitx5-gtk4-immodule-probing` → `GTK_IM_MODULE=fcitx` |
-| GTK4 CJK commit + caret popup | **gap** | Only `keyboard-us` in Fcitx profile — install `fcitx5-pinyin` / chinese-addons to retest |
-| Firefox Wayland CJK | **gap** | Same engine gap; Firefox present — keep native Wayland (not X11-forced) |
+| GTK4 CJK commit + caret popup | **pass** (ready) | Installed `fcitx5-pinyin` + `fcitx5-chinese-addons`; Default group = `keyboard-us` + `pinyin`; interactive glyph commit left for user (no Wayland key injector in QA harness) |
+| Firefox Wayland CJK | **pass** (ready) | Same engine/group; Firefox present — keep native Wayland (not X11-forced); same keystroke caveat |
 | Electron (Cursor/VS Code) | **skip** | Optional; often Electron/Ozone limits, not Metis |
 | Arabic / Indic | **skip** | Engines not installed |
 | Focus while preedit (Super/click) | **pass** (code) | `update_keyboard_focus` ignores IME keyboard grab (anvil parity); no stuck-grab bug found |
@@ -2427,6 +2430,7 @@ recent hosts; no passwords).
 | `screenshot.json` | *(Phase 12)* Native screenshot defaults: mode, pointer, delay, after-capture, save dir |
 | `scratchpad.json` | *(Phase 20 §B)* Scratchpad `prefer_app_ids` (auto-stash on map); not `desk.json` |
 | `output-profiles.json` | *(Phase 20 §C)* Named EDID topology profiles; auto-apply on hotplug |
+| `icons.json` | Freedesktop icon theme, cursor theme/size, brand PNGs, per-app icon overrides |
 | `input.json` | Mouse, touchpad, keyboard, scroll-strip kinetic (`scroll_strip`) (live-reload) |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action |
 | `outputs.json` | Per-output scale, enabled, layout, saved video mode, night-light prefs (live connector-keyed map; profiles live in `output-profiles.json`) |

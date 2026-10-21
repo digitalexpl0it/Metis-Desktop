@@ -972,12 +972,15 @@ Search on Home filters category tiles and lists matching pages. Deep-link with
   edge bar, and window chrome live on their own pages below.
 - **Icons** — pick a Freedesktop / GTK icon theme (Papirus, Breeze, Tela, …) from
   themes installed under `/usr/share/icons` or `~/.local/share/icons` (cursor-only
-  packs like DMZ are omitted). The choice applies live to edge-bar status icons,
-  Metis Menu apps, and pinned taskbar icons (the Metis brand mark stays until you
-  set a custom launcher PNG). Incomplete packs fall back to Adwaita for missing
-  status glyphs. Install a zip/tar pack into your user icons folder, or remove
-  user-installed themes only. Optional brand PNGs and per-app icon overrides live
-  in `icons.json`.
+  packs like DMZ are listed under **Cursor theme** instead). The icon choice
+  applies live to edge-bar status icons, Metis Menu apps, and pinned taskbar
+  icons (the Metis brand mark stays until you set a custom launcher PNG).
+  Incomplete packs fall back to Adwaita for missing status glyphs. Install a
+  zip/tar pack into your user icons folder, or remove user-installed themes
+  only. **Cursor theme** picks an XCursor pack and pointer size (16–64); Metis
+  reloads the seat pointer live via compositor `ReloadCursors`, and new apps
+  get `XCURSOR_*` / gsettings. Optional brand PNGs and per-app icon overrides
+  live in `icons.json` (`cursor_theme` / `cursor_size`).
 - **Default applications** (System) — browser, file manager, terminal, mail,
   images, audio, video, and PDF handlers via FreeDesktop (`xdg-mime` /
   `xdg-settings`). Terminal and file manager stay in sync with Metis Menu quick

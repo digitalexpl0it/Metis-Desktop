@@ -170,6 +170,10 @@ pub(crate) fn watch_compositor_dismiss() {
                     crate::ui::theme::apply_icon_theme_from_config();
                     rebuild_for_locale();
                 }
+                "reload-cursors" => {
+                    // Seat pointer is owned by the compositor (`ReloadCursors` IPC).
+                    // Shell GTK widgets pick up gsettings on their own; no rebuild.
+                }
                 "optimize-gaming" => {
                     // Require explicit `yes` (Settings confirm / metis-cmd --yes).
                     if arg.trim() == "yes"

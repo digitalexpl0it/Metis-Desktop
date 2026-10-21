@@ -167,6 +167,9 @@ pub enum CompositorCommand {
     ApplyBackground,
     /// Re-read `input.json` and apply mouse/touchpad/keyboard settings live.
     ReloadInput,
+    /// Re-read `icons.json` cursor theme/size and reload the DRM seat pointer
+    /// (plus `XCURSOR_*` for newly spawned clients).
+    ReloadCursors,
     /// Re-read `keybinds.json` and apply desktop shortcut bindings live.
     ReloadKeybinds,
     /// While Settings is capturing a new shortcut, suppress global keybind dispatch
@@ -647,6 +650,7 @@ pub const BAR_RUNTIME_VERBS: &[&str] = &[
     "reload-gaming",
     "reload-locale",
     "reload-icons",
+    "reload-cursors",
     "optimize-gaming",
     "show-onboarding",
     "show-updater",
@@ -976,6 +980,7 @@ mod tests {
         );
         assert!(parse_runtime_command("reload-icons", BAR_RUNTIME_VERBS).is_ok());
         assert!(parse_runtime_command("reload-icons", WIDGETS_RUNTIME_VERBS).is_ok());
+        assert!(parse_runtime_command("reload-cursors", BAR_RUNTIME_VERBS).is_ok());
         assert!(parse_runtime_command("close-popovers", WIDGETS_RUNTIME_VERBS).is_ok());
         assert!(parse_runtime_command("toggle-menu", WIDGETS_RUNTIME_VERBS).is_err());
         assert!(write_runtime_command("not-a-verb").is_err());

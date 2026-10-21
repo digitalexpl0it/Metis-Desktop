@@ -7,7 +7,8 @@ use gtk::gio;
 use gtk::prelude::*;
 
 use metis_config::{
-    IconsConfig, discover_icon_themes, install_icon_theme_archive, load_icons_config,
+    CURSOR_SIZE_MAX, CURSOR_SIZE_MIN, DEFAULT_CURSOR_SIZE, IconsConfig, apply_session_cursor_theme,
+    discover_cursor_themes, discover_icon_themes, install_icon_theme_archive, load_icons_config,
     remove_user_icon_theme, save_icons_config,
 };
 use metis_i18n::tr;
@@ -66,7 +67,7 @@ pub fn build() -> gtk::Widget {
 
     theme_body.append(&ui::hint(&tr(
         "Some packs omit status icons Metis uses; missing glyphs fall back to Adwaita. \
-         Cursor themes are hidden from this list.",
+         Pointer themes are chosen in the Cursor theme section below.",
     )));
 
     let status = gtk::Label::new(None);
@@ -240,6 +241,164 @@ pub fn build() -> gtk::Widget {
 
     content.append(&theme_card);
 
+    // ---- Cursor theme -------------------------------------------------------
+    let (cursor_card, cursor_body) =
+        ui::section_with_icon(&tr("Cursor theme"), "input-mouse-symbolic");
+    let cursor_themes = Rc::new(RefCell::new(discover_cursor_themes()));
+    let cursor_list = gtk::ListBox::new();
+    cursor_list.set_selection_mode(gtk::SelectionMode::Single);
+    cursor_list.add_css_class("metis-settings-list");
+    cursor_list.add_css_class("metis-settings-zebra-list");
+    cursor_list.set_hexpand(true);
+
+    let cursor_filter = gtk::SearchEntry::new();
+    cursor_filter.set_placeholder_text(Some(&tr("Search cursor themes…")));
+    cursor_filter.set_hexpand(true);
+    cursor_filter.add_css_class("metis-settings-inset");
+    cursor_body.append(&cursor_filter);
+
+    let cursor_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_height(160)
+        .max_content_height(260)
+        .child(&cursor_list)
+        .build();
+    cursor_scroll.add_css_class("metis-settings-list-scroll");
+    cursor_body.append(&cursor_scroll);
+
+    let size_adj = gtk::Adjustment::new(
+        f64::from(
+            cfg.borrow()
+                .cursor_size
+                .unwrap_or(DEFAULT_CURSOR_SIZE)
+                .clamp(CURSOR_SIZE_MIN, CURSOR_SIZE_MAX),
+        ),
+        f64::from(CURSOR_SIZE_MIN),
+        f64::from(CURSOR_SIZE_MAX),
+        1.0,
+        4.0,
+        0.0,
+    );
+    let size_spin = gtk::SpinButton::new(Some(&size_adj), 1.0, 0);
+    size_spin.set_numeric(true);
+    size_spin.set_snap_to_ticks(true);
+    size_spin.set_width_chars(4);
+    cursor_body.append(&ui::row(&tr("Pointer size"), &size_spin));
+
+    cursor_body.append(&ui::hint(&tr(
+        "Applies to the Metis pointer and apps that honour XCURSOR / gsettings. \
+         Already-running apps may need a restart to pick up a new theme.",
+    )));
+
+    let cursor_status = gtk::Label::new(None);
+    cursor_status.set_xalign(0.0);
+    cursor_status.add_css_class("metis-settings-hint");
+    cursor_body.append(&cursor_status);
+
+    refill_cursor_list(&cursor_list, &cursor_themes.borrow(), &cfg.borrow(), "");
+
+    {
+        let cursor_list = cursor_list.clone();
+        let cursor_themes = cursor_themes.clone();
+        let cfg = cfg.clone();
+        cursor_filter.connect_search_changed(move |entry| {
+            let q = entry.text().to_lowercase();
+            refill_cursor_list(&cursor_list, &cursor_themes.borrow(), &cfg.borrow(), &q);
+        });
+    }
+
+    {
+        let cursor_themes = cursor_themes.clone();
+        let cfg = cfg.clone();
+        let cursor_status = cursor_status.clone();
+        let size_spin = size_spin.clone();
+        cursor_list.connect_row_activated(move |_, row| {
+            let Some(id) = row_theme_id(row) else {
+                return;
+            };
+            if !cursor_themes.borrow().iter().any(|t| t.id == id) {
+                return;
+            }
+            let size = size_spin
+                .value()
+                .round()
+                .clamp(f64::from(CURSOR_SIZE_MIN), f64::from(CURSOR_SIZE_MAX))
+                as u32;
+            let mut c = cfg.borrow().clone();
+            c.cursor_theme = Some(id.clone());
+            c.cursor_size = Some(size);
+            if let Err(err) = save_icons_config(&c) {
+                cursor_status.set_text(&format!("{}: {err}", tr("Could not save")));
+                return;
+            }
+            *cfg.borrow_mut() = c;
+            apply_session_cursor_theme(&id, size);
+            runtime::send("reload-cursors");
+            runtime::reload_cursors_async();
+            cursor_status.set_text(&format!("{}: {id} ({size}px)", tr("Active cursor")));
+        });
+    }
+
+    {
+        let cfg = cfg.clone();
+        let cursor_status = cursor_status.clone();
+        let cursor_list = cursor_list.clone();
+        let cursor_themes = cursor_themes.clone();
+        size_spin.connect_value_changed(move |spin| {
+            let size = spin
+                .value()
+                .round()
+                .clamp(f64::from(CURSOR_SIZE_MIN), f64::from(CURSOR_SIZE_MAX))
+                as u32;
+            let mut c = cfg.borrow().clone();
+            c.cursor_size = Some(size);
+            let theme = c.cursor_theme.clone();
+            if let Err(err) = save_icons_config(&c) {
+                cursor_status.set_text(&format!("{}: {err}", tr("Could not save")));
+                return;
+            }
+            *cfg.borrow_mut() = c;
+            if let Some(theme) = theme {
+                apply_session_cursor_theme(&theme, size);
+                runtime::send("reload-cursors");
+                runtime::reload_cursors_async();
+                cursor_status.set_text(&format!("{}: {theme} ({size}px)", tr("Active cursor")));
+            }
+            refill_cursor_list(&cursor_list, &cursor_themes.borrow(), &cfg.borrow(), "");
+        });
+    }
+
+    let cursor_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    cursor_actions.set_halign(gtk::Align::End);
+    cursor_actions.add_css_class("metis-settings-actions");
+    let cursor_system = gtk::Button::with_label(&tr("Use system default"));
+    cursor_actions.append(&cursor_system);
+    cursor_body.append(&cursor_actions);
+
+    {
+        let cfg = cfg.clone();
+        let cursor_status = cursor_status.clone();
+        let cursor_list = cursor_list.clone();
+        let cursor_themes = cursor_themes.clone();
+        cursor_system.connect_clicked(move |_| {
+            let mut c = cfg.borrow().clone();
+            c.cursor_theme = None;
+            c.cursor_size = None;
+            if let Err(err) = save_icons_config(&c) {
+                cursor_status.set_text(&format!("{}: {err}", tr("Could not save")));
+                return;
+            }
+            *cfg.borrow_mut() = c;
+            runtime::send("reload-cursors");
+            runtime::reload_cursors_async();
+            cursor_status.set_text(&tr("Using system cursor theme"));
+            refill_cursor_list(&cursor_list, &cursor_themes.borrow(), &cfg.borrow(), "");
+        });
+    }
+
+    content.append(&cursor_card);
+
     // ---- Branding -----------------------------------------------------------
     let (brand_card, brand_body) =
         ui::section_with_icon(&tr("Metis brand icons"), "start-here-symbolic");
@@ -339,6 +498,69 @@ fn refresh_preview_icons(preview: &gtk::Box) {
             img.set_icon_name(Some(name.as_str()));
         }
         child = widget.next_sibling();
+    }
+}
+
+fn refill_cursor_list(
+    list: &gtk::ListBox,
+    themes: &[metis_config::IconThemeInfo],
+    cfg: &IconsConfig,
+    query: &str,
+) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    let active = cfg.cursor_theme.as_deref();
+    let mut zebra = 0usize;
+    for theme in themes {
+        if !query.is_empty()
+            && !theme.name.to_lowercase().contains(query)
+            && !theme.id.to_lowercase().contains(query)
+        {
+            continue;
+        }
+        let row = gtk::ListBoxRow::new();
+        row.set_widget_name(&format!("theme:{}", theme.id));
+        row.add_css_class("metis-settings-zebra-row");
+        if zebra % 2 == 1 {
+            row.add_css_class("metis-settings-zebra-row-alt");
+        }
+        zebra += 1;
+        let box_ = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        box_.set_margin_start(4);
+        box_.set_margin_end(4);
+        box_.set_margin_top(2);
+        box_.set_margin_bottom(2);
+        let icon = gtk::Image::from_icon_name("input-mouse-symbolic");
+        icon.set_pixel_size(16);
+        icon.add_css_class("metis-settings-row-icon");
+        box_.append(&icon);
+        let labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let title = gtk::Label::new(Some(&theme.name));
+        title.set_xalign(0.0);
+        title.add_css_class("metis-settings-row-title");
+        let sub = gtk::Label::new(Some(&if theme.user_installed {
+            format!("{} · {}", theme.id, tr("User"))
+        } else {
+            format!("{} · {}", theme.id, tr("System"))
+        }));
+        sub.set_xalign(0.0);
+        sub.add_css_class("metis-settings-hint");
+        labels.append(&title);
+        labels.append(&sub);
+        box_.append(&labels);
+        if active == Some(theme.id.as_str()) {
+            let check = gtk::Image::from_icon_name("object-select-symbolic");
+            check.set_halign(gtk::Align::End);
+            check.set_hexpand(true);
+            box_.append(&check);
+            row.add_css_class("metis-settings-selected");
+        }
+        row.set_child(Some(&box_));
+        list.append(&row);
+        if active == Some(theme.id.as_str()) {
+            list.select_row(Some(&row));
+        }
     }
 }
 

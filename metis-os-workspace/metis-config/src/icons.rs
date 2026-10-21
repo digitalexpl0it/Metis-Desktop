@@ -15,6 +15,12 @@ const MAX_EXTRACT_BYTES: u64 = 256 * 1024 * 1024;
 /// Max archive members.
 const MAX_ARCHIVE_ENTRIES: usize = 50_000;
 
+/// Default pointer size when `cursor_size` is unset.
+pub const DEFAULT_CURSOR_SIZE: u32 = 24;
+/// Inclusive clamp for [`IconsConfig::cursor_size`].
+pub const CURSOR_SIZE_MIN: u32 = 16;
+pub const CURSOR_SIZE_MAX: u32 = 64;
+
 /// Persisted icon / branding preferences.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IconsConfig {
@@ -22,6 +28,13 @@ pub struct IconsConfig {
     /// `None` / empty = leave the session default alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// XCursor theme directory name (e.g. `Adwaita`, `Yaru`, `DMZ-White`).
+    /// `None` / empty = leave session / gtk / env defaults alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_theme: Option<String>,
+    /// Pointer size in pixels (clamped to [`CURSOR_SIZE_MIN`]..=[`CURSOR_SIZE_MAX`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_size: Option<u32>,
     /// Optional path to a custom edge-bar launcher brand image (PNG).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brand_launcher: Option<String>,
@@ -78,6 +91,17 @@ fn normalize_icons_config(cfg: &mut IconsConfig) {
         } else {
             Some(t.to_string())
         };
+    }
+    if let Some(theme) = cfg.cursor_theme.take() {
+        let t = theme.trim();
+        cfg.cursor_theme = if t.is_empty() || !is_safe_icon_theme_id(t) {
+            None
+        } else {
+            Some(t.to_string())
+        };
+    }
+    if let Some(size) = cfg.cursor_size.take() {
+        cfg.cursor_size = Some(size.clamp(CURSOR_SIZE_MIN, CURSOR_SIZE_MAX));
     }
     cfg.brand_launcher = cfg
         .brand_launcher
@@ -156,6 +180,20 @@ fn user_icon_path_roots() -> Vec<PathBuf> {
 
 /// Scan system + user icon directories for valid Freedesktop themes.
 pub fn discover_icon_themes() -> Vec<IconThemeInfo> {
+    discover_themes(ThemeKind::ApplicationIcons)
+}
+
+/// Scan for XCursor packs (`cursors/` directory), including cursor-only themes.
+pub fn discover_cursor_themes() -> Vec<IconThemeInfo> {
+    discover_themes(ThemeKind::Cursors)
+}
+
+enum ThemeKind {
+    ApplicationIcons,
+    Cursors,
+}
+
+fn discover_themes(kind: ThemeKind) -> Vec<IconThemeInfo> {
     let mut themes = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (dir, user) in icon_search_dirs() {
@@ -168,9 +206,8 @@ pub fn discover_icon_themes() -> Vec<IconThemeInfo> {
                 continue;
             }
             let index = path.join("index.theme");
-            if !index.is_file() {
-                continue;
-            }
+            // Cursor packs may omit index.theme but still ship `cursors/`.
+            let has_index = index.is_file();
             let Some(id) = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -181,12 +218,20 @@ pub fn discover_icon_themes() -> Vec<IconThemeInfo> {
             if !is_safe_icon_theme_id(&id) || !seen.insert(id.clone()) {
                 continue;
             }
-            // Skip cursor-only packs (DMZ, etc.) — they share index.theme but
-            // have no application icons, so Metis falls back to Adwaita holes.
-            if !looks_like_application_icon_theme(&path, &index) {
+            let keep = match kind {
+                ThemeKind::ApplicationIcons => {
+                    has_index && looks_like_application_icon_theme(&path, &index)
+                }
+                ThemeKind::Cursors => looks_like_cursor_theme(&path, has_index.then_some(&index)),
+            };
+            if !keep {
                 continue;
             }
-            let name = parse_index_theme_name(&index).unwrap_or_else(|| id.clone());
+            let name = if has_index {
+                parse_index_theme_name(&index).unwrap_or_else(|| id.clone())
+            } else {
+                id.clone()
+            };
             themes.push(IconThemeInfo {
                 id,
                 name,
@@ -202,6 +247,23 @@ pub fn discover_icon_themes() -> Vec<IconThemeInfo> {
             .then_with(|| a.id.cmp(&b.id))
     });
     themes
+}
+
+/// True when `path` has an XCursor tree (and is not application-icons-only).
+fn looks_like_cursor_theme(path: &Path, index: Option<&Path>) -> bool {
+    if !path.join("cursors").is_dir() {
+        return false;
+    }
+    // Prefer packs that declare [Cursor Theme] or only list cursors; also
+    // accept hybrid themes (Adwaita) that ship both icons and cursors.
+    if let Some(index) = index {
+        let text = fs::read_to_string(index).unwrap_or_default();
+        let lower = text.to_ascii_lowercase();
+        if lower.contains("[cursor theme]") {
+            return true;
+        }
+    }
+    true
 }
 
 fn icon_search_dirs() -> Vec<(PathBuf, bool)> {
@@ -325,11 +387,54 @@ pub fn apply_session_icon_theme(theme: &str) {
         .status();
 }
 
+/// Apply cursor theme + size to session gsettings (GTK / XCURSOR consumers).
+pub fn apply_session_cursor_theme(theme: &str, size: u32) {
+    let theme = theme.trim();
+    if theme.is_empty() || !is_safe_icon_theme_id(theme) {
+        return;
+    }
+    let size = size.clamp(CURSOR_SIZE_MIN, CURSOR_SIZE_MAX);
+    let _ = std::process::Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.interface", "cursor-theme", theme])
+        .status();
+    let _ = std::process::Command::new("gsettings")
+        .args([
+            "set",
+            "org.gnome.desktop.interface",
+            "cursor-size",
+            &size.to_string(),
+        ])
+        .status();
+}
+
 /// Sync gsettings from `icons.json` when a theme is configured.
 pub fn sync_session_icon_theme_from_config() {
     if let Some(theme) = load_icons_config().theme {
         apply_session_icon_theme(&theme);
     }
+}
+
+/// Sync cursor gsettings from `icons.json` when configured.
+pub fn sync_session_cursor_theme_from_config() {
+    let cfg = load_icons_config();
+    let Some(theme) = cfg.cursor_theme.as_deref() else {
+        return;
+    };
+    let size = cfg.cursor_size.unwrap_or(DEFAULT_CURSOR_SIZE);
+    apply_session_cursor_theme(theme, size);
+}
+
+/// Effective cursor theme name from config, or `None` if unset.
+pub fn configured_cursor_theme() -> Option<String> {
+    load_icons_config().cursor_theme.filter(|t| !t.is_empty())
+}
+
+/// Effective cursor size from config (default [`DEFAULT_CURSOR_SIZE`]).
+pub fn configured_cursor_size() -> u32 {
+    load_icons_config()
+        .cursor_size
+        .unwrap_or(DEFAULT_CURSOR_SIZE)
+        .clamp(CURSOR_SIZE_MIN, CURSOR_SIZE_MAX)
 }
 
 /// Resolved brand launcher path if configured and present on disk.

@@ -63,6 +63,17 @@ pub fn reload_input() {
     }
 }
 
+/// Re-read `icons.json` cursor theme/size and reload the compositor pointer.
+pub fn reload_cursors() {
+    if let Err(err) = send_command(CompositorCommand::ReloadCursors) {
+        tracing::warn!(%err, "failed to reload cursors via compositor IPC");
+    }
+}
+
+pub fn reload_cursors_async() {
+    std::thread::spawn(reload_cursors);
+}
+
 /// Re-read `keybinds.json` and apply desktop shortcuts live.
 pub fn reload_keybinds() {
     if let Err(err) = send_command(CompositorCommand::ReloadKeybinds) {

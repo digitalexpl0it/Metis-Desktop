@@ -319,6 +319,10 @@ impl MetisState {
                 crate::device_input::apply_keyboard(self, &cfg);
                 CompositorEvent::Pong
             }
+            CompositorCommand::ReloadCursors => {
+                self.reload_cursors_from_config();
+                CompositorEvent::Pong
+            }
             CompositorCommand::ReloadKeybinds => {
                 self.keybinds.reload();
                 CompositorEvent::Pong

@@ -739,8 +739,31 @@ impl MetisState {
     /// machine, service shell IPC, advance the debounced wallpaper decode, pick
     /// up live blur / decoration config changes, and tick scroll animations.
     pub(crate) fn xcursor_config(&self) -> (&str, u32) {
-        let size = self.client_cursor_size.parse().unwrap_or(24).clamp(16, 96);
+        let size = self
+            .client_cursor_size
+            .parse()
+            .unwrap_or(metis_config::DEFAULT_CURSOR_SIZE)
+            .clamp(metis_config::CURSOR_SIZE_MIN, metis_config::CURSOR_SIZE_MAX);
         (&self.client_cursor_theme, size)
+    }
+
+    /// Re-read `icons.json` cursor prefs and reload the DRM seat pointer.
+    pub(crate) fn reload_cursors_from_config(&mut self) {
+        let (theme, size) = crate::spawn::resolve_client_cursor_env();
+        tracing::info!(%theme, %size, "reloaded client cursor theme");
+        self.client_cursor_theme = theme.clone();
+        self.client_cursor_size = size.clone();
+        let size_u32 = size
+            .parse()
+            .unwrap_or(metis_config::DEFAULT_CURSOR_SIZE)
+            .clamp(metis_config::CURSOR_SIZE_MIN, metis_config::CURSOR_SIZE_MAX);
+        if let Some(udev) = self.udev.as_mut() {
+            udev.cursor = crate::cursor::XCursor::load(&theme, size_u32);
+            udev.cursor_theme = theme;
+            udev.pointer_buffers.clear();
+        }
+        self.damaged = true;
+        self.request_redraw();
     }
 
     /// Returns nothing; callers redraw when `self.damaged` is set. Kept off the

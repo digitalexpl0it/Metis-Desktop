@@ -51,10 +51,12 @@ pub use defaults::{
     sync_default_from_menu_executable,
 };
 pub use icons::{
-    IconThemeInfo, IconsConfig, apply_session_icon_theme, discover_icon_themes,
+    CURSOR_SIZE_MAX, CURSOR_SIZE_MIN, DEFAULT_CURSOR_SIZE, IconThemeInfo, IconsConfig,
+    apply_session_cursor_theme, apply_session_icon_theme, configured_cursor_size,
+    configured_cursor_theme, discover_cursor_themes, discover_icon_themes,
     install_icon_theme_archive, load_icons_config, remove_user_icon_theme,
     resolve_app_icon_override, resolve_brand_launcher_path, resolve_brand_settings_path,
-    save_icons_config, sync_session_icon_theme_from_config,
+    save_icons_config, sync_session_cursor_theme_from_config, sync_session_icon_theme_from_config,
 };
 pub use output_identity::{output_identity, topology_fingerprint};
 pub use output_profiles::{

@@ -74,9 +74,13 @@ pub(crate) fn resolve_client_cursor_env() -> (String, String) {
     }
 
     let home = std::env::var("HOME").unwrap_or_default();
-    let theme_pref = std::env::var("XCURSOR_THEME")
-        .ok()
-        .filter(|s| !s.is_empty())
+    // Prefer Metis `icons.json`, then env / gtk settings.ini (never D-Bus here).
+    let theme_pref = metis_config::configured_cursor_theme()
+        .or_else(|| {
+            std::env::var("XCURSOR_THEME")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .or_else(|| gtk_settings_value(&home, "gtk-cursor-theme-name"))
         .unwrap_or_else(|| "default".into());
     let cursor_theme = resolve_cursor_theme(&theme_pref)
@@ -84,11 +88,12 @@ pub(crate) fn resolve_client_cursor_env() -> (String, String) {
         .or_else(|| resolve_cursor_theme("Yaru"))
         .or_else(|| resolve_cursor_theme("Adwaita"))
         .unwrap_or_else(|| "Adwaita".into());
-    let cursor_size = std::env::var("XCURSOR_SIZE")
-        .ok()
-        .filter(|s| !s.is_empty())
+    let cursor_size = metis_config::load_icons_config()
+        .cursor_size
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("XCURSOR_SIZE").ok().filter(|s| !s.is_empty()))
         .or_else(|| gtk_settings_value(&home, "gtk-cursor-theme-size"))
-        .unwrap_or_else(|| "24".into());
+        .unwrap_or_else(|| metis_config::DEFAULT_CURSOR_SIZE.to_string());
     (cursor_theme, cursor_size)
 }
 
