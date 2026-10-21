@@ -111,12 +111,12 @@ write_control() {
   case "$CONTROL_PROFILE" in
     ubuntu26.04)
       # Ubuntu 26.04 (resolute) ships libdisplay-info3 (0.3); libdisplay-info1 is gone.
-      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0t64 | libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3t64 | libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd"
+      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0t64 | libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3t64 | libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd, network-manager"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables"
-      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, bluez, bluetooth, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, pipewire, pipewire-pulse, wireplumber, network-manager-openvpn"
+      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."
       else
@@ -124,12 +124,12 @@ write_control() {
       fi
       ;;
     debian13)
-      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd"
+      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd, network-manager"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables"
-      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, bluez, bluetooth, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, pipewire, pipewire-pulse, wireplumber, network-manager-openvpn"
+      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."
       else
@@ -163,8 +163,9 @@ Description: Metis Wayland desktop environment
  After installing, log out and pick "Metis" from your display manager's
  session menu (GDM, SDDM, and other Wayland-capable greeters).
  .
- ${layer_note} Remote-access LAN firewall helpers (nftables + a PolicyKit
- agent) are Recommends. Heavier optionals stay Suggests.
+ ${layer_note} NetworkManager is a Depends (bar/Settings Wi-Fi, Ethernet,
+ VPN). UPower, BlueZ, PackageKit, PipeWire session audio, and OpenVPN are
+ Recommends. Heavier optionals (Flatpak, fwupd, GRD, biometrics) stay Suggests.
  .
  Named metis-desktop (not metis) to avoid colliding with Ubuntu universe's
  unrelated metis graph-partitioning package.

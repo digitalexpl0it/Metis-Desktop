@@ -42,6 +42,14 @@ METIS_PACMAN_PACKAGES=(
   libva
   nftables
   polkit
+  # Runtime hosts Metis shells out to / talks to over D-Bus (not build-only).
+  networkmanager
+  networkmanager-openvpn
+  upower
+  bluez
+  packagekit
+  pipewire-pulse
+  wireplumber
 )
 
 METIS_PACMAN_REMOTE=(

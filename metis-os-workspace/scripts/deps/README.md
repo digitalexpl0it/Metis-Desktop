@@ -18,3 +18,8 @@ a standard Metis Screenshot feature rather than an optional integration.
 Debian/Ubuntu profiles also install FFmpeg -dev packages (`libav*`,
 `libswscale-dev`, `libswresample-dev`, `libva-dev`) for Metis Remote encode/decode;
 keep those lists aligned with `.github/workflows/ci.yml` and `release-deb.yml`.
+
+Runtime hosts (NetworkManager, UPower, BlueZ, PackageKit, PipeWire session
+audio) are listed here too — Metis must not assume a full desktop meta-package
+already pulled them in. Keep in sync with `scripts/package-deb.sh`
+Depends/Recommends and `packaging/arch/PKGBUILD`.

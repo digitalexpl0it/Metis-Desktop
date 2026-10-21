@@ -63,13 +63,22 @@ Do **not** mix a `/usr` package install with `./install.sh` / `--install-session
 
 ### Dependency policy (`.deb`)
 
+Do **not** assume host integrations are already installed. Anything Metis
+calls at runtime (`nmcli`, BlueZ, UPower, PackageKit, PipeWire session
+daemons, …) must appear in `Depends` / `Recommends` / `Suggests` (and in
+[`scripts/deps/`](../metis-os-workspace/scripts/deps/) for from-source
+`./install.sh`).
+
 | Field | Role |
 |-------|------|
-| **Depends** | Required to start a Metis session (GTK ≥ 4.18, `libgtk4-layer-shell0` ≥ 1.0, seat, DRM, PipeWire, kitty, …) |
+| **Depends** | Required for a usable Metis session **and** first-class shell/Settings surfaces that are empty or wrong without the host (GTK ≥ 4.18, layer-shell, seat, DRM, PipeWire libs, kitty, portals, polkit, **NetworkManager**, OCR/FFmpeg, …) |
 | **Bundled** | Nothing by default; `BUNDLE_GTK4_LAYER_SHELL=1` is a fallback for build images without `libgtk4-layer-shell-dev` |
-| **Recommends** | portals helpers, volumes, **nftables** (apt installs by default) |
-| **Suggests** | gnome-keyring (optional alternate Secret Service; Metis ships `metis-secretsd`) |
-| **Suggests** | GRD, FreeRDP, GameMode, Flatpak, BT, printers, biometrics |
+| **Recommends** | Installed by default with apt: portal helpers, volumes, **nftables**, **UPower**, **BlueZ**, **PackageKit** (`pkcon`), PipeWire session audio (`pipewire` / `pipewire-pulse` / `wireplumber`), OpenVPN NM plugin |
+| **Suggests** | Optional / heavy: gnome-keyring (alternate Secret Service; Metis ships `metis-secretsd`), GRD, FreeRDP client, GameMode, Flatpak, fwupd, printers, biometrics, `wireguard-tools` |
+
+WSL / containers that already manage networking outside NetworkManager can
+install with `apt install --no-install-recommends` only after satisfying
+`Depends` (NM itself is still required for Metis Network UI).
 
 ## From source: `./install.sh`
 

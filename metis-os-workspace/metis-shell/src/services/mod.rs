@@ -76,7 +76,8 @@ pub use volumes::{
     unmount as volumes_unmount,
 };
 pub use weather::{
-    LocationWeather, WeatherSnapshot, last_weather_snapshot, spawn_weather_service, weather_refresh,
+    LocationWeather, WeatherSnapshot, last_weather_snapshot, set_weather_wanted,
+    spawn_weather_service, weather_is_wanted, weather_refresh,
 };
 pub use windows::refresh_taskbars;
 pub use workspaces::{

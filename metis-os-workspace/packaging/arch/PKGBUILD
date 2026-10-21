@@ -24,6 +24,8 @@ depends=(
   libdisplay-info
   pam
   pipewire
+  pipewire-pulse
+  wireplumber
   lcms2
   wayland
   libei
@@ -34,19 +36,26 @@ depends=(
   tesseract-data-eng
   ffmpeg
   freerdp
+  networkmanager
+  upower
+  bluez
+  packagekit
+  polkit
 )
 optdepends=(
   'gnome-keyring: alternate Secret Service provider (Metis ships metis-secretsd)'
   'keepassxc: alternate Secret Service provider'
   'xdg-desktop-portal-gtk: portal FileChooser / notifications'
   'nftables: Remote access LAN firewall'
-  'polkit: pkexec / PolicyKit (Metis ships metis-polkit-agent)'
+  'networkmanager-openvpn: OpenVPN profiles in Settings → Network'
+  'wireguard-tools: WireGuard userspace helpers'
   'gnome-remote-desktop: RDP session sharing host'
   'freerdp: Metis Viewer / FreeRDP client'
   'gamemode: gaming performance daemon'
   'intel-media-driver: Metis Remote VAAPI encode on Intel GPUs'
   'libva-mesa-driver: Metis Remote VAAPI encode on AMD GPUs'
   'flatpak: Flatpak app support'
+  'fwupd: firmware updates in the Metis updater'
 )
 makedepends=(
   'rust>=1.95'

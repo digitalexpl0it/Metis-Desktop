@@ -17,7 +17,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use metis_config::{
-    DesktopWidgetInstance, DesktopWidgetsConfig, desktop_widgets_config_path,
+    DesktopWidgetInstance, DesktopWidgetKind, DesktopWidgetsConfig, desktop_widgets_config_path,
     load_desktop_widgets_config, save_desktop_widgets_config,
 };
 
@@ -277,7 +277,9 @@ fn reload_from_disk() {
     // Locale Apply: same JSON identity, but construction-time `tr()` labels must
     // be rebuilt. Do not take the geometry/chrome short-circuits below.
     if force_locale {
-        CFG.with(|cell| *cell.borrow_mut() = cfg);
+        CFG.with(|cell| *cell.borrow_mut() = cfg.clone());
+        // Interest before rebuild so the worker is awake when panels paint.
+        sync_desk_weather_interest(&cfg);
         rebuild_hosts();
         if let Some(snapshot) = crate::services::last_weather_snapshot() {
             content::weather::on_snapshot(&snapshot);
@@ -300,6 +302,7 @@ fn reload_from_disk() {
         {
             apply_all_card_chrome(&cfg);
         }
+        sync_desk_weather_interest(&cfg);
         return;
     }
 
@@ -316,9 +319,11 @@ fn reload_from_disk() {
         {
             apply_all_card_chrome(&cfg);
         }
+        sync_desk_weather_interest(&cfg);
         return;
     }
 
+    sync_desk_weather_interest(&cfg);
     rebuild_hosts();
 }
 
@@ -979,8 +984,21 @@ fn watch_widgets_commands() {
     });
 }
 
+fn desk_wants_weather(cfg: &DesktopWidgetsConfig) -> bool {
+    cfg.enabled
+        && cfg
+            .instances
+            .iter()
+            .any(|i| i.kind == DesktopWidgetKind::Weather)
+}
+
+fn sync_desk_weather_interest(cfg: &DesktopWidgetsConfig) {
+    crate::services::set_weather_wanted(desk_wants_weather(cfg));
+}
+
 fn attach_weather() {
     let rx = crate::services::weather::spawn_weather_service();
+    sync_desk_weather_interest(&current_cfg());
     glib::timeout_add_local(Duration::from_millis(1000), move || {
         while let Ok(snapshot) = rx.try_recv() {
             crate::services::weather::remember_snapshot(&snapshot);

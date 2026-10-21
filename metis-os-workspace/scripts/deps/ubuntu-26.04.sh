@@ -56,6 +56,16 @@ METIS_APT_PACKAGES=(
   nftables
   pkexec
   polkitd
+  # Runtime hosts Metis shells out to / talks to over D-Bus (not build-only).
+  network-manager
+  network-manager-openvpn
+  upower
+  bluez
+  bluetooth
+  packagekit-tools
+  pipewire
+  pipewire-pulse
+  wireplumber
 )
 
 METIS_APT_REMOTE=(

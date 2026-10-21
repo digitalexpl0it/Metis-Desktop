@@ -1,8 +1,13 @@
-//! Bar weather service.
+//! Bar / desktop weather service.
 //!
 //! Fetches current conditions + a short hourly forecast for one or more
 //! locations from Open-Meteo (keyless), on a dedicated thread with its own
 //! Tokio runtime. Results are delivered to the GTK main thread over a channel.
+//!
+//! **Demand-gated:** the worker stays idle (no HTTP) until a UI consumer wants
+//! weather — edge-bar Weather widget and/or a desktop Weather card. Settings
+//! `reload-weather` still triggers a one-shot fetch while idle. Briefing has
+//! its own connector and does not use this service.
 //!
 //! Location resolution order:
 //!   1. `weather.json` pinned `locations` (first is the bar's primary reading)
@@ -11,6 +16,7 @@
 //! Temperature unit follows `weather.json` (`auto` resolves US-style regions to
 //! Fahrenheit, everything else to Celsius).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -74,10 +80,16 @@ pub struct WeatherSnapshot {
 }
 
 enum WeatherCommand {
+    /// Immediate fetch (popover open, Settings save, one-shot while idle).
     Refresh,
+    /// [`set_weather_wanted`] flipped — wake idle or re-check after a cycle.
+    InterestChanged,
 }
 
 static WEATHER_CMD_TX: OnceLock<Sender<WeatherCommand>> = OnceLock::new();
+/// True while at least one UI consumer (bar Weather / desktop Weather) needs
+/// periodic Open-Meteo updates.
+static WEATHER_WANTED: AtomicBool = AtomicBool::new(false);
 
 /// Last weather snapshot — used to re-hydrate bar / desktop widgets after a
 /// rebuild (the async service only pushes every ~15 minutes).
@@ -96,12 +108,33 @@ fn store_last_weather(snapshot: &WeatherSnapshot) {
     }
 }
 
+/// Whether periodic weather polling is currently demanded by a UI consumer.
+pub fn weather_is_wanted() -> bool {
+    WEATHER_WANTED.load(Ordering::Relaxed)
+}
+
+/// Enable or disable periodic weather fetches. Call when bar / desktop weather
+/// visibility changes. No-ops when the flag is unchanged.
+pub fn set_weather_wanted(wanted: bool) {
+    let prev = WEATHER_WANTED.swap(wanted, Ordering::SeqCst);
+    if prev == wanted {
+        return;
+    }
+    tracing::info!(wanted, "weather: consumer interest changed");
+    if let Some(tx) = WEATHER_CMD_TX.get() {
+        let _ = tx.send(WeatherCommand::InterestChanged);
+    }
+}
+
 /// Spawn the weather background thread and return the snapshot receiver.
+///
+/// The thread starts **idle** until [`set_weather_wanted`]`(true)` (or a
+/// one-shot [`weather_refresh`]).
 pub fn spawn_weather_service() -> Receiver<WeatherSnapshot> {
     let (tx, rx) = mpsc::channel();
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let _ = WEATHER_CMD_TX.set(cmd_tx);
-    tracing::debug!("weather: spawning service thread");
+    tracing::debug!("weather: spawning service thread (idle until demanded)");
     thread::Builder::new()
         .name("metis-weather".into())
         .spawn(move || {
@@ -123,43 +156,84 @@ pub fn spawn_weather_service() -> Receiver<WeatherSnapshot> {
     rx
 }
 
-/// Request an immediate refresh (e.g. when the popover opens).
+/// Request an immediate refresh (e.g. when the popover opens). Works while idle
+/// as a one-shot; does not by itself keep periodic polling on.
 pub fn weather_refresh() {
     if let Some(tx) = WEATHER_CMD_TX.get() {
         let _ = tx.send(WeatherCommand::Refresh);
     }
 }
 
+fn drain_commands(cmd_rx: &Receiver<WeatherCommand>) -> (bool, bool) {
+    let mut refresh = false;
+    let mut interest = false;
+    while let Ok(cmd) = cmd_rx.try_recv() {
+        match cmd {
+            WeatherCommand::Refresh => refresh = true,
+            WeatherCommand::InterestChanged => interest = true,
+        }
+    }
+    (refresh, interest)
+}
+
+async fn publish_snapshot(tx: &Sender<WeatherSnapshot>) -> Result<bool, ()> {
+    let snapshot = build_snapshot().await;
+    tracing::debug!(
+        locations = snapshot.locations.len(),
+        error = ?snapshot.error,
+        wanted = weather_is_wanted(),
+        "weather: snapshot ready"
+    );
+    let failed = snapshot.error.is_some();
+    store_last_weather(&snapshot);
+    if tx.send(snapshot).is_err() {
+        return Err(());
+    }
+    Ok(failed)
+}
+
 async fn weather_loop(tx: Sender<WeatherSnapshot>, cmd_rx: Receiver<WeatherCommand>) {
     loop {
-        let snapshot = build_snapshot().await;
-        tracing::debug!(
-            locations = snapshot.locations.len(),
-            error = ?snapshot.error,
-            "weather: snapshot ready"
-        );
-        let failed = snapshot.error.is_some();
-        store_last_weather(&snapshot);
-        if tx.send(snapshot).is_err() {
-            return;
+        // Idle: no Open-Meteo traffic until a consumer wants weather, or Settings
+        // asks for a one-shot refresh.
+        if !weather_is_wanted() {
+            tracing::debug!("weather: idle (no UI consumer)");
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let (refresh, _interest) = drain_commands(&cmd_rx);
+                if weather_is_wanted() {
+                    break;
+                }
+                if refresh {
+                    if publish_snapshot(&tx).await.is_err() {
+                        return;
+                    }
+                    // Stay idle unless interest flipped during the fetch.
+                    if weather_is_wanted() {
+                        break;
+                    }
+                }
+            }
         }
+
+        let failed = match publish_snapshot(&tx).await {
+            Ok(failed) => failed,
+            Err(()) => return,
+        };
+
         // Retry quickly after a failure; otherwise wait the full refresh window.
-        // Wake early on a manual refresh request. (std mpsc, polled so we stay on
-        // the async thread.)
+        // Wake early on refresh / interest change. (std mpsc, polled.)
         let wait_secs = if failed { RETRY_SECS } else { REFRESH_SECS };
         let mut waited = 0u64;
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
             waited += 500;
-            if cmd_rx.try_recv().is_ok() {
-                // Drain any extra queued refreshes.
-                while cmd_rx.try_recv().is_ok() {}
-                break;
-            }
-            if waited >= wait_secs * 1000 {
+            let (refresh, interest) = drain_commands(&cmd_rx);
+            if refresh || interest || waited >= wait_secs * 1000 {
                 break;
             }
         }
+        // Next iteration re-checks `weather_is_wanted()` and may return to idle.
     }
 }
 
@@ -933,6 +1007,17 @@ mod tests {
         assert!((to_unit(0.0, true) - 32.0).abs() < 0.001);
         assert!((to_unit(100.0, true) - 212.0).abs() < 0.001);
         assert!((to_unit(21.0, false) - 21.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn weather_interest_defaults_off_and_toggles() {
+        // Isolate from other tests that may have flipped the flag.
+        set_weather_wanted(false);
+        assert!(!weather_is_wanted());
+        set_weather_wanted(true);
+        assert!(weather_is_wanted());
+        set_weather_wanted(false);
+        assert!(!weather_is_wanted());
     }
 
     #[test]

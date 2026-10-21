@@ -109,7 +109,7 @@ Widgets appear in the order set by `bar.json#widgets`. The defaults:
 | **App launcher** | The brand icon at the start of the bar. Opens the launcher panel (see §4). |
 | **Tasks (dock)** | Icons for running (and pinned) apps on this output's current workspace. Click to focus/minimize; right-click to pin/close. |
 | **Workspaces** | One dot per workspace; the active one is highlighted. Click a dot to switch (see §6). |
-| **Weather** | Condition icon + temperature. Click for a forecast popover with hourly strip and saved locations. |
+| **Weather** | Condition icon + temperature. Click for a forecast popover with hourly strip and saved locations. Open-Meteo is polled only while this status icon or a desktop Weather widget is enabled (no background fetches when both are off). |
 | **Battery** | Charge level and state (hidden on desktops without a battery). Click to open Power settings. |
 | **Bluetooth** | Shown when a Bluetooth adapter is present. Click for connected devices (with battery level and charging icon when reported), plus a shortcut to Bluetooth settings. |
 | **Network** | Wired/Wi-Fi status (one icon). Shows a Wi-Fi signal when joined, or a wired glyph when ethernet is up; on Wi-Fi-less machines the popover hides the radio/scan UI and keeps Ethernet + Network Settings. The signal icon stays stable during background rescans. |
@@ -1581,7 +1581,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `menu.json` | App launcher layout style, feature toggles, terminal / file-manager defaults, and pinned apps |
 | `datetime.json` | Auto-timezone preference and calendar first day of week |
 | `wallpaper.json` | Background picture / colour / gradient, plus per-output overrides; live crossfade. Decode cache: `~/.cache/metis/wallpaper-rgba/` |
-| `weather.json` | Bar weather: unit, auto-detect, IP-geolocation, saved locations |
+| `weather.json` | Weather unit, auto-detect, IP-geolocation, saved locations (fetched only while bar/desktop Weather UI is enabled) |
 | `desk.json` | Compositor window-grid layout (widget tiles) |
 | `desktop-widgets.json` | Wallpaper desktop widgets: enable, edit mode, chrome, instances |
 | `dismissed.json` | Dismissed calendar reminder IDs |

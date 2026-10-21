@@ -15,6 +15,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   `/usr/share/metis/dbus-1/services/` and prepend that tree on
   `XDG_DATA_DIRS` in `metis-session` so activation still reaches
   `metis-secretsd`.
+- **`.deb` / install deps no longer assume a full desktop** — ship
+  `network-manager` as a **Depends** (Wi-Fi / Ethernet / VPN UI). Add
+  UPower, BlueZ, PackageKit, PipeWire session audio, and the NM OpenVPN
+  plugin as **Recommends**; fwupd / WireGuard tools as **Suggests**. Align
+  `scripts/deps/` and the Arch PKGBUILD so from-source installs match.
+- **Weather polling is demand-gated** — Open-Meteo background fetches run only
+  while the edge-bar Weather widget or a desktop Weather card is enabled.
+  Settings `reload-weather` still does a one-shot refresh when idle.
 
 ## [2026-10-20]
 

@@ -7,10 +7,10 @@ use std::sync::mpsc::Receiver;
 use gtk::gio;
 use gtk::prelude::*;
 
-use crate::config::{BarConfig, load_bar_config};
+use crate::config::{BarConfig, BarWidgetId, load_bar_config};
 use crate::services::{
     BarSnapshot, WeatherSnapshot, apply_event, last_weather_snapshot, refresh_taskbars,
-    weather_refresh,
+    set_weather_wanted, weather_is_wanted, weather_refresh,
 };
 
 use super::autohide::{
@@ -259,10 +259,14 @@ pub(crate) fn rehydrate_widget_state(refs: &widgets::WidgetRefs) {
     refs.apply_snapshot(&last_bar_snapshot());
     if let Some(snapshot) = last_weather_snapshot() {
         refs.apply_weather(&snapshot);
-    } else if !crate::ui::onboarding::is_active() {
+    } else if weather_is_wanted() && !crate::ui::onboarding::is_active() {
         weather_refresh();
     }
     crate::services::sync_tray();
+}
+
+fn sync_bar_weather_interest(cfg: &BarConfig) {
+    set_weather_wanted(cfg.widgets.contains(&BarWidgetId::Weather));
 }
 
 /// Whether a bar.json change requires destroying and recreating bar widgets.
@@ -722,6 +726,7 @@ fn apply_config_diff(
     } else {
         apply_bars_live(config.clone());
     }
+    sync_bar_weather_interest(new);
     crate::ui::theme::reload_stylesheet();
     // Toggle ON from Settings: hide immediately so the user sees the effect
     // without waiting for a pointer leave (and despite a stale pointer_over).

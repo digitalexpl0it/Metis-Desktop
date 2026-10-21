@@ -30,7 +30,9 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4_layer_shell::LayerShell;
 
-use crate::config::{BarConfig, BarPosition, load_bar_config, save_default_bar_config};
+use crate::config::{
+    BarConfig, BarPosition, BarWidgetId, load_bar_config, save_default_bar_config,
+};
 use crate::services::{
     BarSnapshot, spawn_bar_pollers, spawn_notification_service, spawn_weather_service,
     workspace_snapshot,
@@ -163,6 +165,10 @@ pub fn init_and_show() {
     glib::timeout_add_seconds_local(2, move || {
         lifecycle::attach_poll_channel(spawn_bar_pollers());
         lifecycle::attach_weather_channel(spawn_weather_service());
+        // Demand-gate Open-Meteo: only poll when the bar Weather widget is present.
+        crate::services::set_weather_wanted(
+            load_bar_config().widgets.contains(&BarWidgetId::Weather),
+        );
         lifecycle::attach_notification_channel(spawn_notification_service());
         crate::services::spawn_updates_service();
         crate::ui::dashboard::init();
