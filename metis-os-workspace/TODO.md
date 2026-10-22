@@ -2618,6 +2618,9 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
       pool miss → `request_refresh` (force full frame + redraw); export acquires
       pool slot before advancing damage tracker (menu/popover dismiss no longer
       ghosts on Viewer).
+- [x] **Export independent of DRM empty / cursor** (2026-10-22) — always
+      `maybe_export_frame` when Remote wants frames; arm `pending` while a
+      forced full frame is outstanding (dismiss no longer needs mouse motion).
 - [ ] **H. End-to-end budget** — host PTS → Viewer present latency HUD (debug or
       connection-bar); log encode ms / queue depth / FPS; fail closed to drop
       frames rather than grow backlog.

@@ -44,6 +44,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   acquires a pool slot before advancing damage; fence timeouts and failed
   full-frame encodes force an immediate full-frame refresh instead of silent
   drop.
+- **Metis Remote dismiss waited on mouse motion** — RUDP export is no longer
+  gated on DRM `is_empty` (that flag includes the seat cursor, which Remote
+  omits). Forced full-frame retries arm scan-out like portal screencast, so
+  menu/app close updates the Viewer without wiggling the pointer.
 
 ### Security
 

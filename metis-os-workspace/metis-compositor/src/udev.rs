@@ -926,13 +926,12 @@ fn render_local_output_frame(
         Ok(res) => {
             let empty = res.is_empty;
             *frame_states = Some(res.states);
-            // Skip the primary-key lookup entirely while no RUDP client wants frames.
-            if state.stream_export.wants_frames()
-                && (!empty
-                    || state
-                        .stream_export
-                        .forced_frame_pending_for(output_name.as_str(), &state.primary_key()))
-            {
+            // Do not gate RUDP on DRM `is_empty`: that flag includes the seat
+            // cursor, while export omits it — idle after menu/app dismiss looked
+            // "empty" locally so export never ran until the pointer moved.
+            // `maybe_export_frame` already skips when its own scene damage is idle
+            // (unless a full frame was forced).
+            if state.stream_export.wants_frames() {
                 crate::stream_export::maybe_export_frame(state, renderer, render_node, output);
             }
             Ok(!empty)
@@ -1326,6 +1325,39 @@ impl MetisState {
             for surface in udev.surfaces_mut() {
                 if !surface.user_disabled {
                     surface.pending = true;
+                }
+            }
+        }
+        // RUDP forced full-frame (fence drop / encode miss / pool miss): arm a
+        // vblank even when the scene looks DRM-empty so export can publish
+        // without waiting for mouse motion.
+        if self.stream_export.wants_frames() {
+            let primary = self.primary_key();
+            let force_names: Vec<String> = self
+                .udev
+                .as_ref()
+                .map(|u| {
+                    u.surfaces()
+                        .filter(|s| !s.user_disabled)
+                        .filter(|s| {
+                            self.stream_export
+                                .forced_frame_pending_for(s.output.name().as_str(), &primary)
+                        })
+                        .map(|s| s.output.name().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !force_names.is_empty()
+                && let Some(udev) = self.udev.as_mut()
+            {
+                for surface in udev.surfaces_mut() {
+                    if !surface.user_disabled
+                        && force_names
+                            .iter()
+                            .any(|n| n.as_str() == surface.output.name().as_str())
+                    {
+                        surface.pending = true;
+                    }
                 }
             }
         }
