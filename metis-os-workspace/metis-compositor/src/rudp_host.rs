@@ -58,10 +58,11 @@ use crate::rudp_audio;
 use crate::rudp_guard::{HostMarker, HostPhase, STABLE_AFTER};
 use crate::stream_export::{ExportedFrame, StreamExportHub};
 
-/// GPU fence wait per exported frame on the frame thread. Heavy dismiss
-/// recomposes (menu/popover unmap) can exceed 500ms on iGPU; still fail closed
-/// to [`FramePipelineCtx::request_refresh`] if this elapses.
-const FENCE_TIMEOUT: Duration = Duration::from_millis(1500);
+/// GPU fence wait per exported frame on the frame thread. Keep this short: a
+/// 1.5s timeout stacked across a few missed dismiss frames felt like a 6–10s
+/// Viewer stall vs RDP. Drop + [`FramePipelineCtx::request_refresh`] if this
+/// elapses — the next compose is usually ready within a vblank.
+const FENCE_TIMEOUT: Duration = Duration::from_millis(100);
 /// Consecutive encoder (worker) failures before hardware encode is given up
 /// for this host instance — one back-off per entry in [`ENCODER_BACKOFF`],
 /// then stop. Reset after [`ENCODER_HEALTHY_RESET`] of clean encode.

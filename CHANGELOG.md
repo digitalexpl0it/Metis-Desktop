@@ -47,7 +47,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **Metis Remote dismiss waited on mouse motion** — RUDP export is no longer
   gated on DRM `is_empty` (that flag includes the seat cursor, which Remote
   omits). Forced full-frame retries arm scan-out like portal screencast, so
-  menu/app close updates the Viewer without wiggling the pointer.
+  menu/app close updates the Viewer without wiggling the pointer. Layer map /
+  destroy, window destroy, and first window configure also request a Remote
+  full frame. Encode fence wait capped at 100ms (was 1.5s) so stacked misses
+  no longer feel like a multi-second stall vs RDP.
+- **Metis Remote typing produced wrong characters** — Viewer maps keys from
+  GTK keyvals (evdev table) instead of trusting hardware scancodes that were
+  sometimes treated as XKB and off-by-8 (e.g. A→U).
 
 ### Security
 

@@ -34,7 +34,7 @@ impl WlrLayerShellHandler for MetisState {
         if let Err(err) = map.map_layer(&LayerSurface::new(surface, namespace)) {
             tracing::warn!(%err, "failed to map layer surface");
         }
-        self.schedule_redraw();
+        self.notify_rudp_scene_change();
     }
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
@@ -50,6 +50,9 @@ impl WlrLayerShellHandler for MetisState {
             let mut map = layer_map_for_output(&output);
             map.unmap_layer(&layer);
         }
+        // Menu / overlay tear-down often skips a final damage commit — force a
+        // Remote full frame so the Viewer does not keep the dismissed UI.
+        self.notify_rudp_scene_change();
     }
 
     /// GTK layer-shell menus use `zwlr_layer_surface_v1.get_popup`, not a bare xdg parent.

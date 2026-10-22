@@ -177,6 +177,10 @@ impl CompositorHandler for MetisState {
             self.schedule_redraw_for_window(id);
         } else {
             self.schedule_redraw();
+            // Layer / xdg_popup commits (Metis menu, bar popovers): force a
+            // Remote full frame so dismiss is not stuck until the next pointer
+            // motion. Window commits stay damage-driven (games).
+            self.notify_rudp_scene_change();
         }
 
         if !is_sync_subsurface(surface) {

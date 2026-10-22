@@ -2617,10 +2617,13 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
 - [x] **No silent drop** (2026-10-22) — fence timeout / failed Full encode /
       pool miss → `request_refresh` (force full frame + redraw); export acquires
       pool slot before advancing damage tracker (menu/popover dismiss no longer
-      ghosts on Viewer).
+      ghosts on Viewer). Fence wait 100ms (was 1.5s) so retries stay interactive.
 - [x] **Export independent of DRM empty / cursor** (2026-10-22) — always
       `maybe_export_frame` when Remote wants frames; arm `pending` while a
       forced full frame is outstanding (dismiss no longer needs mouse motion).
+      Layer/window destroy + first configure also force a Remote full frame.
+- [x] **Viewer key mapping** (2026-10-22) — keyval→evdev first (avoid A→U from
+      false XKB −8 on hardware scancodes).
 - [ ] **H. End-to-end budget** — host PTS → Viewer present latency HUD (debug or
       connection-bar); log encode ms / queue depth / FPS; fail closed to drop
       frames rather than grow backlog.

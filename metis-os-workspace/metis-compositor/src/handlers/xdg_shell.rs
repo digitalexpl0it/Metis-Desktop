@@ -321,6 +321,9 @@ impl XdgShellHandler for MetisState {
         if ready {
             self.on_window_destroyed(id);
         }
+        // Unmap is local-instant; Remote needs an explicit full-frame export or
+        // the Viewer can keep painting the closed window for seconds.
+        self.notify_rudp_scene_change();
     }
 
     fn title_changed(&mut self, surface: ToplevelSurface) {

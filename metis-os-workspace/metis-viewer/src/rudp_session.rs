@@ -1637,21 +1637,28 @@ fn map_gdk_button(btn: u32) -> u32 {
 
 /// Map a GTK key event to a Linux evdev `KEY_*` code for the RUDP wire.
 ///
-/// Prefer the hardware scancode GTK reports (Wayland: linux keycode). Fall back
-/// to a keyval table — letter names are **not** sequential in evdev.
+/// Prefer the keyval table for letters / punctuation / named keys. GTK's
+/// "hardware" keycode is XKB (= evdev + 8) on X11 and often also on Wayland
+/// nested / XWayland; subtracting 8 from a true-evdev code maps A→U and makes
+/// typing unusable. Host inject adds +8 for Smithay — wire must stay evdev.
 fn gdk_key_to_evdev(key: gdk::Key, hardware: u32) -> Option<u32> {
-    if hardware > 0 {
-        // Wayland seats report linux keycodes; X11 reports XKB (= evdev + 8).
-        // Detect X11 by the display backend name when available.
-        let evdev = if hardware >= 8 && display_is_x11() {
-            hardware.saturating_sub(8)
-        } else {
-            hardware
-        };
-        if evdev > 0 {
-            return Some(evdev);
-        }
+    if let Some(code) = keyval_to_evdev(key) {
+        return Some(code);
     }
+    if hardware == 0 {
+        return None;
+    }
+    // Unknown keyval: X11 hardware is XKB (evdev + 8). Wayland is usually
+    // raw evdev — do **not** subtract or A (30) becomes U (22).
+    let evdev = if hardware >= 8 && display_is_x11() {
+        hardware.saturating_sub(8)
+    } else {
+        hardware
+    };
+    Some(evdev).filter(|c| *c > 0)
+}
+
+fn keyval_to_evdev(key: gdk::Key) -> Option<u32> {
     use gdk::Key;
     match key {
         Key::Escape => Some(1),
@@ -1689,6 +1696,28 @@ fn gdk_key_to_evdev(key: gdk::Key, hardware: u32) -> Option<u32> {
         Key::comma => Some(51),
         Key::period | Key::KP_Decimal => Some(52),
         Key::slash | Key::KP_Divide => Some(53),
+        // Shifted punctuation keyvals still share the same physical key.
+        Key::quotedbl => Some(40),
+        Key::asciitilde => Some(41),
+        Key::underscore => Some(12),
+        Key::plus => Some(13),
+        Key::braceleft => Some(26),
+        Key::braceright => Some(27),
+        Key::colon => Some(39),
+        Key::bar => Some(43),
+        Key::less => Some(51),
+        Key::greater => Some(52),
+        Key::question => Some(53),
+        Key::exclam => Some(2),
+        Key::at => Some(3),
+        Key::numbersign => Some(4),
+        Key::dollar => Some(5),
+        Key::percent => Some(6),
+        Key::asciicircum => Some(7),
+        Key::ampersand => Some(8),
+        Key::asterisk => Some(9),
+        Key::parenleft => Some(10),
+        Key::parenright => Some(11),
         k => {
             let name = k.name()?.to_ascii_lowercase();
             if name.len() != 1 {
@@ -1812,6 +1841,17 @@ mod tests {
             scale: 1.0,
             primary,
         }
+    }
+
+    #[test]
+    fn keyval_letters_are_qwerty_evdev() {
+        assert_eq!(keyval_to_evdev(gdk::Key::a), Some(30));
+        assert_eq!(keyval_to_evdev(gdk::Key::A), Some(30));
+        assert_eq!(keyval_to_evdev(gdk::Key::u), Some(22));
+        assert_eq!(keyval_to_evdev(gdk::Key::_1), Some(2));
+        assert_eq!(keyval_to_evdev(gdk::Key::Return), Some(28));
+        // Prefer keyval over a bogus hardware code that would look like XKB A.
+        assert_eq!(gdk_key_to_evdev(gdk::Key::a, 38), Some(30));
     }
 
     #[test]

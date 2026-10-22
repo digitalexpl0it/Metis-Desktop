@@ -2688,7 +2688,17 @@ impl MetisState {
         let app_id = self.windows.get(id).and_then(|r| r.app_id.clone());
         if self.place_new_window(id, app_id.as_deref()) && self.windows.is_ready(id) {
             self.apply_window_rect(id);
+            self.notify_rudp_scene_change();
         }
+    }
+
+    /// Ask Metis Remote to export a full frame soon (menu/app map/unmap).
+    pub(crate) fn notify_rudp_scene_change(&mut self) {
+        if !self.stream_export.wants_frames() {
+            return;
+        }
+        self.stream_export.request_full_frame();
+        self.schedule_redraw();
     }
 
     /// Decide where a freshly-mapped window should appear (once per window).
@@ -3930,6 +3940,7 @@ impl MetisState {
         }
         self.refresh_window_decoration_mode(id);
         self.apply_window_rect(id);
+        self.notify_rudp_scene_change();
     }
 
     pub fn activate_window(&mut self, id: u32) {
@@ -4230,6 +4241,7 @@ impl MetisState {
         self.pending_session_restore_chrome.remove(&id);
         self.mark_session_snapshot_dirty();
         self.event_bus.emit(&CompositorEvent::WindowClosed { id });
+        self.notify_rudp_scene_change();
     }
 
     pub fn cleanup_destroyed_windows(&mut self) {
@@ -4256,6 +4268,7 @@ impl MetisState {
             }
             self.on_window_destroyed(id);
         }
+        // `on_window_destroyed` already calls `notify_rudp_scene_change`.
     }
 }
 
