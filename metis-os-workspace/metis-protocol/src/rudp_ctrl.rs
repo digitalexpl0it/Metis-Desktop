@@ -271,4 +271,17 @@ mod tests {
         assert!(t.len() <= RUDP_CLIPBOARD_MAX_BYTES);
         assert!(t.is_char_boundary(t.len()));
     }
+
+    /// CI-safe fuzz smoke (Phase 23 §E) — never panics on garbage.
+    #[test]
+    fn decode_garbage_does_not_panic() {
+        for sample in [
+            &[][..],
+            &[0u8; 8],
+            b"not a frame",
+            &[0xff, 0xff, 0xff, 0xff, 1, 2, 3, 4],
+        ] {
+            let _ = try_decode_rudp_frame(sample);
+        }
+    }
 }

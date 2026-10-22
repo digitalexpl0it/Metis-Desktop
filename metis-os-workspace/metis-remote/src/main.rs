@@ -242,12 +242,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let user = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-icon <user> <path>"))?;
-            let path = args
-                .get(2)
-                .cloned()
-                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-icon <user> <path>"))?;
-            set_user_icon_as_root(&user, &path)
+                .ok_or_else(|| String::from("usage: metis-remote pk-accounts-set-icon <user>"))?;
+            // Icon bytes on stdin (Phase 23 §A — root never opens a user path).
+            set_user_icon_as_root(&user)
         }
         Some("pk-accounts-set-password") => {
             let user = args.get(1).cloned().ok_or_else(|| {

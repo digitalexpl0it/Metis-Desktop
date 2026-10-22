@@ -11,6 +11,7 @@ members = [
     "metis-decode",
     "metis-rudp-client",
     "metis-rudp-smoke",
+    "metis-rudp-host",
     "metis-compositor",
     "metis-shell",
     "metis-settings",
@@ -50,6 +51,7 @@ metis-capture = { path = "metis-capture" }
 metis-encode = { path = "metis-encode" }
 metis-decode = { path = "metis-decode" }
 metis-rudp-client = { path = "metis-rudp-client" }
+metis-rudp-host = { path = "metis-rudp-host" }
 metis-secrets = { path = "metis-secrets" }
 metis-widget-wasm = { path = "metis-widget-wasm" }
 

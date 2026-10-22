@@ -100,6 +100,7 @@ build_binaries() {
       -p metis-screenshot \
       -p metis-gaming \
       -p metis-encode \
+      -p metis-rudp-host \
       -p metis-secretsd
   )
 }

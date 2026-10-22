@@ -1197,7 +1197,12 @@ game session ends.
 ### Metis Remote (RUDP)
 
 **Settings → System → Metis Remote** is the primary low-latency desktop stream
-(compositor capture + Quinn). It is separate from classic RDP.
+(compositor capture + a Quinn host). It is separate from classic RDP. The
+network side (QUIC, TLS, PAM login) runs in its own `metis-rudp-host` process
+that the compositor starts and restarts for you, so a problem there cannot take
+your desktop down. If a package is missing `metis-rudp-host`, Remote will not
+start; `METIS_RUDP_INPROCESS=1` in the session environment temporarily restores
+the old in-compositor path (emergency fallback, removed in the next release).
 
 **Building a client (Windows / macOS / third-party):** see
 [`docs/RUDP_CLIENT.md`](RUDP_CLIENT.md) — wire protocol, reference crates
@@ -1239,9 +1244,10 @@ not ship Win/mac clients yet; that doc is the integration contract.
    only private / loopback / link-local sources can reach the UDP port. A
    PolicyKit dialog may appear; use **Retry firewall apply** if needed. If apply
    fails, the host stays off (fail-closed).
-7. Optionally leave **Unlock session when I connect** on (default) so a PAM login
-   as the session owner clears the Metis lock screen. Turn it off to keep the
-   desktop locked until you unlock locally (video/audio stay paused while locked).
+7. Optionally enable **Unlock session when I connect** (default **off**). When
+   on, a PAM login as the session owner clears the Metis lock screen — and anyone
+   sitting at the machine can see the desktop. Keep it off unless you need that;
+   video/audio stay paused while locked.
 8. Note the **Host fingerprint** (SHA-256). Clients pin it on first connect (TOFU);
    a mismatch refuses the connection until you clear the pin.
 

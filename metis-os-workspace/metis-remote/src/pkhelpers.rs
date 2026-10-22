@@ -306,16 +306,41 @@ fn stop_third_party_polkit_agents() {
 /// the subject, and some agents mishandle auth. Stdin is always `/dev/null`
 /// so a GUI agent can attach (never pipe secrets into pkexec).
 pub fn run_pkexec(args: &[&str], wait: Duration) -> Result<std::process::Output, String> {
+    run_pkexec_with_stdin(args, wait, None)
+}
+
+/// Like [`run_pkexec`], optionally piping `stdin_bytes` to the helper after spawn.
+///
+/// Used for `pk-accounts-set-icon` so root never opens a caller-chosen path.
+/// Do **not** put passwords here — GUI PolicyKit agents own auth; secrets use
+/// `--password-file` under `$XDG_RUNTIME_DIR` instead.
+pub fn run_pkexec_with_stdin(
+    args: &[&str],
+    wait: Duration,
+    stdin_bytes: Option<&[u8]>,
+) -> Result<std::process::Output, String> {
     ensure_polkit_agent();
     let bin = privileged_exe();
-    let child = Command::new("pkexec")
+    let mut child = Command::new("pkexec")
         .arg(&bin)
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if stdin_bytes.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("failed to start pkexec ({e}) — install policykit-1 / pkexec"))?;
+    if let Some(bytes) = stdin_bytes
+        && let Some(mut stdin) = child.stdin.take()
+        && let Err(e) = stdin.write_all(bytes)
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("write pkexec stdin: {e}"));
+    }
     let pid = child.id();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {

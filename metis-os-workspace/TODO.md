@@ -18,6 +18,9 @@ genie hit-test, ambient tint) **A–D landed** 2026-10-21 — see Phase 21 below
 **Phase 22** (Secrets identity + dock interop — vault rewrap/Prompt, wlr
 foreign-toplevel management, SSH agent) **§A–C complete 2026-10-21** — see
 Phase 22 below.
+**Phase 23** (Security hardening + RUDP host isolation — icon confused-deputy,
+unlock-on-auth default off, about PATH scan, out-of-process Quinn host, fuzz,
+state.rs carve) **§A–F complete 2026-10-22** — see Phase 23 below.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -288,7 +291,8 @@ Not all items are urgent; tick as capacity allows. Cross-links: [`SECURITY.md`](
       re-exported from `state`).
 - [x] **`state.rs` spawn / IPC / bar reflow extract** (2026-10-20) —
       `spawn.rs`, `ipc_handlers.rs`, `bar_reflow.rs` (mechanical; no behavior
-      change). Residual: `state.rs` still ~4.5k (further splits later).
+      change). Residual: `state.rs` still ~4.5k → **Phase 23 §F** extracted
+      RUDP session glue to `rudp_session.rs` (~4.3k residual).
 - [x] **Split / share CSS** (2026-10-08) — `metis-config` `css/` modules;
       Settings uses `build_settings_app_stylesheet` (opaque + appearance
       preview + chrome) instead of the shell sheet; shared
@@ -2462,6 +2466,83 @@ multi-collection UI.
 
 **Dependencies:** `metis-secretsd` vault v2; shell `secrets_unlock`; M4 list
 protocol; OpenSSH `ssh-agent` / `ssh-add` on PATH.
+
+---
+
+## Phase 23 — Security hardening + RUDP host isolation
+
+**Status 2026-10-22:** **§A–F complete** (icon confused-deputy; unlock default
+off; about PATH scan; `metis-rudp-host` process; fuzz targets; `rudp_session`
+extract). Nested-session RUDP smoke remains a manual QA note.
+
+Opened **2026-10-22** from external security/architecture review. Feature freeze
+for this cycle.
+
+**Goals:** fix AccountsService icon confused-deputy; default
+`unlock_session_on_auth` off; harden About PATH lookup; run Quinn/PAM RUDP host
+out of the compositor process; add fuzz targets; further `state.rs` carve.
+
+**Non-goals:** blanket `// SAFETY:` pass; local blank-on-remote product mode;
+colour M2; handheld 20 §D; LattePanda encode latency; COSMIC competition as
+roadmap driver.
+
+### A. AccountsService icon helper (P0) — done
+
+- [x] **Unprivileged validate** — `O_NOFOLLOW`, size cap, image decode; never
+      pass raw user paths to root for content
+- [x] **Root writes stdin only** — re-check image; `pk-accounts-set-icon <user>`
+- [x] **Tests** — symlink reject, oversized, non-image, valid PNG
+- [x] **Docs** — SECURITY.md, CHANGELOG
+
+### B. `unlock_session_on_auth` default off (P0) — done
+
+- [x] **Config default false** — update tests; existing explicit `true` unchanged
+- [x] **Settings warning** — unlocks physical lock for anyone at the machine
+- [x] **Docs** — SECURITY.md table, USER_GUIDE, CHANGELOG
+
+### C. `about.rs` PATH lookup (P1) — done
+
+- [x] **Manual PATH scan** — no `sh -c`; reject `/` and NUL in names
+
+### D. RUDP host process split (P0 architecture) — done
+
+- [x] **`metis-rudp-host` crate** — Quinn + TLS identity + PAM + auth rate
+      limits + datagram fan-out (`engine`, `rudp_identity`, `rudp_auth_guard`,
+      `pam_auth` moved out of `metis-compositor`; the lock screen reuses
+      `pam_auth` from the crate). *(landed 2026-10-22)*
+- [x] **Narrow Unix IPC** — `metis_protocol::rudp_host_ipc` (`CompToHost` /
+      `HostToComp`; JSON header + raw binary tail for encoded AUs);
+      `$XDG_RUNTIME_DIR/metis/rudp-host.sock`, dir `0700`, socket `0600`,
+      `SO_PEERCRED` UID check on both ends. Client QUIC wire protocol unchanged.
+- [x] **Compositor spawn/reap** — `rudp_host_ipc.rs` spawns/reaps
+      `metis-rudp-host`, forwards layout / lock / streams / clipboard / audio /
+      encoded AUs, applies demand / subscriptions / input / unlock; bounded
+      restart back-off (1 s / 5 s / 15 s) then Remote stays off — desktop
+      untouched. Frame capture + `metis-encode-probe` + calloop inject stay in
+      the compositor. `METIS_RUDP_INPROCESS=1` keeps the old in-process Quinn
+      path (same engine on a compositor thread) for one release.
+- [x] **Docs / packaging** — RUDP_CLIENT, SECURITY, `.cursorrules`, stage-fhs /
+      deb / Arch / Nix, USER_GUIDE; nested-session smoke = manual QA
+
+### E. Fuzz targets (P1) — done
+
+- [x] **RudpControlMsg** framed parse (`fuzz/fuzz_targets/rudp_ctrl.rs`)
+- [x] **Widget pack** `widget.json` validation (`widget_pack.rs`)
+- [x] **Icon decode** path from §A (`icon_bytes.rs`)
+- [x] **Docs** — [`docs/FUZZING.md`](../docs/FUZZING.md)
+
+### F. Further `state.rs` carve (P1) — done
+
+- [x] **Extract** RUDP session glue → `rudp_session.rs` after §D
+- [x] **Tick** prior TODO residual on `state.rs` size (~4.3k residual)
+
+### Explicitly deferred / rejected
+
+- Blanket SAFETY comments; blank-on-remote mode; colour M2; handheld; LattePanda
+  perf; COSMIC-as-roadmap
+
+**Dependencies:** Phase 15/18 security; encode-probe worker; `rudp_host` /
+`metis-protocol` RUDP types.
 
 ---
 

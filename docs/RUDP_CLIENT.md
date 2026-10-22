@@ -17,7 +17,7 @@ uses TCP 3389 and FreeRDP. This guide covers **RUDP only**.
 | Reference Quinn session | [`metis-rudp-client`](../metis-os-workspace/metis-rudp-client/) |
 | Reference decode (FFmpeg) | [`metis-decode`](../metis-os-workspace/metis-decode/) |
 | Linux UI reference | [`metis-viewer`](../metis-os-workspace/metis-viewer/) `rudp_session.rs` |
-| Host | Metis compositor `rudp_host.rs` |
+| Host | [`metis-rudp-host`](../metis-os-workspace/metis-rudp-host/) process (Quinn / TLS / PAM), spawned by the compositor (`rudp_host_ipc.rs`) |
 | Smoke CLI | [`metis-rudp-smoke`](../metis-os-workspace/metis-rudp-smoke/) |
 
 Prefer **embedding `metis-rudp-client` + `metis-decode`** in a Rust UI (egui,
@@ -39,6 +39,16 @@ contract and verify against `metis-rudp-smoke` / Metis Viewer.
 | First-party Linux client | Metis Viewer → protocol **Metis Remote** |
 
 Host enablement and firewall: [User Guide — Metis Remote](USER_GUIDE.md#metis-remote-rudp).
+
+> **Host process (Phase 23 §D).** The QUIC endpoint you connect to is the
+> separate `metis-rudp-host` process, not the compositor itself; the compositor
+> feeds it encoded video / audio over a private Unix socket
+> (`metis_protocol::rudp_host_ipc`, internal — not part of this contract).
+> **Nothing on the wire changed:** same `RUDP_PROTOCOL_VERSION`, control
+> messages, datagram layouts, TOFU fingerprint and PAM auth. If the host process
+> crashes the compositor restarts it with back-off; clients just see a dropped
+> connection and reconnect. `METIS_RUDP_INPROCESS=1` (emergency, one release)
+> runs the identical engine inside the compositor.
 
 ---
 

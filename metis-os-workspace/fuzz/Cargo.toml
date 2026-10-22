@@ -1,0 +1,50 @@
+# Standalone fuzz workspace (Phase 23 §E). Not a member of the main Metis
+# workspace — run with cargo-fuzz / nightly so normal `cargo test` stays clean:
+#
+#   cargo install cargo-fuzz
+#   cd metis-os-workspace/fuzz
+#   cargo +nightly fuzz run rudp_ctrl
+#   cargo +nightly fuzz run widget_pack
+#   cargo +nightly fuzz run icon_bytes
+#
+# Do not gate PR CI on long fuzz runs.
+
+[package]
+name = "metis-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+metis-protocol = { path = "../metis-protocol" }
+metis-config = { path = "../metis-config" }
+metis-remote = { path = "../metis-remote" }
+serde_json = "1"
+
+[[bin]]
+name = "rudp_ctrl"
+path = "fuzz_targets/rudp_ctrl.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "widget_pack"
+path = "fuzz_targets/widget_pack.rs"
+doc = false
+test = false
+bench = false
+
+[[bin]]
+name = "icon_bytes"
+path = "fuzz_targets/icon_bytes.rs"
+doc = false
+test = false
+bench = false
+
+[workspace]
+members = ["."]

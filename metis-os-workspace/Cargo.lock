@@ -2852,7 +2852,6 @@ version = "0.1.22"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
- "bytes",
  "chrono",
  "directories",
  "fontdue",
@@ -2867,17 +2866,14 @@ dependencies = [
  "metis-grid",
  "metis-i18n",
  "metis-protocol",
+ "metis-rudp-host",
  "opus",
- "quinn",
- "rcgen",
- "rustls",
  "rustybuzz",
  "serde",
  "serde_json",
  "smithay",
  "smithay-drm-extras",
  "thiserror 2.0.20",
- "tokio",
  "tracing",
  "tracing-subscriber",
  "unicode-bidi",
@@ -3047,9 +3043,12 @@ dependencies = [
 name = "metis-remote"
 version = "0.1.22"
 dependencies = [
+ "image",
+ "libc",
  "metis-config",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tracing",
  "tracing-subscriber",
@@ -3068,6 +3067,24 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "metis-rudp-host"
+version = "0.1.22"
+dependencies = [
+ "bytes",
+ "libc",
+ "metis-config",
+ "metis-protocol",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]

@@ -43,14 +43,13 @@ mod output_hdr;
 mod output_modes;
 mod output_prefs;
 mod output_vrr;
-mod pam_auth;
 mod remote_input;
 mod render;
 mod rudp_audio;
-mod rudp_auth_guard;
 mod rudp_guard;
 mod rudp_host;
-mod rudp_identity;
+mod rudp_host_ipc;
+mod rudp_session;
 mod scratchpad;
 mod screenshot_overlay;
 mod session_lock;
@@ -77,6 +76,9 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::state::MetisState;
+// PAM lives in `metis-rudp-host` (shared with the lock screen) so the network
+// host and the compositor use one libpam binding.
+pub use metis_rudp_host::pam_auth;
 
 /// Drops one specific benign Smithay log line.
 ///

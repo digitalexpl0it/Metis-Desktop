@@ -319,7 +319,7 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
             BUILD_ARGS+=("$prof")
         fi
     fi
-    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-secretsd; then
+    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-rudp-host -p metis-secretsd; then
         echo "ERROR: release build failed." >&2
         exit 1
     fi
@@ -349,6 +349,13 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
         $SUDO install -Dm755 "$REL/metis-encode-probe" "$BIN_DST/metis-encode-probe"
     else
         echo "WARNING: metis-encode-probe missing — Metis Remote will have no video until rebuilt." >&2
+    fi
+    # Metis Remote network edge (Quinn/PAM) — spawned by the compositor; must sit
+    # next to it. Without it Remote falls back to METIS_RUDP_INPROCESS=1 only.
+    if [[ -x "$REL/metis-rudp-host" ]]; then
+        $SUDO install -Dm755 "$REL/metis-rudp-host" "$BIN_DST/metis-rudp-host"
+    else
+        echo "WARNING: metis-rudp-host missing — Metis Remote will not start until rebuilt." >&2
     fi
     if [[ -x "$REL/metis-rdp-host" ]]; then
         $SUDO install -Dm755 "$REL/metis-rdp-host" "$BIN_DST/metis-rdp-host"
@@ -991,11 +998,11 @@ export RUST_LOG="${RUST_LOG:-metis_shell=info,metis_compositor=info,warn}"
                 BUILD_ARGS+=("$prof")
             fi
         fi
-        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-secretsd)
+        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-rudp-host -p metis-secretsd)
     else
         SHELL_BIN="$TARGET_DIR/debug/metis-shell"
         COMP_BIN="$TARGET_DIR/debug/metis-compositor"
-        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-secretsd)
+        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-rudp-host -p metis-secretsd)
     fi
 
     if [[ "$FORCE_BUILD" -eq 1 ]] || binary_needs_rebuild "$SHELL_BIN" || binary_needs_rebuild "$COMP_BIN"; then

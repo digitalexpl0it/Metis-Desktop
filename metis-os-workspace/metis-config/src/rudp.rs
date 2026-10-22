@@ -74,9 +74,10 @@ pub struct RudpConfig {
     #[serde(default = "default_true")]
     pub lan_only: bool,
     /// After successful PAM auth as the Metis session owner, unlock the Metis
-    /// PAM lock. Default on (historic behaviour). Does not clear
+    /// PAM lock. Default **off** (Phase 23 §B) — unlocking the physical lock
+    /// screen lets anyone at the machine see the session. Does not clear
     /// `ext-session-lock` lockers.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub unlock_session_on_auth: bool,
     /// Local usernames allowed to authenticate (PAM). Empty while disabled is
     /// fine; on first enable Settings seeds `$USER`.
@@ -116,6 +117,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 fn default_bitrate() -> u32 {
     DEFAULT_RUDP_BITRATE_KBPS
 }
@@ -126,7 +131,7 @@ impl Default for RudpConfig {
             enabled: false,
             port: default_port(),
             lan_only: default_true(),
-            unlock_session_on_auth: default_true(),
+            unlock_session_on_auth: default_false(),
             allowed_users: Vec::new(),
             encoder: RudpEncoderBackend::default(),
             codec: RudpVideoCodec::default(),
@@ -466,7 +471,7 @@ mod tests {
         assert_eq!(cfg.encoder, RudpEncoderBackend::Auto);
         assert_eq!(cfg.codec, RudpVideoCodec::H264);
         assert_eq!(cfg.bitrate_kbps, DEFAULT_RUDP_BITRATE_KBPS);
-        assert!(cfg.unlock_session_on_auth);
+        assert!(!cfg.unlock_session_on_auth);
         assert!(cfg.lan_only);
     }
 
@@ -480,9 +485,9 @@ mod tests {
     }
 
     #[test]
-    fn unlock_session_on_auth_defaults_true_when_absent() {
+    fn unlock_session_on_auth_defaults_false_when_absent() {
         let cfg: RudpConfig = serde_json::from_str(r#"{"enabled":false}"#).expect("de");
-        assert!(cfg.unlock_session_on_auth);
+        assert!(!cfg.unlock_session_on_auth);
     }
 
     #[test]

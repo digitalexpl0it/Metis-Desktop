@@ -123,6 +123,7 @@ and [Screenshots](docs/USER_GUIDE.md#screenshots) (portal capture via `metis-por
     ├── metis-protocol/          # Shared JSON IPC contracts + rate limits
     ├── metis-remote/            # Classic RDP helpers + Polkit privileged helpers
     ├── metis-rudp-client/       # Metis Remote Quinn client (TOFU, PAM auth, video)
+    ├── metis-rudp-host/         # Metis Remote network host process (Quinn, TLS, PAM)
     ├── metis-rudp-smoke/        # CLI smoke test for Metis Remote
     ├── metis-screenshot/        # Native screenshot / recording helpers
     ├── metis-secrets/           # Secret Service client (oo7) wrapper

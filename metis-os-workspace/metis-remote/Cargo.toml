@@ -18,6 +18,11 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 zeroize = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lib]
 name = "metis_remote"

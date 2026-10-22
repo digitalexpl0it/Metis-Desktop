@@ -126,19 +126,21 @@ fn resolve_component(name: &str) -> Option<PathBuf> {
 }
 
 fn which(name: &str) -> Option<PathBuf> {
-    let out = Command::new("sh")
-        .args(["-c", &format!("command -v {name}")])
-        .output()
-        .ok()?;
-    if !out.status.success() {
+    // Manual PATH scan (Phase 23 §C) — never shell out with interpolated names.
+    if name.is_empty() || name.contains('/') || name.contains('\0') {
         return None;
     }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(s))
+    let path_env = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_env) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
     }
+    None
 }
 
 struct HostInfo {

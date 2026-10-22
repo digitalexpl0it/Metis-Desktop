@@ -1,0 +1,29 @@
+[package]
+name = "metis-rudp-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Metis Remote (RUDP) network host: Quinn + TLS + PAM auth + datagram fan-out, isolated from the compositor"
+
+[lib]
+name = "metis_rudp_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "metis-rudp-host"
+path = "src/main.rs"
+
+[dependencies]
+metis-config = { workspace = true }
+metis-protocol = { workspace = true }
+libc = "0.2"
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zeroize = "1"
+bytes = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = "0.14"

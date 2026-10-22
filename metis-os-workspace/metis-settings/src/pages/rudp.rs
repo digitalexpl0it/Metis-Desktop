@@ -77,12 +77,13 @@ pub fn build() -> gtk::Widget {
     unlock_on_auth.set_active(cfg.borrow().unlock_session_on_auth);
     unlock_on_auth.set_halign(gtk::Align::End);
     unlock_on_auth.set_tooltip_text(Some(&tr(
-        "When on, signing in over Metis Remote as your session account unlocks the \
-         Metis lock screen. Turn off to keep the session locked until you unlock locally \
-         (stream stays paused while locked).",
+        "Warning: when on, a successful Metis Remote login as your session account \
+         unlocks the physical lock screen — anyone sitting at this machine can see \
+         the desktop. Keep off unless you need that. Stream stays paused while locked \
+         when this is off.",
     )));
     host_body.append(&ui::row(
-        &tr("Unlock session when I connect"),
+        &tr("Unlock session when I connect (exposes desktop locally)"),
         &unlock_on_auth,
     ));
 

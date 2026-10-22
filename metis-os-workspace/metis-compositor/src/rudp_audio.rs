@@ -1,60 +1,31 @@
 //! Host → client system audio for Metis Remote: Pulse sink-monitor → Opus.
 //!
 //! Demand-gated on authenticated RUDP sessions. Failures leave the host in
-//! video-only mode (never take down Quinn / encode).
+//! video-only mode (never take down Quinn / encode). Capture stays in the
+//! compositor session (Pulse/PipeWire access); the finished Opus datagrams are
+//! handed to the network edge through [`EngineShared`] (directly in-process, or
+//! forwarded over IPC to `metis-rudp-host`).
 
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use metis_protocol::{
     RUDP_AUDIO_CHANNELS, RUDP_AUDIO_FRAME_SAMPLES, RUDP_AUDIO_SAMPLE_RATE, encode_audio_datagram,
 };
+use metis_rudp_host::engine::{EngineShared, RudpAudioPacket, RudpAudioShared};
 
 const FRAME_BYTES_F32: usize =
     RUDP_AUDIO_FRAME_SAMPLES * RUDP_AUDIO_CHANNELS as usize * std::mem::size_of::<f32>();
 const OPUS_BITRATE: i32 = 128_000;
 const IDLE_POLL: Duration = Duration::from_millis(100);
 
-#[derive(Debug, Clone)]
-pub struct RudpAudioPacket {
-    pub seq: u32,
-    /// Presentation timestamp (retained for future A/V sync).
-    #[allow(dead_code)]
-    pub pts_us: i64,
-    /// Encoded Quinn datagram (MRUA header + Opus).
-    pub datagram: Vec<u8>,
-}
-
-/// Shared with the Quinn pump.
-pub struct RudpAudioShared {
-    pub latest: Mutex<Option<RudpAudioPacket>>,
-    /// True after a successful Pulse+Opus open (host may advertise AudioReady).
-    pub streaming: AtomicBool,
-    seq: AtomicU32,
-}
-
-impl RudpAudioShared {
-    pub fn new() -> Self {
-        Self {
-            latest: Mutex::new(None),
-            streaming: AtomicBool::new(false),
-            seq: AtomicU32::new(0),
-        }
-    }
-}
-
 /// Spawn a supervisor that starts/stops capture when `active_sessions` changes.
-pub fn spawn_audio_supervisor(
-    stop: Arc<AtomicBool>,
-    active_sessions: Arc<AtomicUsize>,
-    audio: Arc<RudpAudioShared>,
-) -> JoinHandle<()> {
+pub fn spawn_audio_supervisor(stop: Arc<AtomicBool>, shared: Arc<EngineShared>) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("metis-rudp-audio-sup".into())
-        .spawn(move || audio_supervisor_loop(stop, active_sessions, audio))
+        .spawn(move || audio_supervisor_loop(stop, shared))
         .unwrap_or_else(|err| {
             tracing::warn!(%err, "rudp audio: failed to spawn supervisor");
             // Return a no-op join handle by spawning an empty thread.
@@ -62,25 +33,21 @@ pub fn spawn_audio_supervisor(
         })
 }
 
-fn audio_supervisor_loop(
-    stop: Arc<AtomicBool>,
-    active_sessions: Arc<AtomicUsize>,
-    audio: Arc<RudpAudioShared>,
-) {
+fn audio_supervisor_loop(stop: Arc<AtomicBool>, shared: Arc<EngineShared>) {
     tracing::info!("rudp audio: supervisor started");
     let mut capture_stop: Option<Arc<AtomicBool>> = None;
     let mut capture_join: Option<JoinHandle<()>> = None;
 
     while !stop.load(Ordering::Relaxed) {
-        let sessions = active_sessions.load(Ordering::SeqCst);
+        let sessions = shared.active_sessions.load(Ordering::SeqCst);
         let running = capture_join.is_some();
         if sessions > 0 && !running {
             let cstop = Arc::new(AtomicBool::new(false));
-            let audio2 = Arc::clone(&audio);
+            let shared2 = Arc::clone(&shared);
             let cstop2 = Arc::clone(&cstop);
             match std::thread::Builder::new()
                 .name("metis-rudp-audio".into())
-                .spawn(move || capture_encode_loop(cstop2, audio2))
+                .spawn(move || capture_encode_loop(cstop2, shared2))
             {
                 Ok(handle) => {
                     capture_stop = Some(cstop);
@@ -97,8 +64,8 @@ fn audio_supervisor_loop(
             if let Some(h) = capture_join.take() {
                 let _ = h.join();
             }
-            audio.streaming.store(false, Ordering::Relaxed);
-            if let Ok(mut slot) = audio.latest.lock() {
+            shared.audio.streaming.store(false, Ordering::Relaxed);
+            if let Ok(mut slot) = shared.audio.latest.lock() {
                 *slot = None;
             }
         }
@@ -111,16 +78,16 @@ fn audio_supervisor_loop(
     if let Some(h) = capture_join.take() {
         let _ = h.join();
     }
-    audio.streaming.store(false, Ordering::Relaxed);
+    shared.audio.streaming.store(false, Ordering::Relaxed);
     tracing::info!("rudp audio: supervisor stopped");
 }
 
-fn capture_encode_loop(stop: Arc<AtomicBool>, audio: Arc<RudpAudioShared>) {
-    match run_capture_session(&stop, &audio) {
+fn capture_encode_loop(stop: Arc<AtomicBool>, shared: Arc<EngineShared>) {
+    match run_capture_session(&stop, &shared.audio) {
         Ok(()) => {}
         Err(err) => {
             tracing::warn!(%err, "rudp audio: capture session failed — video-only");
-            audio.streaming.store(false, Ordering::Relaxed);
+            shared.audio.streaming.store(false, Ordering::Relaxed);
         }
     }
 }
@@ -198,7 +165,7 @@ fn run_capture_session(stop: &AtomicBool, audio: &RudpAudioShared) -> Result<(),
         if n == 0 {
             continue;
         }
-        let seq = audio.seq.fetch_add(1, Ordering::Relaxed);
+        let seq = audio.next_seq();
         let pts_us = started.elapsed().as_micros() as i64;
         let datagram = encode_audio_datagram(seq, pts_us, &opus_buf[..n])
             .map_err(|e| format!("audio datagram: {e}"))?;

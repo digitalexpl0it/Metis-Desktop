@@ -1,16 +1,21 @@
 //! Local user account helpers (list is unprivileged; mutations escalate via pkexec).
 
-use std::io::Write;
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::pkhelpers::{
-    pkexec_failure_message, require_root, run_pkexec, take_password_file, validate_username,
-    write_password_file,
+    pkexec_failure_message, require_root, require_xdg_runtime_dir, run_pkexec,
+    run_pkexec_with_stdin, take_password_file, validate_username, write_password_file,
 };
+
+/// Max icon upload size (Phase 23 §A — confuse-deputy floor).
+pub const ICON_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountInfo {
@@ -409,31 +414,102 @@ pub fn remove_user_as_root(user: &str) -> Result<(), String> {
     }
 }
 
+/// Open `path` without following symlinks, cap size, and decode as PNG/JPEG.
+pub fn read_validate_icon_file(path: &Path) -> Result<Vec<u8>, String> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|e| format!("open icon (no follow): {e}"))?;
+    let meta = file.metadata().map_err(|e| format!("stat icon: {e}"))?;
+    if !meta.is_file() {
+        return Err("icon path is not a regular file".into());
+    }
+    if meta.len() > ICON_MAX_BYTES {
+        return Err(format!("icon too large (max {} bytes)", ICON_MAX_BYTES));
+    }
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)
+        .map_err(|e| format!("read icon: {e}"))?;
+    validate_icon_bytes(&buf)?;
+    Ok(buf)
+}
+
+/// Reject non-image payloads (Phase 23 §A). Used by unprivileged path and root.
+pub fn validate_icon_bytes(bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Err("icon payload is empty".into());
+    }
+    if bytes.len() as u64 > ICON_MAX_BYTES {
+        return Err(format!("icon too large (max {} bytes)", ICON_MAX_BYTES));
+    }
+    image::load_from_memory(bytes).map_err(|e| format!("icon is not a valid image: {e}"))?;
+    Ok(())
+}
+
+fn write_runtime_icon_upload(bytes: &[u8]) -> Result<PathBuf, String> {
+    let dir = require_xdg_runtime_dir()?.join("metis");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir icon upload dir: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let path = dir.join(format!(
+        "icon-upload-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| format!("create icon upload: {e}"))?;
+    file.write_all(bytes)
+        .map_err(|e| format!("write icon upload: {e}"))?;
+    file.sync_all()
+        .map_err(|e| format!("sync icon upload: {e}"))?;
+    Ok(path)
+}
+
 /// Publish a profile picture for login managers (GDM, AccountsService greeters).
 ///
 /// Writes through `org.freedesktop.Accounts.User.SetIconFile` when
 /// `accounts-daemon` is available (no admin prompt for the active user). Falls
-/// back to copying into `/var/lib/AccountsService/icons/<user>` via pkexec.
+/// back to installing bytes via pkexec stdin (root never opens a user path).
 pub fn set_user_icon(user: &str, icon_path: &Path) -> Result<(), String> {
     validate_username(user)?;
-    if !icon_path.is_file() {
-        return Err(format!("icon file not found: {}", icon_path.display()));
-    }
-    let path = icon_path
-        .canonicalize()
-        .map_err(|e| format!("resolve icon path: {e}"))?;
-    if !path.is_absolute() {
-        return Err("icon path must be absolute".into());
-    }
-    // Own-user AccountsService call is unprivileged (change-own-user-data=yes).
-    match accounts_service_set_icon(user, &path) {
-        Ok(()) => return Ok(()),
+    let bytes = read_validate_icon_file(icon_path)?;
+    // Own-user AccountsService call: pass a validated runtime copy (still a
+    // regular file we own), not the original path (may be a symlink target).
+    let upload = write_runtime_icon_upload(&bytes)?;
+    let upload_cleanup = upload.clone();
+    let result = match accounts_service_set_icon(user, &upload) {
+        Ok(()) => Ok(()),
         Err(err) => {
-            tracing::warn!(%err, "AccountsService SetIconFile failed — trying privileged copy");
+            tracing::warn!(%err, "AccountsService SetIconFile failed — trying privileged install");
+            escalate_icon_stdin(user, &bytes)
         }
+    };
+    let _ = std::fs::remove_file(&upload_cleanup);
+    result
+}
+
+fn escalate_icon_stdin(user: &str, bytes: &[u8]) -> Result<(), String> {
+    let output = run_pkexec_with_stdin(
+        &["pk-accounts-set-icon", user],
+        std::time::Duration::from_secs(90),
+        Some(bytes),
+    )?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(pkexec_failure_message(&output, ""))
     }
-    let path_s = path.display().to_string();
-    escalate(&["pk-accounts-set-icon", user, &path_s])
 }
 
 fn accounts_service_set_icon(user: &str, path: &Path) -> Result<(), String> {
@@ -508,19 +584,43 @@ fn parse_gdbus_object_path(stdout: &str) -> Option<String> {
     }
 }
 
-/// Root: install icon into AccountsService storage so GDM/SDDM see it even when
-/// `accounts-daemon` D-Bus was unavailable.
-pub fn set_user_icon_as_root(user: &str, icon_path: &str) -> Result<(), String> {
+/// Root: install icon bytes from stdin into AccountsService storage.
+///
+/// Never opens a caller-supplied path for content (Phase 23 §A).
+pub fn set_user_icon_as_root(user: &str) -> Result<(), String> {
     require_root()?;
     validate_username(user)?;
-    let src = Path::new(icon_path);
-    if !src.is_file() {
-        return Err(format!("icon file not found: {icon_path}"));
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .take(ICON_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read icon stdin: {e}"))?;
+    if bytes.len() as u64 > ICON_MAX_BYTES {
+        return Err(format!("icon too large (max {} bytes)", ICON_MAX_BYTES));
     }
+    validate_icon_bytes(&bytes)?;
+    install_icon_bytes_as_root(user, &bytes)
+}
+
+fn install_icon_bytes_as_root(user: &str, bytes: &[u8]) -> Result<(), String> {
     let icons_dir = Path::new("/var/lib/AccountsService/icons");
     std::fs::create_dir_all(icons_dir).map_err(|e| format!("mkdir AccountsService icons: {e}"))?;
     let dest = icons_dir.join(user);
-    std::fs::copy(src, &dest).map_err(|e| format!("copy icon: {e}"))?;
+    // Write privately first, then relax to 0644 only after validated bytes
+    // are already in place (never copy from an untrusted path).
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&dest)
+            .map_err(|e| format!("create icon dest: {e}"))?;
+        file.write_all(bytes)
+            .map_err(|e| format!("write icon dest: {e}"))?;
+        file.sync_all()
+            .map_err(|e| format!("sync icon dest: {e}"))?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -565,4 +665,52 @@ pub fn set_user_icon_as_root(user: &str, icon_path: &str) -> Result<(), String> 
         std::fs::write(&user_file, body).map_err(|e| format!("write AccountsService user: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod icon_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn tiny_png() -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut buf = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(&[0u8, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .expect("encode png");
+        buf
+    }
+
+    #[test]
+    fn validate_rejects_non_image() {
+        let err = validate_icon_bytes(b"root:x:0:0:root:/root:/bin/bash\n").unwrap_err();
+        assert!(err.contains("not a valid image"), "{err}");
+    }
+
+    #[test]
+    fn validate_accepts_png() {
+        validate_icon_bytes(&tiny_png()).expect("png ok");
+    }
+
+    #[test]
+    fn validate_rejects_oversized() {
+        let mut big = tiny_png();
+        big.resize(ICON_MAX_BYTES as usize + 8, 0);
+        let err = validate_icon_bytes(&big).unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn read_rejects_symlink() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let target = dir.path().join("secret");
+        std::fs::write(&target, b"shadow-like").expect("write");
+        let link = dir.path().join("icon.png");
+        symlink(&target, &link).expect("symlink");
+        let err = read_validate_icon_file(&link).unwrap_err();
+        assert!(
+            err.contains("no follow") || err.contains("Too many levels") || err.contains("symlink"),
+            "{err}"
+        );
+    }
 }

@@ -28,7 +28,7 @@ pub const CODEC_HEVC: u8 = 2;
 pub const CODEC_AV1: u8 = 3;
 
 /// Physical dirty rectangle on a reliable AU (compact wire form).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct RudpDamageRect {
     pub x: i32,
     pub y: i32,

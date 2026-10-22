@@ -99,6 +99,8 @@ rustPlatform.buildRustPackage rec {
     "-p" "metis-gaming"
     # metis-encode-probe: isolated encode worker, must sit next to metis-compositor.
     "-p" "metis-encode"
+    # metis-rudp-host: Metis Remote network edge (Quinn/PAM), spawned by the compositor.
+    "-p" "metis-rudp-host"
     "-p" "metis-secretsd"
   ];
 

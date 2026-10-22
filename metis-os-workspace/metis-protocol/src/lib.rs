@@ -4,6 +4,7 @@
 mod rate_limit;
 mod rudp_audio;
 mod rudp_ctrl;
+mod rudp_host_ipc;
 mod rudp_video;
 
 pub use metis_grid::{GridLayout, GridMetrics, LayoutKind, MonitorRect, PixelRect};
@@ -22,6 +23,12 @@ pub use rudp_ctrl::{
     RUDP_CLIPBOARD_MAX_BYTES, RUDP_MAX_FRAME, RUDP_MAX_SUBSCRIBED_OUTPUTS, RUDP_PROTOCOL_VERSION,
     RudpControlMsg, RudpMonitorInfo, RudpRejectReason, encode_rudp_frame, truncate_clipboard_text,
     try_decode_rudp_frame,
+};
+pub use rudp_host_ipc::{
+    CompToHost, HostToComp, IpcEncodedAudio, IpcEncodedVideo, IpcStreamInfo,
+    RUDP_HOST_IPC_MAX_HEADER, RUDP_HOST_IPC_MAX_PAYLOAD, RUDP_HOST_IPC_SOCK, RUDP_HOST_IPC_VERSION,
+    RudpHostInput, RudpHostIpcMessage, encode_host_ipc_frame, read_host_ipc_frame,
+    rudp_host_ipc_dir, rudp_host_ipc_path, write_host_ipc_frame,
 };
 pub use rudp_video::{
     CODEC_AV1, CODEC_H264, CODEC_HEVC, DatagramHeader, FLAG_DAMAGE_FULL, FLAG_FEC, FLAG_KEY,

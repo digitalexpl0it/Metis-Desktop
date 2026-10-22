@@ -5,6 +5,39 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-22]
+
+### Security
+
+- **Phase 23 §A — AccountsService icon confused-deputy** — `pk-accounts-set-icon`
+  no longer takes a user path as root. The unprivileged side opens with
+  `O_NOFOLLOW`, caps size, and decodes as PNG/JPEG; root installs **stdin bytes**
+  only after a second image check (blocks symlink-to-`/etc/shadow` exfil).
+- **Phase 23 §B — Unlock-on-remote default off** — `rudp.json`
+  `unlock_session_on_auth` defaults to **false** (existing explicit `true`
+  unchanged). Settings warns that enabling unlocks the **physical** lock screen.
+
+### Changed
+
+- **Phase 23 §D — Metis Remote host process** — Quinn / TLS / PAM now run in
+  the new `metis-rudp-host` binary (spawned and restarted by the compositor over
+  a private `0700`/`SO_PEERCRED` Unix socket) instead of inside
+  `metis-compositor`; frame capture, `metis-encode-probe` and input injection
+  stay in the compositor. A network-edge crash no longer takes the session down.
+  Client wire protocol and `RUDP_PROTOCOL_VERSION` are **unchanged**. Emergency
+  fallback for one release: `METIS_RUDP_INPROCESS=1` (old in-compositor path).
+  Packagers must now ship `metis-rudp-host` next to `metis-compositor`
+  (`stage-fhs.sh`, `.deb`, Arch, Nix updated).
+- **Phase 23 §C — About PATH lookup** — Settings → About resolves component
+  binaries with a manual `PATH` scan (no `sh -c`).
+- **Phase 23 §F — `rudp_session.rs`** — compositor RUDP reload / layout / input
+  channel registration extracted from `state.rs` (~4.3k residual).
+
+### Added
+
+- **Phase 23 §E — Fuzz targets** — `metis-os-workspace/fuzz/` (`rudp_ctrl`,
+  `widget_pack`, `icon_bytes`); see [`docs/FUZZING.md`](docs/FUZZING.md).
+
 ## [2026-10-21]
 
 ### Added

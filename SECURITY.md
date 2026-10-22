@@ -69,17 +69,32 @@ Tracking: [docs/upstream/README.md](docs/upstream/README.md),
 
 ## Metis Remote (RUDP)
 
-Quinn / TLS host in the compositor (`rudp_host`); clients use TOFU
-(`known_hosts`) + PAM allowlist (`rudp.json` `allowed_users`). Passwords are
-never stored in config. Host behaviour:
+Quinn / TLS / PAM run in the separate **`metis-rudp-host`** process (Phase 23
+§D) — not in the compositor. The compositor spawns it, talks to it over a
+private Unix socket (`$XDG_RUNTIME_DIR/metis/rudp-host.sock`, dir `0700`, socket
+`0600`, `SO_PEERCRED` UID check on both ends) and keeps frame capture, the
+isolated `metis-encode-probe` worker and input injection. A memory-safety or
+logic bug in the network edge therefore costs one restartable process rather
+than the Wayland session. Clients use TOFU (`known_hosts`) + PAM allowlist
+(`rudp.json` `allowed_users`). Passwords are never stored in config. Host
+behaviour:
 
 | Control | Behaviour |
 |---------|-----------|
 | Auth rate limit | Per peer IP: 5 failures / 60s → 60s lockout; emits `rate_limited`; exponential backoff on fails; caps on in-flight auths and authenticated sessions |
-| Unlock on connect | `unlock_session_on_auth` (default on) — session owner only; never clears `ext-session-lock` |
+| Unlock on connect | `unlock_session_on_auth` (**default off**, Phase 23 §B) — session owner only; never clears `ext-session-lock`. Enabling unlocks the physical lock for anyone at the machine |
 | Stream while locked | Video/audio paused while Metis PAM or protocol lock is active; input/clipboard already gated |
 | LAN fail-closed | With `lan_only`, host does not bind until `firewall_applied`; Settings applies firewall before enabling |
 | Empty allowlist | Host refuses to start |
+| Host process isolation | `metis-rudp-host` runs as the session user with `PR_SET_DUMPABLE=0` and dies with the compositor; crash ⇒ bounded restart (1 s / 5 s / 15 s), then Remote stays off |
+| Host → compositor trust | The host can only request input injection, clipboard-set, output subscriptions and PAM-unlock; the compositor ignores unlock unless a session is authenticated **and** `unlock_session_on_auth` is on, and still requires the session owner |
+
+**Residual (Phase 23 §D):** the host process runs as the *same user* as the
+compositor — it is crash isolation, not a privilege boundary. A compromised
+host can inject input / clipboard as an authenticated Remote client could, and
+can read the host TLS key (`~/.config/metis/rudp/host.key`). Seccomp / a
+dedicated UID are future work. `METIS_RUDP_INPROCESS=1` restores the old
+in-compositor Quinn path for one release (emergency fallback; no isolation).
 
 Client contract: [docs/RUDP_CLIENT.md](docs/RUDP_CLIENT.md). Classic RDP/GRD
 pause-on-lock remains separate (`metis-remote pause`).
@@ -97,11 +112,20 @@ repository when available) for issues that could affect session integrity or
 cross-user isolation. Please include Metis version / commit, distro, and
 whether the session is nested (winit) or DRM.
 
+## AccountsService avatar install (Phase 23 §A)
+
+Privileged `pk-accounts-set-icon` reads **stdin image bytes** only (validated
+PNG/JPEG, 2 MiB cap). The unprivileged path opens the source with `O_NOFOLLOW`
+before any AccountsService or pkexec call. Root never opens a caller-chosen
+path for content.
+
 ## Residual hardening (Phase 18)
 
 Phase 15 (product security) and Phase 16 (engineering hardening: CI, deny,
 trust-boundary tests, panic triage, command-file allowlist) are shipped — see
 [`TODO.md`](metis-os-workspace/TODO.md) and [`CHANGELOG.md`](CHANGELOG.md).
+Phase 23 (icon / unlock default / out-of-process RUDP host / fuzz) landed
+2026-10-22.
 
 Tracked as **[Phase 18](metis-os-workspace/TODO.md#phase-18--security-polish-ipc-dos-isolation-stretch)**:
 
