@@ -705,9 +705,11 @@ fn preferred_modifiers_for_export(_state: &MetisState) -> Vec<Modifier> {
 /// while the set is empty), or when GBM is unavailable.
 /// Never blocks on GPU sync — fence / [`SyncPoint`] travel with the frame.
 ///
-/// Skips publish when the persistent damage tracker reports no scene change,
-/// unless a full frame was requested ([`StreamExportHub::request_full_frame`]).
-/// Does nothing at all until a consumer signals demand.
+/// Acquires a pool slot before advancing the damage tracker so a full pool
+/// cannot consume scene damage without publishing. Skips publish when idle
+/// (slot released), unless a full frame was requested
+/// ([`StreamExportHub::request_full_frame`]). Does nothing until a consumer
+/// signals demand.
 pub fn maybe_export_frame(
     state: &mut MetisState,
     renderer: &mut GlesRenderer,
@@ -786,68 +788,74 @@ pub fn maybe_export_frame(
     // pointer (responsive). Compositing the host cursor caused a laggy double-
     // cursor that never lined up with the client's position.
 
-    // Scene damage (persistent per-output tracker) — skip before pool acquire
-    // when idle.
-    let (damage_full, damage) = {
-        let Ok(mut map) = state.stream_export.damage.lock() else {
-            return;
-        };
-        let need_new = match map.get(output_name.as_str()) {
-            None => true,
-            Some(s) => s.size != size_phys || s.scale != output_scale || s.transform != transform,
-        };
-        if need_new {
-            map.insert(
-                output_name.to_string(),
-                ExportDamageState {
-                    size: size_phys,
-                    scale: output_scale,
-                    transform,
-                    tracker: OutputDamageTracker::new(size_phys, output_scale, transform),
-                    first: true,
-                },
-            );
-        }
-        let Some(dmg) = map.get_mut(output_name.as_str()) else {
-            return;
-        };
-        let age = if dmg.first { 0 } else { 1 };
-        let classified = match dmg.tracker.damage_output(age, &elements) {
-            Ok((None, _)) => {
-                dmg.first = false;
-                None
-            }
-            Ok((Some(rects), _)) if rects.is_empty() => {
-                dmg.first = false;
-                None
-            }
-            Ok((Some(rects), _)) => {
-                dmg.first = false;
-                Some(classify_export_damage(
-                    rects_from_smithay(rects),
-                    size_phys.w,
-                    size_phys.h,
-                ))
-            }
-            Err(err) => {
-                tracing::warn!(?err, "stream export: damage_output failed — full frame");
-                dmg.first = false;
-                Some((true, Vec::new()))
-            }
-        };
-        match (classified, forced) {
-            (_, true) => (true, Vec::new()),
-            (None, false) => return,
-            (Some(v), false) => v,
-        }
-    };
-
+    // Acquire before damage_output so a full pool cannot consume scene damage
+    // without publishing (ghost dismissed UI until the next accidental damage).
     let Some((mut dmabuf, slot_guard)) = PoolState::acquire(&pool_arc) else {
-        // Damage tracker already advanced above — without a force+redraw the
-        // remote keeps showing a stale frame until something else damages.
         tracing::debug!("stream export: pool exhausted — force retry");
         state.stream_export.request_full_frame();
         state.schedule_redraw();
+        return;
+    };
+
+    // Scene damage (persistent per-output tracker). Slot is held; drop it if idle.
+    let damage_decision = match state.stream_export.damage.lock() {
+        Err(_) => None,
+        Ok(mut map) => {
+            let need_new = match map.get(output_name.as_str()) {
+                None => true,
+                Some(s) => {
+                    s.size != size_phys || s.scale != output_scale || s.transform != transform
+                }
+            };
+            if need_new {
+                map.insert(
+                    output_name.to_string(),
+                    ExportDamageState {
+                        size: size_phys,
+                        scale: output_scale,
+                        transform,
+                        tracker: OutputDamageTracker::new(size_phys, output_scale, transform),
+                        first: true,
+                    },
+                );
+            }
+            let Some(dmg) = map.get_mut(output_name.as_str()) else {
+                return;
+            };
+            let age = if dmg.first { 0 } else { 1 };
+            let classified = match dmg.tracker.damage_output(age, &elements) {
+                Ok((None, _)) => {
+                    dmg.first = false;
+                    None
+                }
+                Ok((Some(rects), _)) if rects.is_empty() => {
+                    dmg.first = false;
+                    None
+                }
+                Ok((Some(rects), _)) => {
+                    dmg.first = false;
+                    Some(classify_export_damage(
+                        rects_from_smithay(rects),
+                        size_phys.w,
+                        size_phys.h,
+                    ))
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "stream export: damage_output failed — full frame");
+                    dmg.first = false;
+                    Some((true, Vec::new()))
+                }
+            };
+            match (classified, forced) {
+                (_, true) => Some((true, Vec::new())),
+                (None, false) => None,
+                (Some(v), false) => Some(v),
+            }
+        }
+    };
+    let Some((damage_full, damage)) = damage_decision else {
+        // Idle or damage lock failed: release the slot without publishing.
+        drop(slot_guard);
         return;
     };
 

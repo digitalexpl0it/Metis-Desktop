@@ -1220,9 +1220,9 @@ impl SessionUi {
             attach_scroll(
                 gtk::EventControllerScrollFlags::BOTH_AXES
                     | gtk::EventControllerScrollFlags::DISCRETE,
-                &picture,
+                picture,
             );
-            attach_scroll(gtk::EventControllerScrollFlags::BOTH_AXES, &picture);
+            attach_scroll(gtk::EventControllerScrollFlags::BOTH_AXES, picture);
         }
 
         {

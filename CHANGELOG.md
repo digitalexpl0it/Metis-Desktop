@@ -39,6 +39,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   when a pool slot / bind fails after damage was consumed, the compositor
   forces a full-frame retry + redraw instead of leaving the remote on a stale
   frame. Packet outbox remains latest-wins; large damage no longer forces IDR.
+- **Metis Remote ghost UI after dismiss** — closing the Metis menu / bar
+  popovers no longer leaves the open panel on the Viewer for seconds. Export
+  acquires a pool slot before advancing damage; fence timeouts and failed
+  full-frame encodes force an immediate full-frame refresh instead of silent
+  drop.
 
 ### Security
 

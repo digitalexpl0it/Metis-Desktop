@@ -58,8 +58,10 @@ use crate::rudp_audio;
 use crate::rudp_guard::{HostMarker, HostPhase, STABLE_AFTER};
 use crate::stream_export::{ExportedFrame, StreamExportHub};
 
-/// GPU fence wait per exported frame on the frame thread.
-const FENCE_TIMEOUT: Duration = Duration::from_millis(500);
+/// GPU fence wait per exported frame on the frame thread. Heavy dismiss
+/// recomposes (menu/popover unmap) can exceed 500ms on iGPU; still fail closed
+/// to [`FramePipelineCtx::request_refresh`] if this elapses.
+const FENCE_TIMEOUT: Duration = Duration::from_millis(1500);
 /// Consecutive encoder (worker) failures before hardware encode is given up
 /// for this host instance — one back-off per entry in [`ENCODER_BACKOFF`],
 /// then stop. Reset after [`ENCODER_HEALTHY_RESET`] of clean encode.
@@ -938,11 +940,24 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                         continue;
                     }
                     // Bounded GPU fence wait on this thread — never on calloop / Quinn.
+                    // Timed-out frames are gone from the hub; force a full re-export
+                    // so dismissed UI cannot ghost on the Viewer until idle damage.
                     if !frame.wait_ready(FENCE_TIMEOUT) {
+                        let msg = "GPU fence not signalled — dropping frame, forcing refresh";
+                        if warn_limiter.should_log(msg) {
+                            tracing::warn!(
+                                output = %frame.output_name,
+                                seq = frame.seq,
+                                timeout_ms = FENCE_TIMEOUT.as_millis(),
+                                "rudp encode: {msg}"
+                            );
+                        }
+                        ctx.request_refresh();
                         continue;
                     }
+                    let damage_full = frame.damage_full;
                     let pipe = pipes.entry(frame.output_name.clone()).or_default();
-                    let mode = if frame.damage_full {
+                    let mode = if damage_full {
                         EncodeMode::Full
                     } else {
                         EncodeMode::Sparse
@@ -968,6 +983,10 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                     if process_frame(&ctx, pipe, &mut warn_limiter, &render_node, &frame, multi) {
                         fps = fps.saturating_add(1);
                         last = Some((frame.seq, frame.width, frame.height, frame.fds.len()));
+                    } else if damage_full {
+                        // Full/dismiss frame failed encode (worker reopen, etc.) —
+                        // idle desks would otherwise keep the pre-dismiss image.
+                        ctx.request_refresh();
                     }
                     // Dropping `frame` returns its pool BO via SlotReleaseGuard.
                 }

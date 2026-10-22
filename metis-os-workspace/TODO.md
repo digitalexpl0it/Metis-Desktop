@@ -2614,6 +2614,10 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
 
 - [x] **Shallow latest-wins outbox** (2026-10-22) — per-stream delta cap;
       keyframes drop queued P-frames; no IDR on Sparse→Full alone.
+- [x] **No silent drop** (2026-10-22) — fence timeout / failed Full encode /
+      pool miss → `request_refresh` (force full frame + redraw); export acquires
+      pool slot before advancing damage tracker (menu/popover dismiss no longer
+      ghosts on Viewer).
 - [ ] **H. End-to-end budget** — host PTS → Viewer present latency HUD (debug or
       connection-bar); log encode ms / queue depth / FPS; fail closed to drop
       frames rather than grow backlog.
