@@ -161,8 +161,9 @@ pub fn build() -> gtk::Widget {
     encoder_dd.set_selected(encoder_backend_index(cfg.borrow().encoder));
     encoder_dd.set_halign(gtk::Align::End);
     encoder_dd.set_tooltip_text(Some(&tr(
-        "Software encodes AV1 on the CPU (libsvtav1 / libaom-av1) and ignores the \
-         preferred codec. Soft AV1 is CPU-heavy — use it only when no GPU encoder works.",
+        "Auto: VAAPI on Intel/AMD (including LattePanda), NVENC only if an NVIDIA \
+         render node is present. VAAPI / NVENC force that backend. Software is \
+         CPU AV1 only (heavy).",
     )));
     enc_body.append(&ui::row(&tr("Encoder"), &encoder_dd));
 
@@ -269,6 +270,27 @@ pub fn build() -> gtk::Widget {
             *cfg.borrow_mut() = metis_config::load_rudp_config();
             refresh_status();
             runtime::reload_rudp_async();
+        })
+    };
+
+    // Bitrate spin fires on every step — debounce so we don't thrash reload /
+    // encoder reopen while adjusting remotely.
+    let persist_encode_debounced: Rc<dyn Fn()> = {
+        let persist = persist.clone();
+        let pending: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+        Rc::new(move || {
+            if let Some(id) = pending.borrow_mut().take() {
+                id.remove();
+            }
+            let persist = persist.clone();
+            let pending_for_timeout = pending.clone();
+            let pending_store = pending.clone();
+            let id = glib::timeout_add_local(std::time::Duration::from_millis(600), move || {
+                *pending_for_timeout.borrow_mut() = None;
+                persist();
+                glib::ControlFlow::Break
+            });
+            *pending_store.borrow_mut() = Some(id);
         })
     };
 
@@ -449,27 +471,27 @@ pub fn build() -> gtk::Widget {
     }
     {
         let cfg = cfg.clone();
-        let persist = persist.clone();
+        let persist_encode = persist_encode_debounced.clone();
         encoder_dd.connect_selected_notify(move |dd| {
             cfg.borrow_mut().encoder = encoder_backend_from_index(dd.selected());
-            persist();
+            persist_encode();
         });
     }
     {
         let cfg = cfg.clone();
-        let persist = persist.clone();
+        let persist_encode = persist_encode_debounced.clone();
         codec_dd.connect_selected_notify(move |dd| {
             cfg.borrow_mut().codec = codec_from_index(dd.selected());
-            persist();
+            persist_encode();
         });
     }
     {
         let cfg = cfg.clone();
-        let persist = persist.clone();
+        let persist_encode = persist_encode_debounced.clone();
         bitrate.connect_value_changed(move |sp| {
             let v = sp.value().round() as u32;
             cfg.borrow_mut().bitrate_kbps = v;
-            persist();
+            persist_encode();
         });
     }
 
@@ -514,7 +536,12 @@ fn codec_from_index(idx: u32) -> RudpVideoCodec {
 
 fn encode_plan_text(cfg: &RudpConfig) -> String {
     let backend = match cfg.encoder {
-        RudpEncoderBackend::Auto => tr("Auto → NVENC on NVIDIA, else VAAPI"),
+        RudpEncoderBackend::Auto => match metis_config::detect_auto_encoder_backend() {
+            RudpEncoderBackend::Nvenc => {
+                tr("Auto → NVENC on this machine (NVIDIA render node found)")
+            }
+            _ => tr("Auto → VAAPI on this machine (no NVIDIA GPU)"),
+        },
         RudpEncoderBackend::Vaapi => tr("VAAPI"),
         RudpEncoderBackend::Nvenc => tr("NVENC"),
         RudpEncoderBackend::Soft => tr("Software AV1 (CPU)"),

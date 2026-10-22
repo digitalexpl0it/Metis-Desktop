@@ -1221,7 +1221,9 @@ not ship Win/mac clients yet; that doc is the integration contract.
    **Preferred codec** AV1, Auto tries GPU AV1, then CPU **software AV1**
    (`libsvtav1` / `libaom-av1`), then H.264/HEVC. Choose **Encoder → Software**
    to force software AV1 only — it is CPU-heavy, so use it only when no GPU
-   encoder works.
+   encoder works. Changing bitrate / codec / encoder while a Viewer session is
+   connected reopens encode workers only — the Quinn session stays up (Settings
+   debounces spin-button saves so mid-drag adjusts do not thrash).
    Nothing is captured or encoded until an authenticated client connects —
    enabling the host adds no GPU work on its own. Capture uses a LINEAR GBM
    pool; frames are converted to NV12 and encoded inside a separate
@@ -1745,6 +1747,8 @@ changes live.
 | User list shows default icon instead of DE picture | Metis reads `~/.face`, `~/.face.icon`, then `/var/lib/AccountsService/icons/<username>`. Set a picture in Settings → Users or ensure the AccountsService icon exists and is world-readable |
 | RDP connects but screen is black | Confirm you are on a DRM session (not nested dev); unlock if the session is locked; check `metis-remote status` and PipeWire/portal stack |
 | Enabling Metis Remote blanks the session / kicks you out | Fixed 2026-10-02: all FFmpeg / VAAPI / NVENC code now runs in a separate `metis-encode-probe worker` process, so a driver crash restarts the encoder instead of the desktop; nothing is captured or encoded until a client authenticates; export buffers are **LINEAR-only**; default codec is H.264. Log out, then reinstall from a TTY or another session (`./metis-shell/run-metis.sh --install-session` — installs `metis-encode-probe` next to the compositor). If Settings shows "turned off automatically", the crash guard caught an unclean session end — re-enable to retry. If video stays black, check logs for `encode worker` / `encoder open failed` — the desktop stays up |
+| Changing Metis Remote bitrate freezes the remote session | Rebuild/reinstall compositor + Settings (2026-10-22): encode prefs apply live without restarting Quinn. Wait ~½ s after spinning the bitrate control |
+| Metis Remote cursor is snappy but windows take seconds to disappear | Rebuild/reinstall compositor + `metis-rudp-host` (2026-10-22): video outbox is latest-wins; large damage no longer forces a stalling IDR. Cursor is drawn in Viewer, so it can look ahead of a lagged encode path — raise bitrate or use VAAPI/NVENC if soft encode is still slow |
 | Login shows wallpaper for ~25s before the edge bar | Fixed 2026-10-01: leftover greeter/`xdg-desktop-portal` on the bus made `gtk::init()` wait the Settings portal timeout. Metis now replaces stale portal daemons at session start and spawns the shell with `GDK_DEBUG=no-portals`. Rebuild/reinstall and re-login. Check logs for `gtk::init() was slow` / `replacing leftover portal daemon` |
 | `metis-remote` not found | Package may be missing — `dpkg -l metis-desktop` and reinstall with `sudo apt install ./metis-desktop_*.deb`. Dev trees: `./run-metis.sh --install-session` |
 | Metis Viewer: `cliprdr_… failed` / instant disconnect | Update Viewer (clipboard channel disabled in spawn). **Do not RDP into the same session from itself** — connect from another machine (e.g. the KVM host → guest IP) |

@@ -7,6 +7,26 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-10-22]
 
+### Fixed
+
+- **Metis Viewer stuck after remote logoff** — Disconnect (and closing the
+  session window) works again after the host ends the session. The GTK poller
+  used to drop the last strong `SessionUi` ref on `Disconnected`, so the
+  connection-bar button’s weak handler became a no-op while windows stayed open.
+- **Metis Remote Auto encode plan on Intel / LattePanda** — Settings “Encode
+  plan” now reflects this machine’s GPU (VAAPI when no NVIDIA render node)
+  instead of always saying “Auto → NVENC…”.
+- **Metis Remote scroll** — Viewer accepts trackpad continuous scroll (not only
+  discrete wheel); host injects Wheel+v120 or Finger+stop so clients apply axis
+  events (Finger without stop was ignored).
+- **Metis Remote bitrate / encode prefs mid-session** — changing bitrate, codec,
+  or encoder from Settings no longer restarts Quinn (which froze the remote
+  session). Encode workers reopen live; Settings debounces spin/dropdown saves.
+- **Metis Remote multi-second lag on window close** — encoded-packet outbox is
+  now latest-wins per stream (shallow cap) and large scene damage no longer
+  forces a reliable-stream IDR. Viewer cursor stayed snappy (local overlay)
+  while video could backlog several seconds on slow encode links.
+
 ### Security
 
 - **Phase 23 §A — AccountsService icon confused-deputy** — `pk-accounts-set-icon`

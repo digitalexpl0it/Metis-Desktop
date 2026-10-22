@@ -2459,7 +2459,8 @@ multi-collection UI.
 
 ### D. Explicitly deferred / rejected
 
-- RUDP / LattePanda encode latency (post-deb retest)
+- RUDP / LattePanda encode latency (post-deb retest) — **2026-10-22:** shallow
+  latest-wins outbox + no IDR on large damage; retest on LattePanda after rebuild
 - Default-on `wp_color_management_v1` (M2)
 - Phase 20 §D handheld; foreign-toplevel image capture / portal picker
 - Replacing Metis shell IPC; full per-app SS ACL / DH / multi-collection UI

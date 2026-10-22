@@ -681,6 +681,9 @@ impl SessionUi {
         ui.connect_clipboard();
         ui.maybe_show_dedicated_tips(&first);
 
+        // This timeout owns the strong `Rc<SessionUi>`. Do **not** Break while
+        // session windows are still open — otherwise Disconnect / close handlers
+        // hold only Weak refs and clicks become no-ops after a remote logoff.
         glib::timeout_add_local(std::time::Duration::from_millis(8), move || {
             let Ok(rx) = gtk_rx.lock() else {
                 return glib::ControlFlow::Continue;
@@ -690,19 +693,19 @@ impl SessionUi {
                     Ok(ToGtk::Event(ev)) => {
                         if matches!(ev, SessionEvent::Disconnected) {
                             ui.finish(&tr("Disconnected"));
-                            return glib::ControlFlow::Break;
+                        } else if !ui.finished.get() {
+                            ui.handle_event(&ev);
                         }
-                        ui.handle_event(&ev);
                     }
                     Ok(_) => {}
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         ui.finish(&tr("Disconnected"));
-                        return glib::ControlFlow::Break;
+                        break;
                     }
                 }
             }
-            if ui.finished.get() || ui.windows.borrow().is_empty() {
+            if ui.windows.borrow().is_empty() {
                 return glib::ControlFlow::Break;
             }
             glib::ControlFlow::Continue
@@ -732,8 +735,9 @@ impl SessionUi {
         }
     }
 
-    /// Session over: leave windows open with a final status, drop shared
-    /// resources, break Rc cycles.
+    /// Session over: leave windows open with a final status so the user can
+    /// Disconnect / close them. Stops the Quinn worker; the GTK poller keeps
+    /// the `SessionUi` Rc alive until every window is gone.
     fn finish(&self, status: &str) {
         if self.finished.replace(true) {
             return;
@@ -741,6 +745,8 @@ impl SessionUi {
         *self.audio_playback.borrow_mut() = None;
         self.disconnect_clipboard();
         self.cancel_bar_hide();
+        metis_config::clear_viewer_pending_placement();
+        let _ = self.worker_tx.send(ToWorker::Shutdown);
         for sw in self.windows.borrow().iter() {
             sw.waiting.set_visible(false);
             sw.set_status(status);
@@ -767,6 +773,7 @@ impl SessionUi {
 
     /// End the whole session (all monitor windows + Quinn worker).
     fn disconnect_session(self: &Rc<Self>) {
+        self.shutdown();
         let wins: Vec<gtk::Window> = self
             .windows
             .borrow()
@@ -774,10 +781,9 @@ impl SessionUi {
             .map(|w| w.win.clone())
             .collect();
         for win in wins {
+            // Unfullscreen first — some compositors ignore close while fullscreen.
+            win.unfullscreen();
             win.close();
-        }
-        if !self.finished.get() {
-            self.shutdown();
         }
     }
 
@@ -1162,12 +1168,17 @@ impl SessionUi {
 
         {
             let ui = Rc::downgrade(self);
-            let scroll = gtk::EventControllerScroll::new(
-                gtk::EventControllerScrollFlags::BOTH_AXES
-                    | gtk::EventControllerScrollFlags::DISCRETE,
-            );
+            // BOTH_AXES without DISCRETE: mouse wheel *and* trackpad continuous
+            // scroll. (DISCRETE alone dropped trackpad events.)
+            let scroll =
+                gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
             scroll.connect_scroll(move |_, dx, dy| {
+                if dx == 0.0 && dy == 0.0 {
+                    return glib::Propagation::Proceed;
+                }
                 if let Some(ui) = ui.upgrade() {
+                    // GTK dy is natural (positive = content down); Wayland axis
+                    // positive is usually "scroll down" / content up — flip dy.
                     ui.send_input(RudpControlMsg::PointerScroll { dx, dy: -dy });
                 }
                 glib::Propagation::Stop

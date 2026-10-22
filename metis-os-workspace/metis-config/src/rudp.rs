@@ -144,6 +144,52 @@ impl Default for RudpConfig {
     }
 }
 
+/// What `Auto` would prefer on this machine (PCI vendor of DRM render nodes).
+///
+/// Used by Settings “Encode plan” so LattePanda / Intel hosts do not read as
+/// “NVENC selected”. Encode open still uses `metis-encode`’s ladder.
+pub fn detect_auto_encoder_backend() -> RudpEncoderBackend {
+    if primary_render_node_is_nvidia() {
+        RudpEncoderBackend::Nvenc
+    } else {
+        RudpEncoderBackend::Vaapi
+    }
+}
+
+fn primary_render_node_is_nvidia() -> bool {
+    const PCI_NVIDIA: &str = "0x10de";
+    let Ok(entries) = std::fs::read_dir("/dev/dri") else {
+        return false;
+    };
+    let mut nodes: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            name.starts_with("renderD").then_some(name)
+        })
+        .collect();
+    nodes.sort();
+    for name in nodes {
+        let sys = Path::new("/sys/class/drm")
+            .join(&name)
+            .join("device/vendor");
+        if let Ok(v) = std::fs::read_to_string(&sys)
+            && v.trim().eq_ignore_ascii_case(PCI_NVIDIA)
+        {
+            return true;
+        }
+        let uevent = Path::new("/sys/class/drm")
+            .join(&name)
+            .join("device/uevent");
+        if let Ok(t) = std::fs::read_to_string(uevent)
+            && t.to_ascii_lowercase().contains("nvidia")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 impl RudpConfig {
     /// Clamp port/bitrate and drop empty / duplicate usernames.
     pub fn sanitize(mut self) -> Self {

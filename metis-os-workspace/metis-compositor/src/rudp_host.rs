@@ -327,6 +327,9 @@ pub struct RudpHostSystem {
     pub allowed_users: Vec<String>,
     pub lan_only: bool,
     pub encode_prefs: RudpEncodePrefs,
+    /// Shared with the frame thread — see [`Self::apply_encode_prefs`].
+    prefs_live: Arc<Mutex<RudpEncodePrefs>>,
+    prefs_gen: Arc<AtomicU64>,
     pub render_node_path: PathBuf,
     /// Crash-loop guard marker; dropped (file removed) after threads join.
     _marker: Arc<HostMarker>,
@@ -386,6 +389,8 @@ impl RudpHostSystem {
             Arc::clone(&stop),
             Arc::clone(&shared),
         ));
+        let prefs_live = Arc::new(Mutex::new(encode_prefs.clone()));
+        let prefs_gen = Arc::new(AtomicU64::new(1));
         let frame_ctx = FramePipelineCtx {
             hub: Arc::clone(&hub),
             wake,
@@ -394,7 +399,8 @@ impl RudpHostSystem {
             bytes_encoded: Arc::clone(&bytes_encoded),
             encode_error: Arc::clone(&encode_error),
             encode_status: Arc::clone(&encode_status),
-            prefs: encode_prefs.clone(),
+            prefs: Arc::clone(&prefs_live),
+            prefs_gen: Arc::clone(&prefs_gen),
             render_node_path: render_node_path.clone(),
             video: Arc::clone(&shared),
             refresh_tx: bridge.input_tx.clone(),
@@ -493,6 +499,8 @@ impl RudpHostSystem {
             allowed_users,
             lan_only,
             encode_prefs,
+            prefs_live,
+            prefs_gen,
             render_node_path,
             _marker: marker,
         })
@@ -513,6 +521,28 @@ impl RudpHostSystem {
         if let NetBackend::HostProcess(ipc) = &self.net {
             ipc.update_policy(self.bind, allowed_users, lan_only, unlock_session_on_auth);
         }
+    }
+
+    /// Live-update encode prefs (bitrate / codec / backend) without tearing
+    /// down Quinn or authenticated sessions. Frame pipes reopen on the next
+    /// exported frame.
+    pub fn apply_encode_prefs(&mut self, prefs: RudpEncodePrefs) {
+        if self.encode_prefs == prefs {
+            return;
+        }
+        tracing::info!(
+            encoder = prefs.backend.as_str(),
+            codec = prefs.codec.as_str(),
+            bitrate_kbps = prefs.bitrate_kbps,
+            "rudp host: encode prefs updated live (sessions kept)"
+        );
+        self.encode_prefs = prefs.clone();
+        if let Ok(mut slot) = self.prefs_live.lock() {
+            *slot = prefs;
+        }
+        self.prefs_gen.fetch_add(1, Ordering::SeqCst);
+        // Wake export so idle desktops still reopen the encoder promptly.
+        self.hub.request_full_frame();
     }
 
     /// Push local clipboard text to connected RUDP clients (latest-wins).
@@ -605,7 +635,11 @@ struct FramePipelineCtx {
     bytes_encoded: Arc<AtomicU64>,
     encode_error: Arc<Mutex<Option<String>>>,
     encode_status: Arc<Mutex<Option<String>>>,
-    prefs: RudpEncodePrefs,
+    /// Live encode prefs (bitrate / codec / backend). Updated by
+    /// [`RudpHostSystem::apply_encode_prefs`] without tearing down Quinn.
+    prefs: Arc<Mutex<RudpEncodePrefs>>,
+    /// Bumped whenever `prefs` changes so each [`OutputPipe`] reopens.
+    prefs_gen: Arc<AtomicU64>,
     render_node_path: PathBuf,
     video: Arc<EngineShared>,
     /// Calloop channel used to request a repaint + full export frame.
@@ -655,6 +689,8 @@ struct OutputPipe {
     encoder: Option<ActiveEncoder>,
     supervisor: EncoderSupervisor,
     encode_mode: Option<EncodeMode>,
+    /// Last [`FramePipelineCtx::prefs_gen`] applied to this pipe.
+    applied_prefs_gen: u64,
 }
 
 impl OutputPipe {
@@ -858,10 +894,10 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                             seq = frame.seq,
                             "rudp encode: mode"
                         );
-                        if pipe.encode_mode == Some(EncodeMode::Sparse) && mode == EncodeMode::Full
-                        {
-                            pipe.request_keyframe();
-                        }
+                        // Do **not** force an IDR on Sparse→Full (window close /
+                        // large damage). Keyframes go on the reliable uni-stream
+                        // and stall the pump; P-frames already carry full-frame
+                        // residuals. IDRs stay for join / unlock / encoder open.
                         pipe.encode_mode = Some(mode);
                     }
                     let multi = pipes.len() > 1;
@@ -922,6 +958,13 @@ fn process_frame(
     multi: bool,
 ) -> bool {
     let now = Instant::now();
+    let prefs_gen = ctx.prefs_gen.load(Ordering::Relaxed);
+    if pipe.applied_prefs_gen != prefs_gen {
+        // Bitrate / codec / backend changed live — drop workers, keep Quinn.
+        pipe.encoder = None;
+        pipe.applied_prefs_gen = prefs_gen;
+        pipe.supervisor = EncoderSupervisor::default();
+    }
     let size_matches = pipe
         .encoder
         .as_ref()
@@ -932,13 +975,12 @@ fn process_frame(
         if !pipe.supervisor.may_open(now) {
             return false;
         }
-        match open_hw_encoder(
-            &ctx.prefs,
-            frame.width,
-            frame.height,
-            render_node,
-            &ctx.stop,
-        ) {
+        let prefs = ctx
+            .prefs
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|e| e.into_inner().clone());
+        match open_hw_encoder(&prefs, frame.width, frame.height, render_node, &ctx.stop) {
             Ok(enc) => {
                 let info = enc.info();
                 let mut label = format!(

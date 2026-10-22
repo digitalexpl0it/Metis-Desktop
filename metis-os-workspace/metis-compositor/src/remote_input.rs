@@ -11,6 +11,28 @@ use std::sync::atomic::Ordering;
 
 use crate::state::MetisState;
 
+/// GTK discrete wheel steps are small integers (±1…±4). Continuous trackpad
+/// deltas are fractional or larger.
+fn is_discrete_scroll_notch(v: f64) -> bool {
+    if v == 0.0 {
+        return true;
+    }
+    let a = v.abs();
+    a <= 4.0 && (a - a.round()).abs() < 1e-6
+}
+
+fn scroll_axis_amounts(delta: f64, discrete: bool) -> (f64, i32) {
+    if discrete {
+        let steps = delta.round() as i32;
+        let v120 = steps.saturating_mul(120);
+        (f64::from(steps) * 15.0, v120)
+    } else {
+        // Treat Viewer continuous deltas as roughly pixel-ish; map to v120.
+        let v120 = (delta * 8.0).round() as i32;
+        (delta, v120)
+    }
+}
+
 impl MetisState {
     pub fn inject_remote_pointer_relative(&mut self, dx: f64, dy: f64) {
         if self.session_is_locked() {
@@ -215,18 +237,42 @@ impl MetisState {
         if self.session_is_locked() {
             return;
         }
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
         self.idle_notify_activity();
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
         use smithay::backend::input::{Axis, AxisSource};
         use smithay::input::pointer::AxisFrame;
-        let mut frame = AxisFrame::new(InputTime::now()).source(AxisSource::Finger);
+
+        // Viewer used to send AxisSource::Finger without `.stop()`, which many
+        // clients ignore. Prefer Wheel + v120 (mouse notches) or Finger+stop
+        // (trackpad continuous). Match local libinput scale: value ≈ v120*15/120.
+        let discrete = is_discrete_scroll_notch(dx) && is_discrete_scroll_notch(dy);
+        let mut frame = if discrete {
+            AxisFrame::new(InputTime::now()).source(AxisSource::Wheel)
+        } else {
+            AxisFrame::new(InputTime::now()).source(AxisSource::Finger)
+        };
         if dx != 0.0 {
-            frame = frame.value(Axis::Horizontal, dx);
+            let (value, v120) = scroll_axis_amounts(dx, discrete);
+            frame = frame
+                .value(Axis::Horizontal, value)
+                .v120(Axis::Horizontal, v120);
+            if !discrete {
+                frame = frame.stop(Axis::Horizontal);
+            }
         }
         if dy != 0.0 {
-            frame = frame.value(Axis::Vertical, dy);
+            let (value, v120) = scroll_axis_amounts(dy, discrete);
+            frame = frame
+                .value(Axis::Vertical, value)
+                .v120(Axis::Vertical, v120);
+            if !discrete {
+                frame = frame.stop(Axis::Vertical);
+            }
         }
         let loc = pointer.current_location();
         let under = self.pointer_target_at(loc);

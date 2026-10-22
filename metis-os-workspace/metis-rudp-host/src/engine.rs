@@ -44,10 +44,16 @@ pub const DEFAULT_RUDP_PORT: u16 = 7843;
 /// Upper bound for one reliable write to a client (control / keyframe).
 const PUMP_WRITE_TIMEOUT: Duration = Duration::from_millis(750);
 
-/// Encoded AU outbox depth (all streams) — absorbs keyframe write stalls
-/// without dropping every intervening delta (latest-wins would). Sized for
-/// [`RUDP_MAX_SUBSCRIBED_OUTPUTS`] streams at the old single-stream depth.
-pub const PACKET_OUTBOX_CAP: usize = 16 * RUDP_MAX_SUBSCRIBED_OUTPUTS;
+/// Encoded AU outbox depth (all streams). Kept shallow on purpose: a deep FIFO
+/// on a slow encode / keyframe-uni stall turns into multi-second remote lag
+/// (Viewer cursor stays snappy because it is drawn locally). Sized for one
+/// keyframe + a couple of latest deltas per subscribed output.
+pub const PACKET_OUTBOX_CAP: usize = 3 * RUDP_MAX_SUBSCRIBED_OUTPUTS;
+
+/// Max non-keyframes kept per `stream_id`. Interactive remote desktop prefers
+/// dropping intermediate P-frames over building a backlog — the decoder will
+/// catch up on the next complete AU / IDR.
+const MAX_DELTAS_PER_STREAM: usize = 1;
 
 /// Codec-agnostic encoded access unit (bitstream + timing + damage).
 #[derive(Debug, Clone)]
@@ -78,11 +84,11 @@ pub struct OutboundPacket {
 /// Bounded encoded-packet queue between the producer (frame thread, or the IPC
 /// reader in the host process) and the Quinn pump / IPC forwarder.
 ///
-/// Push never blocks. Under pressure, oldest non-keyframes are dropped first
-/// (preferring the incoming packet's own stream so one busy monitor cannot
-/// starve another); an incoming keyframe always gets a slot (dropping the
-/// oldest packet if the queue is all keyframes). An incoming delta is dropped
-/// only when the queue is full of keyframes.
+/// Push never blocks. Per-stream deltas are **latest-wins** (at most
+/// [`MAX_DELTAS_PER_STREAM`]); a new keyframe drops queued deltas for that
+/// stream. Under global pressure, oldest non-keyframes go first (same stream
+/// preferred). An incoming delta is dropped only when the queue is full of
+/// keyframes.
 pub struct PacketOutbox {
     inner: Mutex<VecDeque<OutboundPacket>>,
     ready: Condvar,
@@ -109,22 +115,51 @@ impl PacketOutbox {
             .or_else(|| q.iter().position(|p| !p.packet.is_keyframe))
     }
 
+    fn delta_count(q: &VecDeque<OutboundPacket>, stream_id: u8) -> usize {
+        q.iter()
+            .filter(|p| !p.packet.is_keyframe && p.stream_id == stream_id)
+            .count()
+    }
+
+    /// Drop queued deltas for `stream_id` (superseded by a newer delta / IDR).
+    fn evict_stream_deltas(q: &mut VecDeque<OutboundPacket>, stream_id: u8) {
+        q.retain(|p| p.packet.is_keyframe || p.stream_id != stream_id);
+    }
+
     pub fn push(&self, pkt: OutboundPacket) {
         let Ok(mut q) = self.inner.lock() else {
             return;
         };
+        let stream_id = pkt.stream_id;
+        if pkt.packet.is_keyframe {
+            // IDR resets the decode chain — queued P-frames for this stream are
+            // stale relative to the picture we are about to send.
+            Self::evict_stream_deltas(&mut q, stream_id);
+        } else {
+            // Latest-wins per stream: keep only the newest delta(s).
+            while Self::delta_count(&q, stream_id) >= MAX_DELTAS_PER_STREAM {
+                let Some(idx) = q
+                    .iter()
+                    .position(|p| !p.packet.is_keyframe && p.stream_id == stream_id)
+                else {
+                    break;
+                };
+                q.remove(idx);
+            }
+        }
+
         let queued = if q.len() < PACKET_OUTBOX_CAP {
             q.push_back(pkt);
             true
         } else if pkt.packet.is_keyframe {
-            if let Some(idx) = Self::evict_candidate(&q, pkt.stream_id) {
+            if let Some(idx) = Self::evict_candidate(&q, stream_id) {
                 q.remove(idx);
             } else {
                 let _ = q.pop_front();
             }
             q.push_back(pkt);
             true
-        } else if let Some(idx) = Self::evict_candidate(&q, pkt.stream_id) {
+        } else if let Some(idx) = Self::evict_candidate(&q, stream_id) {
             q.remove(idx);
             q.push_back(pkt);
             true
@@ -156,11 +191,6 @@ impl PacketOutbox {
         if let Ok(mut q) = self.inner.lock() {
             q.clear();
         }
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.inner.lock().map(|q| q.len()).unwrap_or(0)
     }
 
     #[cfg(test)]
@@ -1614,65 +1644,42 @@ mod tests {
     }
 
     #[test]
-    fn packet_outbox_preserves_deltas_under_backpressure() {
+    fn packet_outbox_latest_wins_deltas_keeps_keyframe() {
         let box_ = PacketOutbox::new();
         box_.push(test_pkt(1, true));
-        for seq in 2..=PACKET_OUTBOX_CAP as u64 {
-            box_.push(test_pkt(seq, false));
-        }
-        assert_eq!(box_.len(), PACKET_OUTBOX_CAP);
-        // Consumer still blocked — more deltas must not wipe the IDR.
-        let newest = PACKET_OUTBOX_CAP as u64 + 1;
-        box_.push(test_pkt(newest, false));
+        box_.push(test_pkt(2, false));
+        box_.push(test_pkt(3, false));
+        box_.push(test_pkt(4, false));
         let seqs = box_.seqs();
-        assert_eq!(seqs[0], 1, "keyframe must remain at head");
-        assert!(seqs.contains(&newest), "newest delta kept after drop");
-        assert_eq!(seqs.len(), PACKET_OUTBOX_CAP);
-        // Pop all — IDR then remaining deltas in order.
+        assert_eq!(seqs, vec![1, 4], "IDR + newest delta only");
         let first = box_.pop().expect("idr");
         assert!(first.packet.is_keyframe);
         assert_eq!(first.packet.seq, 1);
-        let mut rest = Vec::new();
-        while let Some(p) = box_.pop() {
-            rest.push(p.packet.seq);
-        }
-        assert!(!rest.is_empty());
-        assert!(rest.windows(2).all(|w| w[0] < w[1]));
+        let second = box_.pop().expect("delta");
+        assert!(!second.packet.is_keyframe);
+        assert_eq!(second.packet.seq, 4);
+        assert!(box_.pop().is_none());
     }
 
     #[test]
-    fn packet_outbox_keyframe_evicts_delta_when_full() {
+    fn packet_outbox_keyframe_drops_queued_deltas() {
         let box_ = PacketOutbox::new();
-        for seq in 1..=PACKET_OUTBOX_CAP as u64 {
-            box_.push(test_pkt(seq, false));
-        }
+        box_.push(test_pkt(1, false));
+        box_.push(test_pkt(2, false));
         box_.push(test_pkt(99, true));
         let seqs = box_.seqs();
-        assert_eq!(seqs.len(), PACKET_OUTBOX_CAP);
-        assert!(seqs.contains(&99));
-        assert!(seqs.iter().any(|&s| {
-            // One of the original deltas was dropped to make room.
-            (1..=PACKET_OUTBOX_CAP as u64).contains(&s)
-        }));
+        assert_eq!(seqs, vec![99], "IDR supersedes queued P-frames");
     }
 
     #[test]
-    fn packet_outbox_evicts_same_stream_first() {
+    fn packet_outbox_latest_wins_is_per_stream() {
         let box_ = PacketOutbox::new();
-        // Stream 1 fills most of the queue, stream 0 has one old delta at the head.
         box_.push(test_pkt_on(0, 1, false));
-        for seq in 2..=PACKET_OUTBOX_CAP as u64 {
-            box_.push(test_pkt_on(1, seq, false));
-        }
-        assert_eq!(box_.len(), PACKET_OUTBOX_CAP);
-        box_.push(test_pkt_on(1, 1000, false));
+        box_.push(test_pkt_on(1, 2, false));
+        box_.push(test_pkt_on(1, 3, false));
+        box_.push(test_pkt_on(0, 4, false));
         let seqs = box_.seqs();
-        assert!(
-            seqs.contains(&1),
-            "stream 0's delta survives stream 1 pressure"
-        );
-        assert!(!seqs.contains(&2), "oldest stream-1 delta was evicted");
-        assert!(seqs.contains(&1000));
+        assert_eq!(seqs, vec![3, 4], "one newest delta per stream");
     }
 
     #[test]

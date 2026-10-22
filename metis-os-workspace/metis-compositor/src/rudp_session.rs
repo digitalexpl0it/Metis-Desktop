@@ -32,9 +32,14 @@ impl MetisState {
             Some(desired) => {
                 if let Some(host) = self.rudp_host.as_mut()
                     && host.bind == desired.config.bind
-                    && host.encode_prefs == desired.encode_prefs
                     && host.render_node_path == render_path
                 {
+                    // Keep Quinn / authenticated sessions. Encode-only changes
+                    // (bitrate, codec, backend) reopen workers live — a full
+                    // restart mid-session freezes remote Settings / Viewer.
+                    if host.encode_prefs != desired.encode_prefs {
+                        host.apply_encode_prefs(desired.encode_prefs.clone());
+                    }
                     host.apply_policy(
                         desired.allowed_users,
                         desired.lan_only,
@@ -44,7 +49,9 @@ impl MetisState {
                         bind = %host.bind,
                         allowed = ?host.allowed_users,
                         unlock_on_auth = desired.unlock_session_on_auth,
-                        "rudp host policy refreshed (same bind/encode)"
+                        encoder = desired.encode_prefs.backend.as_str(),
+                        bitrate_kbps = desired.encode_prefs.bitrate_kbps,
+                        "rudp host policy/encode refreshed (sessions kept)"
                     );
                     return;
                 }
