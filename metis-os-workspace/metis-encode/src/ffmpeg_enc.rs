@@ -49,13 +49,16 @@ fn hw_device_type(backend: EncoderBackend) -> ffi::AVHWDeviceType {
 }
 
 /// Map target bitrate to a VAAPI CQP quantizer (lower = higher quality).
+///
+/// Bands align with [`metis_config::RudpStreamQuality`] bitrates so Low /
+/// Medium / High / Performance are visibly distinct (older ladder collapsed
+/// High 50 Mbps and Performance 80 Mbps onto the same QP 20).
 fn bitrate_kbps_to_vaapi_qp(bitrate_kbps: u32) -> i32 {
     match bitrate_kbps {
-        0..=3_999 => 32,
-        4_000..=9_999 => 28,
-        10_000..=19_999 => 25,
-        20_000..=39_999 => 22,
-        _ => 20,
+        0..=9_999 => 34,       // Low (~8 Mbps)
+        10_000..=34_999 => 28, // Medium (~25 Mbps)
+        35_000..=64_999 => 22, // High (~50 Mbps)
+        _ => 16,               // Performance (~80 Mbps)
     }
 }
 
@@ -371,5 +374,16 @@ mod tests {
     #[test]
     fn vaapi_qp_monotonic() {
         assert!(bitrate_kbps_to_vaapi_qp(1_000) > bitrate_kbps_to_vaapi_qp(50_000));
+    }
+
+    #[test]
+    fn vaapi_qp_distinct_for_stream_quality_bitrates() {
+        let low = bitrate_kbps_to_vaapi_qp(8_000);
+        let medium = bitrate_kbps_to_vaapi_qp(25_000);
+        let high = bitrate_kbps_to_vaapi_qp(50_000);
+        let performance = bitrate_kbps_to_vaapi_qp(80_000);
+        assert!(low > medium);
+        assert!(medium > high);
+        assert!(high > performance);
     }
 }

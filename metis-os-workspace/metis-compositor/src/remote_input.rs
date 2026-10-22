@@ -247,32 +247,26 @@ impl MetisState {
         use smithay::backend::input::{Axis, AxisSource};
         use smithay::input::pointer::AxisFrame;
 
-        // Viewer used to send AxisSource::Finger without `.stop()`, which many
-        // clients ignore. Prefer Wheel + v120 (mouse notches) or Finger+stop
-        // (trackpad continuous). Match local libinput scale: value ≈ v120*15/120.
+        // Wheel + v120 for mouse notches. Trackpad / smooth deltas use
+        // Continuous (no terminating stop) — Finger+stop-per-event made many
+        // clients treat each tick as a finished gesture and drop scrolling.
         let discrete = is_discrete_scroll_notch(dx) && is_discrete_scroll_notch(dy);
         let mut frame = if discrete {
             AxisFrame::new(InputTime::now()).source(AxisSource::Wheel)
         } else {
-            AxisFrame::new(InputTime::now()).source(AxisSource::Finger)
+            AxisFrame::new(InputTime::now()).source(AxisSource::Continuous)
         };
         if dx != 0.0 {
             let (value, v120) = scroll_axis_amounts(dx, discrete);
             frame = frame
                 .value(Axis::Horizontal, value)
                 .v120(Axis::Horizontal, v120);
-            if !discrete {
-                frame = frame.stop(Axis::Horizontal);
-            }
         }
         if dy != 0.0 {
             let (value, v120) = scroll_axis_amounts(dy, discrete);
             frame = frame
                 .value(Axis::Vertical, value)
                 .v120(Axis::Vertical, v120);
-            if !discrete {
-                frame = frame.stop(Axis::Vertical);
-            }
         }
         let loc = pointer.current_location();
         let under = self.pointer_target_at(loc);

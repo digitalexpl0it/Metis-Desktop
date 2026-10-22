@@ -51,7 +51,11 @@ use smithay::utils::{Physical, Point, Rectangle, Scale, Size, Transform};
 use crate::render::CLEAR_COLOR;
 use crate::state::MetisState;
 
-const POOL_SIZE: usize = 3;
+/// Pool slots held while encode / hub still own a frame. Three was tight when
+/// multi-output `take_latest_all` held one BO per output during a slow encode
+/// pass — acquire failed, damage was already consumed, and the remote stayed
+/// stale until the next accidental damage.
+const POOL_SIZE: usize = 5;
 /// Wake channel depth — payload lives in `latest` (true latest-wins).
 const WAKE_CAP: usize = 1;
 /// Synthetic encode latency in the debug consumer (proves slot RAII under load).
@@ -839,7 +843,11 @@ pub fn maybe_export_frame(
     };
 
     let Some((mut dmabuf, slot_guard)) = PoolState::acquire(&pool_arc) else {
-        tracing::debug!("stream export: pool exhausted — skip frame");
+        // Damage tracker already advanced above — without a force+redraw the
+        // remote keeps showing a stale frame until something else damages.
+        tracing::debug!("stream export: pool exhausted — force retry");
+        state.stream_export.request_full_frame();
+        state.schedule_redraw();
         return;
     };
 
@@ -849,6 +857,8 @@ pub fn maybe_export_frame(
             Ok(fb) => fb,
             Err(err) => {
                 tracing::warn!(?err, "stream export: dmabuf bind failed");
+                state.stream_export.request_full_frame();
+                state.schedule_redraw();
                 return;
             }
         };
@@ -858,6 +868,8 @@ pub fn maybe_export_frame(
             Ok(r) => r.sync,
             Err(err) => {
                 tracing::warn!(?err, "stream export: render_output failed");
+                state.stream_export.request_full_frame();
+                state.schedule_redraw();
                 return;
             }
         }
@@ -869,6 +881,8 @@ pub fn maybe_export_frame(
         Ok(v) => v,
         Err(err) => {
             tracing::warn!(%err, "stream export: plane export failed");
+            state.stream_export.request_full_frame();
+            state.schedule_redraw();
             return;
         }
     };

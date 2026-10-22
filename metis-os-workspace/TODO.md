@@ -2557,7 +2557,10 @@ latency and quality presets → **Phase 24** (not deferred forever).
 ## Phase 24 — Metis Remote stream quality (Performance + presets)
 
 **Status 2026-10-22:** **Wave 1 landed** (presets + protocol v4 + Settings /
-Viewer UI + live host apply). Wave 2 (native/SHM Performance encode path,
+Viewer UI + live host apply). Follow-up fixes same day: Viewer always sends
+`SetStreamQuality` + re-assert on subscribe; VAAPI QP bands distinct per
+preset; dual GTK scroll controllers + Continuous axis inject; export pool
+retry after consumed damage. Wave 2 (native/SHM Performance encode path,
 zero-copy, latency HUD) remains open. Goal: compete with Parsec on LAN for
 **gaming, CAD, Blender, movie streaming**, while keeping safer / cheaper
 presets for everyday remote desktop. Quinn stays out-of-process (Phase 23).
@@ -2614,9 +2617,8 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
 - [ ] **H. End-to-end budget** — host PTS → Viewer present latency HUD (debug or
       connection-bar); log encode ms / queue depth / FPS; fail closed to drop
       frames rather than grow backlog.
-- [ ] **I. Bitrate profiles** — concrete defaults (tune on hardware): e.g. Low
-      ~8 Mbps, Medium ~25 Mbps (current default), High ~50 Mbps, Performance
-      ~80+ Mbps or uncapped CQP floor suitable for 1080p60 / 1440p games.
+- [x] **I. Bitrate profiles** (2026-10-22) — Low ~8 / Medium ~25 / High ~50 /
+      Performance ~80 Mbps; VAAPI CQP ladder matches those bands (QP 34/28/22/16).
 - [ ] **J. Viewer decode** — HW decode path already exists; under Performance
       prefer matching codec; optional future zero-copy present (dmabuf/GL) —
       stretch, not blocker for presets shipping.

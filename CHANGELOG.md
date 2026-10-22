@@ -24,16 +24,21 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **Metis Remote Auto encode plan on Intel / LattePanda** — Settings “Encode
   plan” now reflects this machine’s GPU (VAAPI when no NVIDIA render node)
   instead of always saying “Auto → NVENC…”.
-- **Metis Remote scroll** — Viewer accepts trackpad continuous scroll (not only
-  discrete wheel); host injects Wheel+v120 or Finger+stop so clients apply axis
-  events (Finger without stop was ignored).
+- **Metis Remote scroll** — Viewer uses separate discrete (mouse wheel) and
+  continuous (trackpad) scroll controllers; host injects Wheel+v120 or
+  Continuous (Finger+stop-per-event was dropping gestures).
+- **Metis Remote stream quality from Viewer** — dropdown always sends
+  `SetStreamQuality` (even when the local selection already matched), and
+  quality is re-asserted with `SubscribeOutputs`. VAAPI CQP bands now differ
+  for Low / Medium / High / Performance (High and Performance previously
+  shared QP 20).
 - **Metis Remote bitrate / encode prefs mid-session** — changing bitrate, codec,
   or encoder from Settings no longer restarts Quinn (which froze the remote
   session). Encode workers reopen live; Settings debounces spin/dropdown saves.
-- **Metis Remote multi-second lag on window close** — encoded-packet outbox is
-  now latest-wins per stream (shallow cap) and large scene damage no longer
-  forces a reliable-stream IDR. Viewer cursor stayed snappy (local overlay)
-  while video could backlog several seconds on slow encode links.
+- **Metis Remote multi-second lag on window open/close** — export pool grown;
+  when a pool slot / bind fails after damage was consumed, the compositor
+  forces a full-frame retry + redraw instead of leaving the remote on a stale
+  frame. Packet outbox remains latest-wins; large damage no longer forces IDR.
 
 ### Security
 

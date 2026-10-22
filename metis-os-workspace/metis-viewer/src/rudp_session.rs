@@ -1199,23 +1199,30 @@ impl SessionUi {
         }
 
         {
-            let ui = Rc::downgrade(self);
-            // BOTH_AXES without DISCRETE: mouse wheel *and* trackpad continuous
-            // scroll. (DISCRETE alone dropped trackpad events.)
-            let scroll =
-                gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
-            scroll.connect_scroll(move |_, dx, dy| {
-                if dx == 0.0 && dy == 0.0 {
-                    return glib::Propagation::Proceed;
-                }
-                if let Some(ui) = ui.upgrade() {
-                    // GTK dy is natural (positive = content down); Wayland axis
-                    // positive is usually "scroll down" / content up — flip dy.
-                    ui.send_input(RudpControlMsg::PointerScroll { dx, dy: -dy });
-                }
-                glib::Propagation::Stop
-            });
-            picture.add_controller(scroll);
+            // GTK reports discrete (mouse wheel) and continuous (trackpad)
+            // through separate flag filters — one controller cannot get both.
+            let attach_scroll = |flags: gtk::EventControllerScrollFlags, picture: &gtk::Picture| {
+                let ui = Rc::downgrade(self);
+                let scroll = gtk::EventControllerScroll::new(flags);
+                scroll.connect_scroll(move |_, dx, dy| {
+                    if dx == 0.0 && dy == 0.0 {
+                        return glib::Propagation::Proceed;
+                    }
+                    if let Some(ui) = ui.upgrade() {
+                        // GTK dy is natural (positive = content down); Wayland
+                        // axis positive is usually "scroll down" / content up.
+                        ui.send_input(RudpControlMsg::PointerScroll { dx, dy: -dy });
+                    }
+                    glib::Propagation::Stop
+                });
+                picture.add_controller(scroll);
+            };
+            attach_scroll(
+                gtk::EventControllerScrollFlags::BOTH_AXES
+                    | gtk::EventControllerScrollFlags::DISCRETE,
+                &picture,
+            );
+            attach_scroll(gtk::EventControllerScrollFlags::BOTH_AXES, &picture);
         }
 
         {
@@ -1376,15 +1383,17 @@ impl SessionUi {
     }
 
     fn set_stream_quality(&self, quality: RudpStreamQuality) {
-        if self.stream_quality.get() == quality {
-            return;
-        }
+        // Always send — even when the local Cell already matches — so a host
+        // that never applied (or drifted) still gets a live encode update.
+        let changed = self.stream_quality.get() != quality;
         self.stream_quality.set(quality);
-        self.apply_stream_quality_ui(quality);
-        let mut cfg = metis_config::load_viewer_config();
-        cfg.rudp_stream_quality = quality;
-        if let Err(err) = metis_config::save_viewer_config(&cfg) {
-            tracing::warn!(%err, "failed to save viewer stream quality");
+        if changed {
+            self.apply_stream_quality_ui(quality);
+            let mut cfg = metis_config::load_viewer_config();
+            cfg.rudp_stream_quality = quality;
+            if let Err(err) = metis_config::save_viewer_config(&cfg) {
+                tracing::warn!(%err, "failed to save viewer stream quality");
+            }
         }
         self.send_input(RudpControlMsg::SetStreamQuality {
             quality: quality.as_str().to_string(),
@@ -1427,6 +1436,12 @@ impl SessionUi {
         tracing::info!(outputs = ?wanted, "metis-viewer: subscribing to outputs");
         self.send_input(RudpControlMsg::SubscribeOutputs {
             output_ids: wanted.clone(),
+        });
+        // Pair quality with subscribe so encode prefs are set before the host
+        // opens workers for this subscription (start() also sends; this covers
+        // reconnect / layout refresh races).
+        self.send_input(RudpControlMsg::SetStreamQuality {
+            quality: self.stream_quality.get().as_str().to_string(),
         });
         *self.subscribed.borrow_mut() = Some(wanted);
     }
