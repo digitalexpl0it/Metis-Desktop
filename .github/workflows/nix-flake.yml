@@ -22,8 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v16
-      - uses: DeterminateSystems/magic-nix-cache-action@v9
+      # v16 used a 1000ms HTTP timeout that flakes on slow GitHub→installer fetches
+      # (TimeoutError / ETIMEDOUT). Keep upstream Nix (not Determinate defaults).
+      - uses: DeterminateSystems/nix-installer-action@v23
+        with:
+          determinate: false
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       - name: flake check
         run: |
           # Evaluate / build packages (may take long on cold cache).
