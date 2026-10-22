@@ -570,11 +570,12 @@ pub use remote::{
 pub use reset::{ResetOptions, ResetResult, reset_metis_config, reset_metis_config_at};
 pub use rudp::{
     DEFAULT_RUDP_BITRATE_KBPS, DEFAULT_RUDP_PORT, RudpConfig, RudpEncoderBackend, RudpIdentityMeta,
-    RudpVideoCodec, detect_auto_encoder_backend, ensure_rudp_dir, fingerprint_cert_der,
-    host_cert_exists, known_hosts_lookup, known_hosts_pin, known_hosts_remove, load_rudp_config,
-    load_rudp_identity_meta, normalize_fingerprint, read_rudp_host_fingerprint, rudp_config_path,
-    rudp_dir, rudp_host_cert_path, rudp_host_key_path, rudp_identity_meta_path,
-    rudp_known_hosts_path, save_rudp_config, save_rudp_identity_meta,
+    RudpStreamQuality, RudpVideoCodec, detect_auto_encoder_backend, ensure_rudp_dir,
+    fingerprint_cert_der, host_cert_exists, known_hosts_lookup, known_hosts_pin,
+    known_hosts_remove, load_rudp_config, load_rudp_identity_meta, normalize_fingerprint,
+    read_rudp_host_fingerprint, rudp_config_path, rudp_dir, rudp_host_cert_path,
+    rudp_host_key_path, rudp_identity_meta_path, rudp_known_hosts_path, save_rudp_config,
+    save_rudp_identity_meta,
 };
 pub use sanitize::{is_safe_nm_token, validate_nm_id, validate_ssid, validate_vpn_data_fragment};
 pub use screenshot::{

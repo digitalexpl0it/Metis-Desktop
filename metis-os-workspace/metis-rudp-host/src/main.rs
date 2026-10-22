@@ -78,6 +78,10 @@ impl HostLink for IpcLink {
         }
     }
 
+    fn set_stream_quality(&self, quality: String) {
+        self.send(HostToComp::SetStreamQuality { quality });
+    }
+
     fn status(&self, listening: bool, fingerprint: &str, bind: SocketAddr, err: Option<String>) {
         self.send(HostToComp::Status {
             listening,
@@ -168,6 +172,7 @@ fn apply(shared: &Arc<EngineShared>, bind: SocketAddr, msg: CompToHost) -> bool 
             bind: new_bind,
             allowed_users,
             unlock_session_on_auth,
+            stream_quality,
             ..
         } => {
             if ipc_version != RUDP_HOST_IPC_VERSION {
@@ -179,6 +184,10 @@ fn apply(shared: &Arc<EngineShared>, bind: SocketAddr, msg: CompToHost) -> bool 
                 tracing::warn!(%new_bind, "rudp host: bind change ignored (restart required)");
             }
             shared.set_policy(allowed_users, unlock_session_on_auth);
+            shared.set_stream_quality_str(&stream_quality);
+        }
+        CompToHost::StreamQuality { quality } => {
+            shared.set_stream_quality_str(&quality);
         }
         CompToHost::DesktopLayout { monitors, .. } => {
             shared.layout.publish(monitors);
@@ -254,6 +263,7 @@ fn run() -> Result<(), String> {
         bind,
         allowed_users,
         unlock_session_on_auth,
+        stream_quality,
         ..
     } = first
     else {
@@ -282,6 +292,7 @@ fn run() -> Result<(), String> {
         allowed_users,
         unlock_session_on_auth,
     ));
+    shared.set_stream_quality_str(&stream_quality);
     let stop = Arc::new(AtomicBool::new(false));
     // Last writer error (surfaced when Quinn exits because IPC died).
     let ipc_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -437,6 +448,7 @@ mod tests {
                 allowed_users: vec!["bob".into()],
                 lan_only: true,
                 unlock_session_on_auth: true,
+                stream_quality: "high".into(),
             }
         ));
         assert_eq!(

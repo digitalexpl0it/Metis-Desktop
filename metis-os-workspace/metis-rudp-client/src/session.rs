@@ -87,6 +87,10 @@ pub enum SessionEvent {
         text: String,
         serial: u64,
     },
+    /// Host advertised encode quality (`performance` / `high` / `medium` / `low`).
+    StreamQuality {
+        quality: String,
+    },
     AccessUnit(AccessUnitEvent),
     Disconnected,
 }
@@ -128,6 +132,14 @@ impl RudpSession {
         output_ids.truncate(metis_protocol::RUDP_MAX_SUBSCRIBED_OUTPUTS);
         self.send_input(RudpControlMsg::SubscribeOutputs { output_ids })
             .await
+    }
+
+    /// Ask the host to apply a stream-quality preset (protocol ≥ 4).
+    pub async fn set_stream_quality(&self, quality: &str) -> Result<(), ClientError> {
+        self.send_input(RudpControlMsg::SetStreamQuality {
+            quality: quality.to_string(),
+        })
+        .await
     }
 }
 
@@ -327,6 +339,11 @@ async fn session_pump(
                                 RudpControlMsg::ClipboardSet { mime, text, serial } => {
                                     let _ = event_tx
                                         .send(SessionEvent::ClipboardSet { mime, text, serial })
+                                        .await;
+                                }
+                                RudpControlMsg::StreamQuality { quality } => {
+                                    let _ = event_tx
+                                        .send(SessionEvent::StreamQuality { quality })
                                         .await;
                                 }
                                 RudpControlMsg::Keepalive => {}

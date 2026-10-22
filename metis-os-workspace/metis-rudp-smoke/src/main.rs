@@ -45,6 +45,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut video_secs: Option<u64> = None;
     let mut input_smoke = false;
     let mut monitors: Vec<String> = Vec::new();
+    let mut stream_quality: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -70,6 +71,19 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 if !monitors.contains(name) {
                     monitors.push(name.clone());
                 }
+            }
+            "--stream-quality" => {
+                i += 1;
+                let q = args
+                    .get(i)
+                    .ok_or_else(|| {
+                        "--stream-quality needs performance|high|medium|low".to_string()
+                    })?
+                    .to_ascii_lowercase();
+                if !matches!(q.as_str(), "performance" | "high" | "medium" | "low") {
+                    return Err(format!("invalid --stream-quality '{q}'"));
+                }
+                stream_quality.replace(q);
             }
             "--input-smoke" => input_smoke = true,
             "--tofu-reset" => tofu_reset = true,
@@ -126,6 +140,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             video_secs,
             input_smoke,
             &monitors,
+            stream_quality.as_deref(),
         )
         .await
     });
@@ -133,6 +148,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     result.map_err(|e| e.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn smoke_session(
     addr: SocketAddr,
     host_key: &str,
@@ -141,6 +157,7 @@ async fn smoke_session(
     video_secs: Option<u64>,
     input_smoke: bool,
     monitors: &[String],
+    stream_quality: Option<&str>,
 ) -> Result<(), ClientError> {
     let mut session = connect(RudpClientConfig {
         addr,
@@ -151,6 +168,10 @@ async fn smoke_session(
     })
     .await?;
     println!("SessionOk {}", session.session_id());
+    if let Some(q) = stream_quality {
+        session.set_stream_quality(q).await?;
+        println!("SetStreamQuality {q}");
+    }
 
     // Drain the post-auth burst: PointerLock + DesktopLayout (host sends both
     // immediately after SessionOk).
@@ -162,6 +183,9 @@ async fn smoke_session(
         match ev {
             Some(SessionEvent::PointerLock { locked }) => {
                 println!("PointerLock locked={locked}");
+            }
+            Some(SessionEvent::StreamQuality { quality }) => {
+                println!("StreamQuality {quality}");
             }
             Some(SessionEvent::DesktopLayout { monitors: layout }) => {
                 layout_seen = true;
@@ -284,7 +308,8 @@ async fn smoke_session(
             Ok(Some(
                 SessionEvent::AudioReady { .. }
                 | SessionEvent::AudioPacket { .. }
-                | SessionEvent::ClipboardSet { .. },
+                | SessionEvent::ClipboardSet { .. }
+                | SessionEvent::StreamQuality { .. },
             )) => {}
             Ok(Some(SessionEvent::Disconnected)) | Ok(None) => break,
             Err(_) => {}
@@ -362,10 +387,11 @@ fn print_help() {
     println!(
         "metis-rudp-smoke — Metis Remote auth + video + input smoke test\n\n\
          Usage:\n  \
-         metis-rudp-smoke <host:port> --user <name> [--video-secs N] [--monitor NAME].. [--input-smoke] [--tofu-reset]\n\n\
+         metis-rudp-smoke <host:port> --user <name> [--video-secs N] [--monitor NAME].. [--stream-quality Q] [--input-smoke] [--tofu-reset]\n\n\
          Password: TTY prompt (no echo) or METIS_RUDP_PASSWORD.\n\
          --video-secs N  receive/reassemble video for N seconds (requires host encode).\n\
          --monitor NAME  subscribe to this output (repeatable, max 4; default: primary).\n\
+         --stream-quality Q  performance|high|medium|low (protocol v4).\n\
          --input-smoke   send a short pointer/keyboard sequence after SessionOk.\n\
          TOFU pins live in ~/.config/metis/rudp/known_hosts."
     );

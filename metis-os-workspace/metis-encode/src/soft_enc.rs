@@ -187,7 +187,13 @@ impl FfmpegSoftEncoder {
             (*ctx).framerate = ffi::AVRational { num: fps, den: 1 };
             (*ctx).pix_fmt = Pixel::YUV420P.into();
             (*ctx).bit_rate = bit_rate;
-            (*ctx).gop_size = fps.saturating_mul(2);
+            let gop_secs = if cfg.gop_secs == 0 {
+                2
+            } else {
+                cfg.gop_secs.min(8)
+            };
+            let gop_secs = i32::try_from(gop_secs).unwrap_or(2);
+            (*ctx).gop_size = fps.saturating_mul(gop_secs);
             (*ctx).max_b_frames = 0;
             (*ctx).thread_count = soft_thread_count();
             (*ctx).flags |= ffi::AV_CODEC_FLAG_LOW_DELAY as i32;
@@ -350,6 +356,7 @@ mod tests {
             height: 64,
             fps_hint: 30,
             bitrate_kbps: 2_000,
+            gop_secs: 0,
         };
         assert!(matches!(
             FfmpegSoftEncoder::open(&cfg),
@@ -370,6 +377,7 @@ mod tests {
             height: 128,
             fps_hint: 30,
             bitrate_kbps: 2_000,
+            gop_secs: 0,
         };
         match FfmpegSoftEncoder::open(&cfg) {
             Ok(enc) => {

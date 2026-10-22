@@ -111,6 +111,10 @@ pub enum RudpInputEvent {
     /// Not input: the frame pipeline needs a full frame now (client joined /
     /// encoder restarted) even if the desktop is idle — repaint + force export.
     RefreshVideo,
+    /// Viewer (or host IPC) requested a stream-quality preset.
+    SetStreamQuality {
+        quality: String,
+    },
 }
 
 impl From<RudpHostInput> for RudpInputEvent {
@@ -151,20 +155,29 @@ pub struct DesiredRudpHost {
     pub encode_prefs: RudpEncodePrefs,
 }
 
-/// Encode preferences mirrored from `rudp.json` (for restart comparison).
+/// Encode preferences mirrored from `rudp.json` / live stream-quality (for
+/// restart comparison and live apply).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RudpEncodePrefs {
     pub backend: RudpEncoderBackend,
     pub codec: RudpVideoCodec,
     pub bitrate_kbps: u32,
+    pub stream_quality: metis_config::RudpStreamQuality,
+    pub gop_secs: u32,
+    /// Wave 2: prefer in-process encode when Performance.
+    pub prefer_native_encode: bool,
 }
 
 impl Default for RudpEncodePrefs {
     fn default() -> Self {
+        let q = metis_config::RudpStreamQuality::Medium;
         Self {
             backend: RudpEncoderBackend::Auto,
             codec: RudpVideoCodec::H264,
             bitrate_kbps: DEFAULT_BITRATE_KBPS,
+            stream_quality: q,
+            gop_secs: q.gop_secs(),
+            prefer_native_encode: q.prefer_native_encode(),
         }
     }
 }
@@ -175,6 +188,21 @@ impl RudpEncodePrefs {
             backend: cfg.encoder,
             codec: cfg.codec,
             bitrate_kbps: cfg.bitrate_kbps,
+            stream_quality: cfg.stream_quality,
+            gop_secs: cfg.stream_quality.gop_secs(),
+            prefer_native_encode: cfg.stream_quality.prefer_native_encode(),
+        }
+    }
+
+    /// Build prefs for a live quality change (keeps encoder/codec from `base`).
+    pub fn with_stream_quality(base: &Self, quality: metis_config::RudpStreamQuality) -> Self {
+        Self {
+            backend: base.backend,
+            codec: base.codec,
+            bitrate_kbps: quality.bitrate_kbps(),
+            stream_quality: quality,
+            gop_secs: quality.gop_secs(),
+            prefer_native_encode: quality.prefer_native_encode(),
         }
     }
 }
@@ -288,6 +316,12 @@ impl HostLink for CalloopLink {
         self.hub.set_subscribed_outputs(output_ids);
     }
 
+    fn set_stream_quality(&self, quality: String) {
+        let _ = self
+            .input_tx
+            .send(RudpInputEvent::SetStreamQuality { quality });
+    }
+
     fn status(&self, listening: bool, fingerprint: &str, bind: SocketAddr, err: Option<String>) {
         record_net_status(&self.status, listening, fingerprint, &bind.to_string(), err);
     }
@@ -382,6 +416,7 @@ impl RudpHostSystem {
             allowed_users.clone(),
             unlock_session_on_auth,
         ));
+        shared.set_stream_quality_str(encode_prefs.stream_quality.as_str());
 
         let wake = hub.arm();
         let marker = Arc::new(HostMarker::create());
@@ -449,6 +484,7 @@ impl RudpHostSystem {
                 allowed_users: allowed_users.clone(),
                 lan_only,
                 unlock_session_on_auth,
+                stream_quality: encode_prefs.stream_quality.as_str().to_string(),
                 shared: Arc::clone(&shared),
                 hub: Arc::clone(&hub),
                 input_tx: bridge.input_tx.clone(),
@@ -519,7 +555,13 @@ impl RudpHostSystem {
         self.shared
             .set_policy(allowed_users.clone(), unlock_session_on_auth);
         if let NetBackend::HostProcess(ipc) = &self.net {
-            ipc.update_policy(self.bind, allowed_users, lan_only, unlock_session_on_auth);
+            ipc.update_policy(
+                self.bind,
+                allowed_users,
+                lan_only,
+                unlock_session_on_auth,
+                self.encode_prefs.stream_quality.as_str(),
+            );
         }
     }
 
@@ -534,15 +576,33 @@ impl RudpHostSystem {
             encoder = prefs.backend.as_str(),
             codec = prefs.codec.as_str(),
             bitrate_kbps = prefs.bitrate_kbps,
+            quality = prefs.stream_quality.as_str(),
             "rudp host: encode prefs updated live (sessions kept)"
         );
+        let quality = prefs.stream_quality.as_str().to_string();
         self.encode_prefs = prefs.clone();
         if let Ok(mut slot) = self.prefs_live.lock() {
             *slot = prefs;
         }
         self.prefs_gen.fetch_add(1, Ordering::SeqCst);
+        self.advertise_stream_quality(&quality);
         // Wake export so idle desktops still reopen the encoder promptly.
         self.hub.request_full_frame();
+    }
+
+    /// Fan out current stream quality to authenticated v4 clients.
+    pub fn advertise_stream_quality(&self, quality: &str) {
+        self.shared.set_stream_quality_str(quality);
+        if let NetBackend::HostProcess(ipc) = &self.net {
+            ipc.advertise_stream_quality(quality);
+        }
+    }
+
+    /// Apply a Viewer / Settings stream-quality request (session encode only;
+    /// does not rewrite `rudp.json`).
+    pub fn apply_stream_quality(&mut self, quality: metis_config::RudpStreamQuality) {
+        let prefs = RudpEncodePrefs::with_stream_quality(&self.encode_prefs, quality);
+        self.apply_encode_prefs(prefs);
     }
 
     /// Push local clipboard text to connected RUDP clients (latest-wins).
@@ -622,6 +682,7 @@ fn open_hw_encoder(
         height,
         fps_hint: DEFAULT_FPS_HINT,
         bitrate_kbps: prefs.bitrate_kbps.max(500),
+        gop_secs: prefs.gop_secs.max(1),
     };
     // Out-of-process: a libva / CUDA crash kills the worker, not the session.
     open_isolated_encoder(&cfg, render_node, Some(Arc::clone(cancel)))

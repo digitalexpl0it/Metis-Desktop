@@ -26,9 +26,9 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use metis_protocol::{
     MediaDatagramParams, RUDP_AUDIO_CHANNELS, RUDP_AUDIO_SAMPLE_RATE, RUDP_DEFAULT_DATAGRAM_BUDGET,
-    RUDP_MAX_SUBSCRIBED_OUTPUTS, RUDP_PROTOCOL_VERSION, ReliableAccessUnit, RudpControlMsg,
-    RudpDamageRect, RudpHostInput, RudpMonitorInfo, RudpRejectReason, build_media_datagrams,
-    codec_to_str, encode_rudp_frame, try_decode_rudp_frame,
+    RUDP_MAX_SUBSCRIBED_OUTPUTS, RUDP_PROTOCOL_MIN, RUDP_PROTOCOL_VERSION, ReliableAccessUnit,
+    RudpControlMsg, RudpDamageRect, RudpHostInput, RudpMonitorInfo, RudpRejectReason,
+    build_media_datagrams, codec_to_str, encode_rudp_frame, try_decode_rudp_frame,
 };
 use quinn::Endpoint;
 use tokio::sync::RwLock as AsyncRwLock;
@@ -301,6 +301,8 @@ pub trait HostLink: Send + Sync {
     fn subscribe_union(&self, output_ids: Vec<String>, gained: bool);
     /// Authenticated session count / join counter changed (pump tick).
     fn session_demand(&self, _sessions: usize, _joins: u64) {}
+    /// Client requested a stream-quality preset (protocol ≥ 4).
+    fn set_stream_quality(&self, _quality: String) {}
     /// Listener state after bind / identity load.
     fn status(
         &self,
@@ -347,6 +349,10 @@ pub struct EngineShared {
     pub allowed_users: StdRwLock<Vec<String>>,
     /// Live: unlock Metis PAM lock after owner auth.
     pub unlock_session_on_auth: AtomicBool,
+    /// Current stream quality string (`performance` / `high` / `medium` / `low`).
+    pub stream_quality: Mutex<String>,
+    /// Bumped when [`Self::stream_quality`] changes — pump fans out to v4 clients.
+    pub stream_quality_gen: AtomicU64,
     /// Owner of the desktop session.
     pub link: Arc<dyn HostLink>,
     /// A session joined / left / changed its subscription — re-resolve.
@@ -377,6 +383,8 @@ impl EngineShared {
             audio: RudpAudioShared::new(),
             allowed_users: StdRwLock::new(allowed_users),
             unlock_session_on_auth: AtomicBool::new(unlock_session_on_auth),
+            stream_quality: Mutex::new("medium".into()),
+            stream_quality_gen: AtomicU64::new(1),
             link,
             subs_dirty: AtomicBool::new(true),
             // Force the first resolve even when the layout is still empty.
@@ -391,6 +399,28 @@ impl EngineShared {
         }
         self.unlock_session_on_auth
             .store(unlock_session_on_auth, Ordering::Relaxed);
+    }
+
+    /// Update advertised stream quality (fans out on the next pump tick).
+    pub fn set_stream_quality_str(&self, quality: &str) {
+        let q = quality.trim().to_ascii_lowercase();
+        if q.is_empty() {
+            return;
+        }
+        if let Ok(mut slot) = self.stream_quality.lock() {
+            if *slot == q {
+                return;
+            }
+            *slot = q;
+        }
+        self.stream_quality_gen.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn stream_quality_snapshot(&self) -> String {
+        self.stream_quality
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| "medium".into())
     }
 
     /// Push local clipboard text to connected RUDP clients (latest-wins).
@@ -794,11 +824,15 @@ struct VideoSession {
     video_send: tokio::sync::Mutex<quinn::SendStream>,
     audio_ready_sent: AtomicBool,
     warned_no_dgram: AtomicBool,
+    /// Client Hello protocol (3 or 4).
+    client_protocol: u32,
     /// Layout generation last delivered to this client (0 = none yet).
     layout_gen_sent: AtomicU64,
     /// [`StreamTable`] generation the `VideoReady` set was last synced at
     /// (`u64::MAX` = never).
     ready_epoch: AtomicU64,
+    /// Last [`EngineShared::stream_quality_gen`] delivered (`0` = never).
+    quality_gen_sent: AtomicU64,
     /// `VideoReady` already delivered, keyed by output id.
     announced: Mutex<HashMap<String, StreamInfo>>,
     subs: Mutex<SessionSubscription>,
@@ -810,6 +844,7 @@ impl VideoSession {
         control_send: quinn::SendStream,
         video_send: quinn::SendStream,
         layout_gen_sent: u64,
+        client_protocol: u32,
     ) -> Self {
         Self {
             conn,
@@ -817,11 +852,17 @@ impl VideoSession {
             video_send: tokio::sync::Mutex::new(video_send),
             audio_ready_sent: AtomicBool::new(false),
             warned_no_dgram: AtomicBool::new(false),
+            client_protocol,
             layout_gen_sent: AtomicU64::new(layout_gen_sent),
             ready_epoch: AtomicU64::new(u64::MAX),
+            quality_gen_sent: AtomicU64::new(0),
             announced: Mutex::new(HashMap::new()),
             subs: Mutex::new(SessionSubscription::default()),
         }
+    }
+
+    fn supports_stream_quality(&self) -> bool {
+        self.client_protocol >= 4
     }
 
     /// Record a client `SubscribeOutputs` (resolved on the next pump tick).
@@ -935,7 +976,13 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                     let _in_flight = InFlightAuthGuard::new(Arc::clone(&auth_guard));
                     tracing::info!(%peer, "rudp host: TLS connected — starting auth");
                     match authenticate_connection(&conn, &video, &auth_guard, peer_ip).await {
-                        Ok((session_id, username, mut control_send, mut control_recv)) => {
+                        Ok((
+                            session_id,
+                            username,
+                            client_protocol,
+                            mut control_send,
+                            mut control_recv,
+                        )) => {
                             let session_ok = auth_guard
                                 .lock()
                                 .ok()
@@ -992,6 +1039,20 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                             {
                                 layout_gen_sent = layout_gen;
                             }
+                            let mut quality_gen_sent = 0u64;
+                            if client_protocol >= 4 {
+                                let quality = video.stream_quality_snapshot();
+                                let q_gen = video.stream_quality_gen.load(Ordering::Relaxed);
+                                if write_control_msg(
+                                    &mut control_send,
+                                    &RudpControlMsg::StreamQuality { quality },
+                                )
+                                .await
+                                .is_ok()
+                                {
+                                    quality_gen_sent = q_gen;
+                                }
+                            }
                             let video_send = match conn.open_uni().await {
                                 Ok(s) => s,
                                 Err(err) => {
@@ -1005,7 +1066,11 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                                 control_send,
                                 video_send,
                                 layout_gen_sent,
+                                client_protocol,
                             ));
+                            session
+                                .quality_gen_sent
+                                .store(quality_gen_sent, Ordering::Relaxed);
                             {
                                 let mut guard = sessions.write().await;
                                 guard.insert(session_id.clone(), Arc::clone(&session));
@@ -1017,7 +1082,7 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                             let ctrl_session = Arc::clone(&session);
                             let ctrl_video = Arc::clone(&video);
                             // Control reads: keepalives + Phase 7 input → calloop,
-                            // `SubscribeOutputs` → this session's subscription.
+                            // `SubscribeOutputs` / `SetStreamQuality`.
                             tokio::spawn(async move {
                                 let mut buf = Vec::new();
                                 let mut tmp = [0u8; 2048];
@@ -1025,14 +1090,22 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                                     buf.extend_from_slice(&tmp[..n]);
                                     while let Ok(Some((msg, n))) = try_decode_rudp_frame(&buf) {
                                         buf.drain(..n);
-                                        if let RudpControlMsg::SubscribeOutputs { output_ids } = msg
-                                        {
-                                            ctrl_session.set_requested(output_ids);
-                                            ctrl_video.subs_dirty.store(true, Ordering::SeqCst);
-                                            continue;
-                                        }
-                                        if let Some(ev) = RudpHostInput::from_control(msg) {
-                                            ctrl_link.input(ev);
+                                        match msg {
+                                            RudpControlMsg::SubscribeOutputs { output_ids } => {
+                                                ctrl_session.set_requested(output_ids);
+                                                ctrl_video.subs_dirty.store(true, Ordering::SeqCst);
+                                            }
+                                            RudpControlMsg::SetStreamQuality { quality } => {
+                                                if ctrl_session.supports_stream_quality() {
+                                                    ctrl_link.set_stream_quality(quality);
+                                                }
+                                            }
+                                            other => {
+                                                if let Some(ev) = RudpHostInput::from_control(other)
+                                                {
+                                                    ctrl_link.input(ev);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1222,6 +1295,26 @@ async fn video_pump_loop(
                 let _ = write_control_msg(&mut send, &msg).await;
             }
             last_pointer_lock = Some(locked);
+        }
+
+        let quality_gen = video.stream_quality_gen.load(Ordering::Relaxed);
+        let quality = video.stream_quality_snapshot();
+        for session in &snap {
+            if !session.supports_stream_quality() {
+                continue;
+            }
+            if session.quality_gen_sent.load(Ordering::Relaxed) == quality_gen {
+                continue;
+            }
+            let msg = RudpControlMsg::StreamQuality {
+                quality: quality.clone(),
+            };
+            let mut send = session.control_send.lock().await;
+            if write_control_msg(&mut send, &msg).await.is_ok() {
+                session
+                    .quality_gen_sent
+                    .store(quality_gen, Ordering::Relaxed);
+            }
         }
 
         // Pause media while the desktop session is locked (RDP parity).
@@ -1416,7 +1509,7 @@ async fn authenticate_connection(
     video: &Arc<EngineShared>,
     auth_guard: &Arc<Mutex<AuthGuard>>,
     peer_ip: IpAddr,
-) -> Result<(String, String, quinn::SendStream, quinn::RecvStream), String> {
+) -> Result<(String, String, u32, quinn::SendStream, quinn::RecvStream), String> {
     // Client opens the control bi-stream.
     let (mut send, mut recv) = tokio::time::timeout(Duration::from_secs(15), conn.accept_bi())
         .await
@@ -1424,19 +1517,21 @@ async fn authenticate_connection(
         .map_err(|e| format!("auth: accept_bi: {e}"))?;
 
     let hello = read_control_msg(&mut recv).await?;
-    let username = match hello {
+    let (username, client_protocol) = match hello {
         RudpControlMsg::Hello { protocol, username } => {
-            if protocol != RUDP_PROTOCOL_VERSION {
+            if !(RUDP_PROTOCOL_MIN..=RUDP_PROTOCOL_VERSION).contains(&protocol) {
                 let _ = auth_fail_backoff(auth_guard, peer_ip).await;
                 write_control_reject(
                     &mut send,
                     RudpRejectReason::Protocol,
-                    Some(format!("unsupported protocol {protocol}")),
+                    Some(format!(
+                        "unsupported protocol {protocol} (need {RUDP_PROTOCOL_MIN}..={RUDP_PROTOCOL_VERSION})"
+                    )),
                 )
                 .await;
                 return Err(format!("bad protocol {protocol}"));
             }
-            username
+            (username, protocol)
         }
         other => {
             let _ = auth_fail_backoff(auth_guard, peer_ip).await;
@@ -1524,7 +1619,7 @@ async fn authenticate_connection(
         },
     )
     .await?;
-    Ok((session_id, username, send, recv))
+    Ok((session_id, username, client_protocol, send, recv))
 }
 
 async fn auth_fail_backoff(auth_guard: &Arc<Mutex<AuthGuard>>, peer_ip: IpAddr) -> Duration {

@@ -11,8 +11,73 @@ use sha2::{Digest, Sha256};
 
 /// Default Quinn / RUDP listen port (must match compositor `DEFAULT_RUDP_PORT`).
 pub const DEFAULT_RUDP_PORT: u16 = 7843;
-/// Default target bitrate for hardware encode (kbps).
+/// Default target bitrate for hardware encode (kbps) — Medium preset.
 pub const DEFAULT_RUDP_BITRATE_KBPS: u32 = 25_000;
+
+/// Stream quality preset (Phase 24). Controls bitrate / GOP / encode path bias.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RudpStreamQuality {
+    /// Weak uplink / battery / slow iGPU.
+    Low,
+    /// Default day-to-day remote desktop.
+    #[default]
+    Medium,
+    /// Sharp everyday desktop / light creative.
+    High,
+    /// Gaming, CAD, Blender, movies — max quality + min latency.
+    Performance,
+}
+
+impl RudpStreamQuality {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Performance => "performance",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            "performance" => Some(Self::Performance),
+            _ => None,
+        }
+    }
+
+    /// Target bitrate for this preset (kbps).
+    pub fn bitrate_kbps(self) -> u32 {
+        match self {
+            Self::Low => 8_000,
+            Self::Medium => DEFAULT_RUDP_BITRATE_KBPS,
+            Self::High => 50_000,
+            Self::Performance => 80_000,
+        }
+    }
+
+    /// Keyframe interval hint in seconds (encoder GOP ≈ fps × this).
+    pub fn gop_secs(self) -> u32 {
+        match self {
+            Self::Low => 4,
+            Self::Medium => 2,
+            Self::High => 1,
+            Self::Performance => 1,
+        }
+    }
+
+    /// Wave 2: prefer in-process / SHM encode when true.
+    pub fn prefer_native_encode(self) -> bool {
+        matches!(self, Self::Performance)
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::Medium
+    }
+}
 
 /// Encode backend preference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -90,7 +155,11 @@ pub struct RudpConfig {
     /// Preferred codec hint; VAAPI always probes H.264 before HEVC.
     #[serde(default)]
     pub codec: RudpVideoCodec,
-    /// Target encode bitrate in kbps.
+    /// Stream quality preset (bitrate / GOP / Performance encode path).
+    #[serde(default)]
+    pub stream_quality: RudpStreamQuality,
+    /// Target encode bitrate in kbps. Selecting a stream-quality preset
+    /// overwrites this; manual edits leave `stream_quality` as last picked.
     #[serde(default = "default_bitrate")]
     pub bitrate_kbps: u32,
     /// Whether Metis believes LAN-only UDP firewall rules are present.
@@ -135,6 +204,7 @@ impl Default for RudpConfig {
             allowed_users: Vec::new(),
             encoder: RudpEncoderBackend::default(),
             codec: RudpVideoCodec::default(),
+            stream_quality: RudpStreamQuality::default(),
             bitrate_kbps: default_bitrate(),
             firewall_applied: false,
             firewall_backend: String::new(),
@@ -191,13 +261,19 @@ fn primary_render_node_is_nvidia() -> bool {
 }
 
 impl RudpConfig {
+    /// Apply a stream-quality preset: overwrite bitrate from the table.
+    pub fn apply_stream_quality(&mut self, quality: RudpStreamQuality) {
+        self.stream_quality = quality;
+        self.bitrate_kbps = quality.bitrate_kbps();
+    }
+
     /// Clamp port/bitrate and drop empty / duplicate usernames.
     pub fn sanitize(mut self) -> Self {
         if !(1024..=65535).contains(&self.port) {
             self.port = DEFAULT_RUDP_PORT;
         }
         if self.bitrate_kbps < 500 {
-            self.bitrate_kbps = DEFAULT_RUDP_BITRATE_KBPS;
+            self.bitrate_kbps = self.stream_quality.bitrate_kbps();
         }
         if self.bitrate_kbps > 200_000 {
             self.bitrate_kbps = 200_000;
@@ -496,6 +572,27 @@ mod tests {
         }
         .sanitize();
         assert_eq!(high.bitrate_kbps, 200_000);
+    }
+
+    #[test]
+    fn apply_stream_quality_sets_bitrate() {
+        let mut cfg = RudpConfig::default();
+        cfg.apply_stream_quality(RudpStreamQuality::Performance);
+        assert_eq!(cfg.stream_quality, RudpStreamQuality::Performance);
+        assert_eq!(cfg.bitrate_kbps, 80_000);
+        cfg.apply_stream_quality(RudpStreamQuality::Low);
+        assert_eq!(cfg.bitrate_kbps, 8_000);
+    }
+
+    #[test]
+    fn stream_quality_serde() {
+        let cfg: RudpConfig =
+            serde_json::from_str(r#"{"stream_quality":"performance"}"#).expect("de");
+        assert_eq!(cfg.stream_quality, RudpStreamQuality::Performance);
+        assert_eq!(
+            RudpStreamQuality::parse("HIGH"),
+            Some(RudpStreamQuality::High)
+        );
     }
 
     #[test]

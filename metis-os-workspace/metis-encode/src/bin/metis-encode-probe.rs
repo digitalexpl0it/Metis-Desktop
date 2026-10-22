@@ -91,6 +91,7 @@ fn probe_main(args: &[String]) -> ! {
         height,
         fps_hint: 30,
         bitrate_kbps: 2_000,
+        gop_secs: 0,
     };
 
     // Drop (closes the codec + hw contexts) before exit, not after.

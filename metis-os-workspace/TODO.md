@@ -21,6 +21,9 @@ Phase 22 below.
 **Phase 23** (Security hardening + RUDP host isolation — icon confused-deputy,
 unlock-on-auth default off, about PATH scan, out-of-process Quinn host, fuzz,
 state.rs carve) **§A–F complete 2026-10-22** — see Phase 23 below.
+**Phase 24** (Metis Remote stream quality — Performance + High / Medium / Low
+presets for gaming, CAD, Blender, movies, and everyday desktop) **opened
+2026-10-22** — see Phase 24 below.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -105,6 +108,8 @@ is tracked under **Product backlog — Desktop maturity** below.
 **Suggested order:** S1–S3 + MultiRenderer **1** + HDR float scene **2** landed
 → colour protocol default-on (**3b** / **M2**, blocked) or engineering backlog;
 Gamescope **4** and native remote **3** landed.
+**Next product stream:** **Phase 24** Metis Remote quality presets (Performance
+for gaming / CAD / Blender / movies; High / Medium / Low for day-to-day).
 
 ### Product backlog — Themes, icons, default apps (2026-10-18)
 
@@ -2421,9 +2426,9 @@ Complements Phases 20–21 (power-user / visual polish).
 `zwlr_foreign_toplevel_management_v1`; session OpenSSH `ssh-agent` with
 vault-backed keys.
 
-**Non-goals:** RUDP/LattePanda encode latency; colour-protocol M2; handheld 20 §D;
-portal foreign-toplevel capture; replacing Metis shell IPC; full SS ACL/DH/
-multi-collection UI.
+**Non-goals:** colour-protocol M2; handheld 20 §D; portal foreign-toplevel
+capture; replacing Metis shell IPC; full SS ACL/DH/ multi-collection UI.
+RUDP stream latency / quality presets → **Phase 24**.
 
 ### A. Vault re-wrap + Secret Service Prompt (P0) — done
 
@@ -2459,8 +2464,9 @@ multi-collection UI.
 
 ### D. Explicitly deferred / rejected
 
-- RUDP / LattePanda encode latency (post-deb retest) — **2026-10-22:** shallow
-  latest-wins outbox + no IDR on large damage; retest on LattePanda after rebuild
+- RUDP / LattePanda encode latency — folded into **Phase 24** (Performance mode
+  + presets); **2026-10-22** shallow latest-wins outbox + no IDR on large damage
+  is the first step; retest on LattePanda after rebuild
 - Default-on `wp_color_management_v1` (M2)
 - Phase 20 §D handheld; foreign-toplevel image capture / portal picker
 - Replacing Metis shell IPC; full per-app SS ACL / DH / multi-collection UI
@@ -2484,8 +2490,8 @@ for this cycle.
 out of the compositor process; add fuzz targets; further `state.rs` carve.
 
 **Non-goals:** blanket `// SAFETY:` pass; local blank-on-remote product mode;
-colour M2; handheld 20 §D; LattePanda encode latency; COSMIC competition as
-roadmap driver.
+colour M2; handheld 20 §D; COSMIC competition as roadmap driver. Encode / stream
+latency and quality presets → **Phase 24** (not deferred forever).
 
 ### A. AccountsService icon helper (P0) — done
 
@@ -2539,11 +2545,102 @@ roadmap driver.
 
 ### Explicitly deferred / rejected
 
-- Blanket SAFETY comments; blank-on-remote mode; colour M2; handheld; LattePanda
-  perf; COSMIC-as-roadmap
+- Blanket SAFETY comments; blank-on-remote mode; colour M2; handheld;
+  COSMIC-as-roadmap
+- LattePanda / stream latency → **Phase 24** (not rejected)
 
 **Dependencies:** Phase 15/18 security; encode-probe worker; `rudp_host` /
 `metis-protocol` RUDP types.
+
+---
+
+## Phase 24 — Metis Remote stream quality (Performance + presets)
+
+**Status 2026-10-22:** **Wave 1 landed** (presets + protocol v4 + Settings /
+Viewer UI + live host apply). Wave 2 (native/SHM Performance encode path,
+zero-copy, latency HUD) remains open. Goal: compete with Parsec on LAN for
+**gaming, CAD, Blender, movie streaming**, while keeping safer / cheaper
+presets for everyday remote desktop. Quinn stays out-of-process (Phase 23).
+
+**Product bar:** glass-to-glass on the order of **1–2 frames** on LAN under
+Performance; never build a multi-second video backlog (Viewer cursor is local —
+video must keep up). Beat classic RDP for interactive work; match or beat
+Parsec-class feel for games / DCC on capable hosts (NVENC / VAAPI).
+
+### Stream quality modes (Settings + `rudp.json`)
+
+One primary control; advanced knobs (encoder / codec / bitrate) remain as
+overrides or collapse into the preset.
+
+| Mode | Intended use | Direction (encode / capture / network) |
+|------|----------------|----------------------------------------|
+| **Performance** | Gaming, CAD, Blender, movie / high-motion fullscreen | Max quality + min latency: opt-in native/SHM encode, zero-copy when safe, high bitrate, short GOP, full-rate export under heavy damage, latest-wins only, rare IDRs |
+| **High** | Sharp everyday desktop, light creative | Isolated worker (Safe), high bitrate / low QP, 60 Hz when host allows |
+| **Medium** | Default day-to-day remote | Balanced bitrate, damage-skip idle, isolated worker (today’s posture) |
+| **Low** | Weak uplink / battery / slow iGPU | Lower bitrate, longer GOP, more aggressive skip, Soft encode only if nothing else works |
+
+- [x] **A. Preset schema** (2026-10-22) — `rudp.json` `stream_quality` +
+      bitrate/GOP/`prefer_native_encode` mapping; Viewer `rudp_stream_quality`.
+- [x] **B. Settings UI** (2026-10-22) — **Stream quality** dropdown + blurbs;
+      live-apply via encode-prefs (no Quinn restart).
+- [x] **C. Docs + wire** (2026-10-22) — protocol **v4** `SetStreamQuality` /
+      `StreamQuality`; RUDP_CLIENT, USER_GUIDE, CHANGELOG; Viewer connection-bar
+      Quality + smoke `--stream-quality`.
+
+### Performance encode path (opt-in)
+
+Safe default remains `metis-encode-probe` (driver crash ≠ session death).
+
+- [ ] **D. Performance encode mode** — when quality is Performance (or
+      `rudp.json` / env override): prefer in-process `open_encoder` **or** a
+      shared-memory / dmabuf ring to the worker so frames are not copied over a
+      socketpair every time. Crash-guard still auto-disables Remote if the
+      session dies while streaming. Keep Quinn in `metis-rudp-host`.
+- [ ] **E. Zero-copy RGB→NV12** — finish the Phase 3 residual: VAAPI/NVENC import
+      without CPU LINEAR mmap + swscale when hwmap/VPP is proven safe (start
+      inside worker; lift into Performance path).
+- [ ] **F. Encoder presets per mode** — NVENC: keep `zerolatency` / `ull` /
+      `p1` for Performance/High; VAAPI: low-latency knobs that still open on
+      Intel (LattePanda); Soft AV1 never selected for Performance/Gaming.
+      Shorter GOP under Performance (~0.5–1 s) vs Medium/Low (~2 s).
+- [ ] **G. Capture cadence** — under Performance / High + continuous
+      `damage_full`, export at display rate; do not let idle-skip or shallow
+      DRM `is_empty` stall the stream during games / viewport tumble in CAD.
+
+### Latency hygiene (all modes; stricter under Performance)
+
+- [x] **Shallow latest-wins outbox** (2026-10-22) — per-stream delta cap;
+      keyframes drop queued P-frames; no IDR on Sparse→Full alone.
+- [ ] **H. End-to-end budget** — host PTS → Viewer present latency HUD (debug or
+      connection-bar); log encode ms / queue depth / FPS; fail closed to drop
+      frames rather than grow backlog.
+- [ ] **I. Bitrate profiles** — concrete defaults (tune on hardware): e.g. Low
+      ~8 Mbps, Medium ~25 Mbps (current default), High ~50 Mbps, Performance
+      ~80+ Mbps or uncapped CQP floor suitable for 1080p60 / 1440p games.
+- [ ] **J. Viewer decode** — HW decode path already exists; under Performance
+      prefer matching codec; optional future zero-copy present (dmabuf/GL) —
+      stretch, not blocker for presets shipping.
+
+### Workloads to validate
+
+- [ ] **Gaming** — fullscreen Proton/native; relative mouse + pointer lock;
+      motion without multi-second trail.
+- [ ] **CAD / Blender** — orbit / pan / scrub timeline; UI text remains sharp
+      (High/Performance bitrate).
+- [ ] **Movie streaming** — host fullscreen video; Performance or High; audio
+      sync stays acceptable (Opus path).
+- [ ] **Everyday** — Medium/Low on weak hosts (LattePanda Soft/VAAPI) without
+      locking the session when changing presets.
+
+### Explicitly out of scope for Phase 24
+
+- Win/mac first-party Viewer shipping
+- Mic uplink / webcam
+- Replacing Metis native RDP / GRD
+- Putting Quinn back inside the compositor
+
+**Dependencies:** Phase 23 host process; live encode-prefs apply (2026-10-22);
+`metis-encode` isolated + in-process open paths; Settings Metis Remote page.
 
 ---
 
@@ -2584,6 +2681,7 @@ recent hosts; no passwords).
 | `input.json` | Mouse, touchpad, keyboard, scroll-strip kinetic (`scroll_strip`) (live-reload) |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action |
 | `outputs.json` | Per-output scale, enabled, layout, saved video mode, night-light prefs (live connector-keyed map; profiles live in `output-profiles.json`) |
+| `rudp.json` | Metis Remote: enable, port, LAN/firewall, allowlist, unlock-on-auth, encoder/codec/bitrate; **Phase 24:** `stream_quality` (`performance` / `high` / `medium` / `low`) |
 
 ### `bar.json` (defaults)
 

@@ -16,7 +16,7 @@ use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
-use metis_config::ViewerPlacement;
+use metis_config::{RudpStreamQuality, ViewerPlacement};
 use metis_decode::{RudpCodec, open_decoder};
 use metis_i18n::tr;
 use metis_protocol::{
@@ -574,6 +574,7 @@ struct StreamWindow {
     bar: gtk::Box,
     bar_status: gtk::Label,
     clipboard_check: gtk::CheckButton,
+    quality_dd: gtk::DropDown,
     pointer_over_bar: Cell<bool>,
     video_size: Cell<(u32, u32)>,
     last_pos: Cell<(f64, f64)>,
@@ -640,6 +641,9 @@ struct SessionUi {
     /// Dedicated-desktop tip overlay shown at most once per session.
     tips_shown: Cell<bool>,
     finished: Cell<bool>,
+    /// Live encode quality (Viewer preference; host applies without writing rudp.json).
+    stream_quality: Cell<RudpStreamQuality>,
+    applying_quality: Cell<bool>,
 }
 
 impl SessionUi {
@@ -653,6 +657,7 @@ impl SessionUi {
         placement: ViewerPlacement,
     ) {
         let app = parent.application();
+        let preferred = metis_config::load_viewer_config().rudp_stream_quality;
         let ui = Rc::new(Self {
             app,
             host_key,
@@ -675,11 +680,17 @@ impl SessionUi {
             bar_hide_timer: RefCell::new(None),
             tips_shown: Cell::new(false),
             finished: Cell::new(false),
+            stream_quality: Cell::new(preferred),
+            applying_quality: Cell::new(false),
         });
         let first = ui.add_window();
         first.picture.grab_focus();
         ui.connect_clipboard();
         ui.maybe_show_dedicated_tips(&first);
+        // Ask host to match Viewer's preferred quality (session-only on host).
+        ui.send_input(RudpControlMsg::SetStreamQuality {
+            quality: preferred.as_str().to_string(),
+        });
 
         // This timeout owns the strong `Rc<SessionUi>`. Do **not** Break while
         // session windows are still open — otherwise Disconnect / close handlers
@@ -985,6 +996,15 @@ impl SessionUi {
         )));
         bar.append(&clipboard_check);
 
+        let quality_labels = [tr("Performance"), tr("High"), tr("Medium"), tr("Low")];
+        let quality_refs: Vec<&str> = quality_labels.iter().map(|s| s.as_str()).collect();
+        let quality_dd = gtk::DropDown::from_strings(&quality_refs);
+        quality_dd.set_selected(viewer_quality_index(self.stream_quality.get()));
+        quality_dd.set_tooltip_text(Some(&tr(
+            "Stream quality — Performance for games/CAD/Blender/movies. Changes apply on the host for this session (does not rewrite host Settings).",
+        )));
+        bar.append(&quality_dd);
+
         let disconnect = gtk::Button::with_label(&tr("Disconnect"));
         disconnect.add_css_class("destructive-action");
         disconnect.set_tooltip_text(Some(&tr(
@@ -1005,6 +1025,7 @@ impl SessionUi {
             bar: bar.clone(),
             bar_status,
             clipboard_check: clipboard_check.clone(),
+            quality_dd: quality_dd.clone(),
             pointer_over_bar: Cell::new(false),
             video_size: Cell::new((0, 0)),
             last_pos: Cell::new((0.0, 0.0)),
@@ -1028,6 +1049,17 @@ impl SessionUi {
             disconnect.connect_clicked(move |_| {
                 if let Some(ui) = ui.upgrade() {
                     ui.disconnect_session();
+                }
+            });
+        }
+        {
+            let ui = Rc::downgrade(self);
+            quality_dd.connect_selected_notify(move |dd| {
+                if let Some(ui) = ui.upgrade() {
+                    if ui.applying_quality.get() {
+                        return;
+                    }
+                    ui.set_stream_quality(viewer_quality_from_index(dd.selected()));
                 }
             });
         }
@@ -1333,9 +1365,40 @@ impl SessionUi {
                     self.applying_remote_clip.set(false);
                 }
             }
+            SessionEvent::StreamQuality { quality } => {
+                if let Some(q) = RudpStreamQuality::parse(quality) {
+                    self.apply_stream_quality_ui(q);
+                }
+            }
             SessionEvent::AccessUnit(au) => self.on_access_unit(au),
             SessionEvent::Disconnected => self.finish(&tr("Disconnected")),
         }
+    }
+
+    fn set_stream_quality(&self, quality: RudpStreamQuality) {
+        if self.stream_quality.get() == quality {
+            return;
+        }
+        self.stream_quality.set(quality);
+        self.apply_stream_quality_ui(quality);
+        let mut cfg = metis_config::load_viewer_config();
+        cfg.rudp_stream_quality = quality;
+        if let Err(err) = metis_config::save_viewer_config(&cfg) {
+            tracing::warn!(%err, "failed to save viewer stream quality");
+        }
+        self.send_input(RudpControlMsg::SetStreamQuality {
+            quality: quality.as_str().to_string(),
+        });
+    }
+
+    fn apply_stream_quality_ui(&self, quality: RudpStreamQuality) {
+        self.stream_quality.set(quality);
+        self.applying_quality.set(true);
+        let idx = viewer_quality_index(quality);
+        for sw in self.windows.borrow().iter() {
+            sw.quality_dd.set_selected(idx);
+        }
+        self.applying_quality.set(false);
     }
 
     /// Host topology: remember it, pick the outputs to stream, retitle windows.
@@ -1495,7 +1558,7 @@ fn attach_dedicated_tips_overlay(overlay: &gtk::Overlay) {
     list.add_css_class("metis-viewer-tips-list");
     for line in [
         tr("Super+Alt+← / → — move between local desktops and this remote desk"),
-        tr("Top edge or Ctrl+Alt+Home — connection bar (clipboard, disconnect, status)"),
+        tr("Top edge or Ctrl+Alt+Home — connection bar (quality, clipboard, disconnect)"),
         tr("Super+Q — close the focused session window"),
     ] {
         let row = gtk::Label::new(Some(&format!("• {line}")));
@@ -1699,6 +1762,24 @@ async fn clear_pin_dialog(parent: &gtk::Window, got: &str, pinned: &str) -> bool
         .cancel_button(0)
         .build();
     matches!(dialog.choose_future(Some(parent)).await, Ok(1))
+}
+
+fn viewer_quality_index(q: RudpStreamQuality) -> u32 {
+    match q {
+        RudpStreamQuality::Performance => 0,
+        RudpStreamQuality::High => 1,
+        RudpStreamQuality::Medium => 2,
+        RudpStreamQuality::Low => 3,
+    }
+}
+
+fn viewer_quality_from_index(idx: u32) -> RudpStreamQuality {
+    match idx {
+        0 => RudpStreamQuality::Performance,
+        1 => RudpStreamQuality::High,
+        3 => RudpStreamQuality::Low,
+        _ => RudpStreamQuality::Medium,
+    }
 }
 
 #[cfg(test)]

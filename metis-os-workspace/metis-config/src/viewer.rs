@@ -428,6 +428,10 @@ pub struct ViewerConfig {
     /// When true, skip the Metis Remote dedicated-desktop tip overlay.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_rudp_dedicated_tips: bool,
+    /// Preferred Metis Remote stream quality (sent after SessionOk; not written
+    /// to the host's `rudp.json`).
+    #[serde(default, skip_serializing_if = "crate::RudpStreamQuality::is_default")]
+    pub rudp_stream_quality: crate::RudpStreamQuality,
 }
 
 impl ViewerHostsView {

@@ -4,8 +4,12 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Protocol version 3: multi-monitor layout + per-output video streams.
-pub const RUDP_PROTOCOL_VERSION: u32 = 3;
+/// Protocol version 4: stream quality presets (`SetStreamQuality` /
+/// `StreamQuality`). Hosts accept Hello protocol in
+/// [`RUDP_PROTOCOL_MIN`]..=[`RUDP_PROTOCOL_VERSION`].
+pub const RUDP_PROTOCOL_VERSION: u32 = 4;
+/// Oldest Hello protocol this host still accepts (v3 multi-monitor clients).
+pub const RUDP_PROTOCOL_MIN: u32 = 3;
 pub const RUDP_MAX_FRAME: usize = 64 * 1024;
 /// Max UTF-8 bytes in a [`RudpControlMsg::ClipboardSet`] text payload so the
 /// JSON frame stays under [`RUDP_MAX_FRAME`].
@@ -127,6 +131,16 @@ pub enum RudpControlMsg {
         /// Monotonic id so receivers can drop echoes of their own set.
         #[serde(default)]
         serial: u64,
+    },
+    /// Client → host (protocol ≥ 4): request encode quality preset.
+    /// `quality` is `performance` / `high` / `medium` / `low`.
+    SetStreamQuality {
+        quality: String,
+    },
+    /// Host → client (protocol ≥ 4): current encode quality (after SessionOk
+    /// and after any change from Settings or another client).
+    StreamQuality {
+        quality: String,
     },
 }
 
@@ -256,6 +270,12 @@ mod tests {
             sample_rate: 48_000,
             channels: 2,
             codec: "opus".into(),
+        });
+        roundtrip(RudpControlMsg::SetStreamQuality {
+            quality: "performance".into(),
+        });
+        roundtrip(RudpControlMsg::StreamQuality {
+            quality: "high".into(),
         });
         roundtrip(RudpControlMsg::ClipboardSet {
             mime: "text/plain;charset=utf-8".into(),

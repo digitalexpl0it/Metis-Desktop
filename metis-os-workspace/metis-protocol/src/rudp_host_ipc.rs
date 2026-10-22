@@ -26,7 +26,7 @@ use crate::{RudpControlMsg, RudpDamageRect, RudpMonitorInfo};
 /// Socket filename under `$XDG_RUNTIME_DIR/metis/`.
 pub const RUDP_HOST_IPC_SOCK: &str = "rudp-host.sock";
 /// Bumped on any incompatible change to the messages below.
-pub const RUDP_HOST_IPC_VERSION: u32 = 1;
+pub const RUDP_HOST_IPC_VERSION: u32 = 2;
 /// Upper bound for one JSON header (control-sized; hostile-peer guard).
 pub const RUDP_HOST_IPC_MAX_HEADER: usize = 1024 * 1024;
 /// Upper bound for one binary payload (one encoded access unit).
@@ -100,6 +100,13 @@ pub enum CompToHost {
         allowed_users: Vec<String>,
         lan_only: bool,
         unlock_session_on_auth: bool,
+        /// Current stream quality (`performance` / `high` / `medium` / `low`).
+        #[serde(default = "default_stream_quality")]
+        stream_quality: String,
+    },
+    /// Live quality change — fan out `StreamQuality` to protocol ≥ 4 clients.
+    StreamQuality {
+        quality: String,
     },
     /// Desktop topology; `generation` bumps on every change.
     DesktopLayout {
@@ -212,6 +219,10 @@ pub enum HostToComp {
     },
     /// A client joined / the encoder restarted — repaint + full frame.
     RefreshVideo,
+    /// Client requested a stream-quality preset (protocol ≥ 4).
+    SetStreamQuality {
+        quality: String,
+    },
     /// Listener state for Settings / logs. `error` is set when the host could
     /// not bind or load its TLS identity.
     Status {
@@ -220,6 +231,10 @@ pub enum HostToComp {
         bind: String,
         error: Option<String>,
     },
+}
+
+fn default_stream_quality() -> String {
+    "medium".into()
 }
 
 /// A message that may carry a raw binary payload after its JSON header.
@@ -330,6 +345,7 @@ mod tests {
             allowed_users: vec!["alice".into()],
             lan_only: true,
             unlock_session_on_auth: false,
+            stream_quality: "medium".into(),
         };
         let mut buf = Vec::new();
         encode_host_ipc_frame(&msg, &mut buf).expect("encode");

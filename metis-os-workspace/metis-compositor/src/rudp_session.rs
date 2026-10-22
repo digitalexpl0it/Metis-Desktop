@@ -227,6 +227,15 @@ impl MetisState {
                         state.stream_export.request_full_frame();
                         state.schedule_redraw();
                     }
+                    RudpInputEvent::SetStreamQuality { quality } => {
+                        let Some(q) = metis_config::RudpStreamQuality::parse(&quality) else {
+                            tracing::warn!(%quality, "rudp: unknown stream quality");
+                            return;
+                        };
+                        if let Some(host) = state.rudp_host.as_mut() {
+                            host.apply_stream_quality(q);
+                        }
+                    }
                 }
             })
         {

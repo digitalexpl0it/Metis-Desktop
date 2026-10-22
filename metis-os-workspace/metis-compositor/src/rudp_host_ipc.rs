@@ -86,6 +86,7 @@ pub struct IpcHostParams {
     pub allowed_users: Vec<String>,
     pub lan_only: bool,
     pub unlock_session_on_auth: bool,
+    pub stream_quality: String,
     pub shared: Arc<EngineShared>,
     pub hub: Arc<StreamExportHub>,
     pub input_tx: calloop::channel::Sender<RudpInputEvent>,
@@ -104,6 +105,7 @@ fn config_msg(
     allowed_users: Vec<String>,
     lan_only: bool,
     unlock_session_on_auth: bool,
+    stream_quality: &str,
 ) -> CompToHost {
     CompToHost::Config {
         ipc_version: RUDP_HOST_IPC_VERSION,
@@ -111,6 +113,7 @@ fn config_msg(
         allowed_users,
         lan_only,
         unlock_session_on_auth,
+        stream_quality: stream_quality.to_string(),
     }
 }
 
@@ -130,6 +133,7 @@ impl IpcHost {
             params.allowed_users.clone(),
             params.lan_only,
             params.unlock_session_on_auth,
+            &params.stream_quality,
         );
         let join = std::thread::Builder::new()
             .name("metis-rudp-ipc".into())
@@ -148,13 +152,22 @@ impl IpcHost {
         allowed_users: Vec<String>,
         lan_only: bool,
         unlock_session_on_auth: bool,
+        stream_quality: &str,
     ) {
         let _ = self.policy_tx.send(config_msg(
             bind,
             allowed_users,
             lan_only,
             unlock_session_on_auth,
+            stream_quality,
         ));
+    }
+
+    /// Fan out stream quality to connected clients (protocol ≥ 4).
+    pub fn advertise_stream_quality(&self, quality: &str) {
+        let _ = self.policy_tx.send(CompToHost::StreamQuality {
+            quality: quality.to_string(),
+        });
     }
 
     /// Join the supervisor (the shared stop flag must already be set). Bounded:
@@ -614,6 +627,11 @@ fn apply_host_msg(
         HostToComp::RefreshVideo => {
             let _ = input_tx.send(RudpInputEvent::RefreshVideo);
         }
+        HostToComp::SetStreamQuality { quality } => {
+            if authenticated {
+                let _ = input_tx.send(RudpInputEvent::SetStreamQuality { quality });
+            }
+        }
         HostToComp::Status {
             listening,
             fingerprint,
@@ -698,7 +716,7 @@ mod tests {
     #[test]
     fn config_message_carries_policy() {
         let bind: SocketAddr = "127.0.0.1:7843".parse().expect("addr");
-        match config_msg(bind, vec!["alice".into()], true, false) {
+        match config_msg(bind, vec!["alice".into()], true, false, "medium") {
             CompToHost::Config {
                 bind,
                 allowed_users,

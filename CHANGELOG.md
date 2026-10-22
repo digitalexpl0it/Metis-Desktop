@@ -7,6 +7,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [2026-10-22]
 
+### Added
+
+- **Metis Remote stream quality (protocol v4)** — Settings and Viewer connection
+  bar offer **Performance / High / Medium / Low** presets (bitrate + GOP).
+  Viewer changes apply live on the host for the session (saved in `viewer.json`,
+  not host `rudp.json`). New control messages `SetStreamQuality` /
+  `StreamQuality`; hosts still accept Hello protocol 3–4.
+
 ### Fixed
 
 - **Metis Viewer stuck after remote logoff** — Disconnect (and closing the

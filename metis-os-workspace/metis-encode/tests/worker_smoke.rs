@@ -87,6 +87,7 @@ fn cfg(w: u32, h: u32, backend: EncoderBackend) -> EncoderConfig {
         height: h,
         fps_hint: 30,
         bitrate_kbps: 4_000,
+        gop_secs: 0,
     }
 }
 

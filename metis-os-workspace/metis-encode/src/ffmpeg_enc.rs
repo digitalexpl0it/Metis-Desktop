@@ -152,7 +152,13 @@ impl FfmpegHwEncoder {
                     (*ctx).bit_rate = i64::from(cfg.bitrate_kbps.saturating_mul(1000));
                 }
             }
-            (*ctx).gop_size = fps.saturating_mul(2);
+            let gop_secs = if cfg.gop_secs == 0 {
+                2
+            } else {
+                cfg.gop_secs.min(8)
+            };
+            let gop_secs = i32::try_from(gop_secs).unwrap_or(2);
+            (*ctx).gop_size = fps.saturating_mul(gop_secs);
             (*ctx).max_b_frames = 0;
             // Encoders require their native hw pixel formats.
             (*ctx).pix_fmt = match backend {

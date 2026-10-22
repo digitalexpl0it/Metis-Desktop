@@ -49,6 +49,10 @@ pub struct EncoderConfig {
     pub fps_hint: u32,
     #[serde(default = "default_bitrate")]
     pub bitrate_kbps: u32,
+    /// Keyframe interval in seconds (`gop_size ≈ fps_hint × gop_secs`).
+    /// `0` ⇒ encoder default (2 s).
+    #[serde(default)]
+    pub gop_secs: u32,
 }
 
 fn default_fps() -> u32 {

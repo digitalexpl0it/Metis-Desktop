@@ -35,7 +35,7 @@ contract and verify against `metis-rudp-smoke` / Metis Viewer.
 | Default port | **7843** (configurable in `~/.config/metis/rudp.json` on the host) |
 | TLS | Host self-signed cert; client **TOFU**-pins SHA-256 fingerprint |
 | Auth | Local **PAM** username + password (allowlisted on host) |
-| Protocol version | `RUDP_PROTOCOL_VERSION` = **3** (`metis-protocol`) — **breaking** vs v2 |
+| Protocol version | `RUDP_PROTOCOL_VERSION` = **4** (`metis-protocol`) — stream quality; hosts still accept Hello **3..=4** |
 | First-party Linux client | Metis Viewer → protocol **Metis Remote** |
 
 Host enablement and firewall: [User Guide — Metis Remote](USER_GUIDE.md#metis-remote-rudp).
@@ -44,11 +44,10 @@ Host enablement and firewall: [User Guide — Metis Remote](USER_GUIDE.md#metis-
 > separate `metis-rudp-host` process, not the compositor itself; the compositor
 > feeds it encoded video / audio over a private Unix socket
 > (`metis_protocol::rudp_host_ipc`, internal — not part of this contract).
-> **Nothing on the wire changed:** same `RUDP_PROTOCOL_VERSION`, control
-> messages, datagram layouts, TOFU fingerprint and PAM auth. If the host process
-> crashes the compositor restarts it with back-off; clients just see a dropped
-> connection and reconnect. `METIS_RUDP_INPROCESS=1` (emergency, one release)
-> runs the identical engine inside the compositor.
+> Datagram layouts, TOFU fingerprint and PAM auth are unchanged from v3. If the
+> host process crashes the compositor restarts it with back-off; clients just
+> see a dropped connection and reconnect. `METIS_RUDP_INPROCESS=1` (emergency,
+> one release) runs the identical engine inside the compositor.
 
 ---
 
@@ -88,7 +87,7 @@ client.
      (`~/.config/metis/rudp/known_hosts` on Linux; use the same relative layout
      under the platform config dir on Windows/macOS via `directories`).
 3. Open a **bidirectional control stream**.
-4. Client → host: `Hello { protocol: 3, username }`. Host rejects other versions
+4. Client → host: `Hello { protocol: 4, username }` (hosts accept **3..=4**).
    with `Reject { reason: protocol }`.
 5. Host → client: `AuthChallenge { nonce }` (nonce may be unused by simple
    password clients today; still wait for the message).
@@ -98,9 +97,13 @@ client.
    send `SubscribeOutputs { output_ids }` (empty / omit → **primary only**; max
    **4** ids). Host replies with one `VideoReady` per subscribed stream
    (`stream_id`, `output_id`, size, codec), optionally `AudioReady`, then media.
-   Host may also send `PointerLock` and `ClipboardSet`. Layout is re-sent on
-   hotplug / primary change.
-9. Client sends input / clipboard on the control stream; reads media from
+   Host may also send `PointerLock`, `ClipboardSet`, and (protocol ≥ 4)
+   `StreamQuality`. Layout is re-sent on hotplug / primary change.
+9. Client (protocol ≥ 4) may send `SetStreamQuality { quality }` anytime after
+   auth (`performance` / `high` / `medium` / `low`). The host applies encode
+   prefs live and replies with `StreamQuality` to all v4 sessions. Does **not**
+   rewrite host `rudp.json` when sent from a client.
+10. Client sends input / clipboard on the control stream; reads media from
    uni-stream + datagrams demuxed by `stream_id`.
 
 Reject reasons (`snake_case`): `not_allowed`, `auth_failed`, `protocol`,
@@ -155,6 +158,8 @@ JSON uses a `type` tag in `snake_case` (serde adjacently tagged). Helpers:
 | C→H | `key` | Linux **evdev** keycode + `pressed` |
 | H→C | `pointer_lock` | prefer relative mouse when `locked` |
 | either | `clipboard_set` | UTF-8 `text`, `mime`, `serial`; max ~48 KiB text |
+| C→H | `set_stream_quality` | protocol ≥ 4; `quality`: `performance`/`high`/`medium`/`low` |
+| H→C | `stream_quality` | protocol ≥ 4; current encode preset (after SessionOk + on change) |
 
 Map OS key/button codes to evdev on the client (or maintain a table). Absolute
 pointer coordinates are the host’s full virtual desktop logical space, not
@@ -278,13 +283,14 @@ Interactive TOFU surfaces `ClientError::TofuUnknown` / `TofuMismatch`; call
 
 A client is considered compatible when it can:
 
-- [ ] Complete TOFU + PAM against an enabled Metis Remote host (protocol **v3**)
+- [ ] Complete TOFU + PAM against an enabled Metis Remote host (protocol **v4**; v3 still accepted)
 - [ ] Honour `DesktopLayout` + `SubscribeOutputs`; demux video by `stream_id`
 - [ ] Decode H.264 access units to a visible frame
 - [ ] Send absolute pointer + key events that move/type on an unlocked session
 - [ ] Honour `Reject` / disconnect cleanly; never persist the password
 - [ ] (Optional) Play Opus audio; sync text clipboard both ways
 - [ ] (Optional) Handle HEVC/AV1 and FEC loss recovery
+- [ ] (Optional, v4) Send/receive `SetStreamQuality` / `StreamQuality`
 
 Validate with: host Settings → Metis Remote enabled, then
 `metis-rudp-smoke` and/or Metis Viewer on Linux against the same host.

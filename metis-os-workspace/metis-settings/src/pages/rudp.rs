@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use metis_config::{RudpConfig, RudpEncoderBackend, RudpVideoCodec};
+use metis_config::{RudpConfig, RudpEncoderBackend, RudpStreamQuality, RudpVideoCodec};
 use metis_i18n::tr;
 use metis_remote::AccountInfo;
 
@@ -149,6 +149,23 @@ pub fn build() -> gtk::Widget {
     enc_hint.set_wrap(true);
     enc_hint.add_css_class("metis-settings-hint");
     enc_body.append(&enc_hint);
+
+    let quality_labels = [tr("Performance"), tr("High"), tr("Medium"), tr("Low")];
+    let quality_refs: Vec<&str> = quality_labels.iter().map(|s| s.as_str()).collect();
+    let quality_dd = gtk::DropDown::from_strings(&quality_refs);
+    quality_dd.set_selected(stream_quality_index(cfg.borrow().stream_quality));
+    quality_dd.set_halign(gtk::Align::End);
+    quality_dd.set_tooltip_text(Some(&tr(
+        "Performance: gaming, CAD, Blender, movies (highest bitrate, lowest latency). \
+         High / Medium / Low: everyday remote desktop. Viewer can change this live \
+         for the session without rewriting host defaults.",
+    )));
+    enc_body.append(&ui::row(&tr("Stream quality"), &quality_dd));
+    let quality_blurb = gtk::Label::new(Some(&stream_quality_blurb(cfg.borrow().stream_quality)));
+    quality_blurb.set_xalign(0.0);
+    quality_blurb.set_wrap(true);
+    quality_blurb.add_css_class("metis-settings-hint");
+    enc_body.append(&quality_blurb);
 
     let encoder_labels = [
         tr("Auto"),
@@ -472,6 +489,19 @@ pub fn build() -> gtk::Widget {
     {
         let cfg = cfg.clone();
         let persist_encode = persist_encode_debounced.clone();
+        let bitrate = bitrate.clone();
+        let quality_blurb = quality_blurb.clone();
+        quality_dd.connect_selected_notify(move |dd| {
+            let q = stream_quality_from_index(dd.selected());
+            cfg.borrow_mut().apply_stream_quality(q);
+            bitrate.set_value(f64::from(q.bitrate_kbps()));
+            quality_blurb.set_text(&stream_quality_blurb(q));
+            persist_encode();
+        });
+    }
+    {
+        let cfg = cfg.clone();
+        let persist_encode = persist_encode_debounced.clone();
         encoder_dd.connect_selected_notify(move |dd| {
             cfg.borrow_mut().encoder = encoder_backend_from_index(dd.selected());
             persist_encode();
@@ -498,6 +528,35 @@ pub fn build() -> gtk::Widget {
     rebuild_accounts(&list, &cfg, &persist, &toggling);
 
     scroller.upcast()
+}
+
+fn stream_quality_index(q: RudpStreamQuality) -> u32 {
+    match q {
+        RudpStreamQuality::Performance => 0,
+        RudpStreamQuality::High => 1,
+        RudpStreamQuality::Medium => 2,
+        RudpStreamQuality::Low => 3,
+    }
+}
+
+fn stream_quality_from_index(idx: u32) -> RudpStreamQuality {
+    match idx {
+        0 => RudpStreamQuality::Performance,
+        1 => RudpStreamQuality::High,
+        3 => RudpStreamQuality::Low,
+        _ => RudpStreamQuality::Medium,
+    }
+}
+
+fn stream_quality_blurb(q: RudpStreamQuality) -> String {
+    match q {
+        RudpStreamQuality::Performance => tr(
+            "Best for games, CAD, Blender, and fullscreen video — highest bitrate, short keyframe interval.",
+        ),
+        RudpStreamQuality::High => tr("Sharp everyday desktop and light creative work (~50 Mbps)."),
+        RudpStreamQuality::Medium => tr("Balanced day-to-day remote (~25 Mbps). Default."),
+        RudpStreamQuality::Low => tr("Weak uplink, battery, or slow iGPU (~8 Mbps)."),
+    }
 }
 
 fn encoder_backend_index(backend: RudpEncoderBackend) -> u32 {

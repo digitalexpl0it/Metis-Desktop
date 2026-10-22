@@ -57,6 +57,7 @@ fn host_connects_reports_status_and_exits_on_shutdown() {
             allowed_users: vec!["nobody-test".into()],
             lan_only: true,
             unlock_session_on_auth: false,
+            stream_quality: "medium".into(),
         },
     )
     .expect("send config");
@@ -157,6 +158,7 @@ fn host_exits_when_compositor_socket_closes() {
             allowed_users: vec!["nobody-test".into()],
             lan_only: true,
             unlock_session_on_auth: false,
+            stream_quality: "medium".into(),
         },
     )
     .expect("send config");
@@ -202,6 +204,7 @@ fn host_refuses_empty_allowlist() {
             allowed_users: Vec::new(),
             lan_only: true,
             unlock_session_on_auth: false,
+            stream_quality: "medium".into(),
         },
     )
     .expect("send config");

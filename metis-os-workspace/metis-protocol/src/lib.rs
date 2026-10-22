@@ -20,9 +20,9 @@ pub use rudp_audio::{
     RUDP_AUDIO_SAMPLE_RATE, encode_audio_datagram, is_audio_datagram, try_decode_audio_datagram,
 };
 pub use rudp_ctrl::{
-    RUDP_CLIPBOARD_MAX_BYTES, RUDP_MAX_FRAME, RUDP_MAX_SUBSCRIBED_OUTPUTS, RUDP_PROTOCOL_VERSION,
-    RudpControlMsg, RudpMonitorInfo, RudpRejectReason, encode_rudp_frame, truncate_clipboard_text,
-    try_decode_rudp_frame,
+    RUDP_CLIPBOARD_MAX_BYTES, RUDP_MAX_FRAME, RUDP_MAX_SUBSCRIBED_OUTPUTS, RUDP_PROTOCOL_MIN,
+    RUDP_PROTOCOL_VERSION, RudpControlMsg, RudpMonitorInfo, RudpRejectReason, encode_rudp_frame,
+    truncate_clipboard_text, try_decode_rudp_frame,
 };
 pub use rudp_host_ipc::{
     CompToHost, HostToComp, IpcEncodedAudio, IpcEncodedVideo, IpcStreamInfo,
