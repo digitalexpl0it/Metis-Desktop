@@ -17,6 +17,7 @@ depends=(
   'gtk4-layer-shell>=1.0'
   libpulse
   alsa-lib
+  opus
   libinput
   seatd
   mesa

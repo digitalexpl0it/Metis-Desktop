@@ -1361,7 +1361,8 @@ driver/CUDA for NVDEC; without them the Viewer falls back to software
 automatically. Preferred codec may be **AV1** when the GPU exposes `av1_vaapi` /
 `av1_nvenc` (otherwise the host ladder falls back). Build also needs
 `libopus-dev` (and runtime `libopus0`) for Metis Remote audio,
-`libasound2-dev` for Viewer playback (`cpal` / ALSA), and
+`libasound2-dev` for Viewer playback (`cpal` / ALSA),
+`pulseaudio-utils` (`pactl`; packaged in the `.deb` Depends), and
 `freerdp3-dev` / `libwinpr3-dev` to build the Metis native RDP host.
 
 Use a DRM Metis session (not nested winit) for the host.

@@ -10,6 +10,8 @@
   cairo,
   glib,
   libpulseaudio,
+  libopus,
+  alsa-lib,
   libinput,
   seatd,
   libgbm,
@@ -68,6 +70,8 @@ rustPlatform.buildRustPackage rec {
     cairo
     glib
     libpulseaudio
+    libopus
+    alsa-lib
     libinput
     seatd
     libgbm

@@ -285,6 +285,14 @@ fn run_pulse_session(st: &VizState) -> Result<(), String> {
 }
 
 fn resolve_monitor_source() -> Option<String> {
+    if let Some(name) = pactl_default_sink_monitor() {
+        return Some(name);
+    }
+    // PulseAudio ≥ 14 / pipewire-pulse — no `pactl` required.
+    Some("@DEFAULT_MONITOR@".into())
+}
+
+fn pactl_default_sink_monitor() -> Option<String> {
     let out = std::process::Command::new("pactl")
         .args(["get-default-sink"])
         .output()

@@ -16,6 +16,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   **Sound** toggles local downlink mute only. Control: `MicEnable` / `MicReady`.
   Hosts still accept Hello protocol 3–5. Webcam / AEC deferred.
 
+### Fixed
+
+- **Packaging audio deps** — `.deb` **Depends** now include `pulseaudio-utils`
+  (`pactl`), `pipewire` / `pipewire-pulse` / `wireplumber`, `libopus0`, and
+  `libasound2` so Metis Remote / Viewer audio work after a normal install
+  (including `--no-install-recommends`). Host capture falls back to
+  `@DEFAULT_MONITOR@` when `pactl` is still missing. Arch gains runtime `opus`.
+
 ## [2026-10-22]
 
 ### Added

@@ -71,9 +71,9 @@ daemons, …) must appear in `Depends` / `Recommends` / `Suggests` (and in
 
 | Field | Role |
 |-------|------|
-| **Depends** | Required for a usable Metis session **and** first-class shell/Settings surfaces that are empty or wrong without the host (GTK ≥ 4.18, layer-shell, seat, DRM, PipeWire libs, kitty, portals, polkit, **NetworkManager**, OCR/FFmpeg, …) |
+| **Depends** | Required for a usable Metis session **and** first-class shell/Settings surfaces that are empty or wrong without the host (GTK ≥ 4.18, layer-shell, seat, DRM, **PipeWire session audio** (`pipewire` / `pipewire-pulse` / `wireplumber`), **`libpulse0` + `pulseaudio-utils`** (`pactl`), **`libopus0`**, **`libasound2`** (Viewer cpal), kitty, portals, polkit, **NetworkManager**, OCR/FFmpeg, …) |
 | **Bundled** | Nothing by default; `BUNDLE_GTK4_LAYER_SHELL=1` is a fallback for build images without `libgtk4-layer-shell-dev` |
-| **Recommends** | Installed by default with apt: portal helpers, volumes, **nftables**, **UPower**, **BlueZ**, **PackageKit** (`pkcon`), PipeWire session audio (`pipewire` / `pipewire-pulse` / `wireplumber`), OpenVPN NM plugin, **openssh-client** (session `ssh-agent` / vault SSH keys), **Fcitx5** (+ GTK/Qt frontends + config tool) for Wayland IME |
+| **Recommends** | Installed by default with apt: portal helpers, volumes, **nftables**, **UPower**, **BlueZ**, **PackageKit** (`pkcon`), OpenVPN NM plugin, **openssh-client** (session `ssh-agent` / vault SSH keys), **Fcitx5** (+ GTK/Qt frontends + config tool) for Wayland IME |
 | **Suggests** | Optional / heavy: gnome-keyring (alternate Secret Service; Metis ships `metis-secretsd`), GRD, FreeRDP client, GameMode, Flatpak, fwupd, printers, biometrics, `wireguard-tools`, IBus, Fcitx5 language engines (`fcitx5-chinese-addons`, `fcitx5-mozc`, …) |
 
 WSL / containers that already manage networking outside NetworkManager can
