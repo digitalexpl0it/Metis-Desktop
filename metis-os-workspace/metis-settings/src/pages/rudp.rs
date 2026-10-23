@@ -87,6 +87,15 @@ pub fn build() -> gtk::Widget {
         &unlock_on_auth,
     ));
 
+    let allow_mic = gtk::Switch::new();
+    allow_mic.set_active(cfg.borrow().allow_mic_uplink);
+    allow_mic.set_halign(gtk::Align::End);
+    allow_mic.set_tooltip_text(Some(&tr(
+        "When on, a Viewer can send microphone audio into this session (plays on \
+         the default speakers). Off by default. Session lock always stops uplink.",
+    )));
+    host_body.append(&ui::row(&tr("Allow microphone from Viewer"), &allow_mic));
+
     let conn_addr = gtk::Label::new(None);
     conn_addr.set_xalign(0.0);
     conn_addr.set_selectable(true);
@@ -483,6 +492,18 @@ pub fn build() -> gtk::Widget {
                 return;
             }
             cfg.borrow_mut().unlock_session_on_auth = sw.is_active();
+            persist();
+        });
+    }
+    {
+        let cfg = cfg.clone();
+        let persist = persist.clone();
+        let toggling = toggling.clone();
+        allow_mic.connect_active_notify(move |sw| {
+            if toggling.get() {
+                return;
+            }
+            cfg.borrow_mut().allow_mic_uplink = sw.is_active();
             persist();
         });
     }

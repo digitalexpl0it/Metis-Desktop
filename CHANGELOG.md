@@ -5,6 +5,17 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-23]
+
+### Added
+
+- **Metis Remote mic uplink (protocol v5)** — Viewer connection bar **Mic**
+  (default off) sends Opus `MRUM` datagrams when the host enables **Allow
+  microphone from Viewer** (`rudp.json` `allow_mic_uplink`, default false).
+  Host plays on the default sink; session lock and policy off stop uplink.
+  **Sound** toggles local downlink mute only. Control: `MicEnable` / `MicReady`.
+  Hosts still accept Hello protocol 3–5. Webcam / AEC deferred.
+
 ## [2026-10-22]
 
 ### Added
@@ -69,6 +80,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   DRM_PRIME + VAAPI `scale_vaapi` / CUDA `scale_cuda` RGB→NV12 (no CPU mmap when
   it works); falls back to LINEAR mmap + swscale per encoder. Force mmap with
   `METIS_ENCODE_ZEROCOPY=0`.
+- **Metis Remote Viewer decode (Phase 24 J)** — reopen the decoder when the host
+  wire codec or size changes mid-session (Soft emergency H.264 no longer leaves
+  a stale HEVC/AV1 decoder). Under **Performance**, prefer NVDEC when an NVIDIA
+  GPU is present. Present remains CPU RGBA → GTK `MemoryTexture` (dmabuf/GL
+  deferred).
 
 ### Security
 

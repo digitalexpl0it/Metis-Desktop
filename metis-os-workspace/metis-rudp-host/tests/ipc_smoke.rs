@@ -58,6 +58,7 @@ fn host_connects_reports_status_and_exits_on_shutdown() {
             lan_only: true,
             unlock_session_on_auth: false,
             stream_quality: "medium".into(),
+            allow_mic_uplink: false,
         },
     )
     .expect("send config");
@@ -159,6 +160,7 @@ fn host_exits_when_compositor_socket_closes() {
             lan_only: true,
             unlock_session_on_auth: false,
             stream_quality: "medium".into(),
+            allow_mic_uplink: false,
         },
     )
     .expect("send config");
@@ -205,6 +207,7 @@ fn host_refuses_empty_allowlist() {
             lan_only: true,
             unlock_session_on_auth: false,
             stream_quality: "medium".into(),
+            allow_mic_uplink: false,
         },
     )
     .expect("send config");

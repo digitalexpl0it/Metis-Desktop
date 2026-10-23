@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use metis_protocol::{
-    CompToHost, HostToComp, RUDP_HOST_IPC_VERSION, RudpHostInput, codec_from_str,
+    CompToHost, HostToComp, IpcMicUplink, RUDP_HOST_IPC_VERSION, RudpHostInput, codec_from_str,
     read_host_ipc_frame, write_host_ipc_frame,
 };
 use metis_rudp_host::engine::{
@@ -80,6 +80,10 @@ impl HostLink for IpcLink {
 
     fn set_stream_quality(&self, quality: String) {
         self.send(HostToComp::SetStreamQuality { quality });
+    }
+
+    fn mic_uplink(&self, seq: u32, pts_us: i64, opus: Vec<u8>) {
+        self.send(HostToComp::MicUplink(IpcMicUplink { seq, pts_us, opus }));
     }
 
     fn status(&self, listening: bool, fingerprint: &str, bind: SocketAddr, err: Option<String>) {
@@ -173,6 +177,7 @@ fn apply(shared: &Arc<EngineShared>, bind: SocketAddr, msg: CompToHost) -> bool 
             allowed_users,
             unlock_session_on_auth,
             stream_quality,
+            allow_mic_uplink,
             ..
         } => {
             if ipc_version != RUDP_HOST_IPC_VERSION {
@@ -183,8 +188,11 @@ fn apply(shared: &Arc<EngineShared>, bind: SocketAddr, msg: CompToHost) -> bool 
                 // Config never rebinds.
                 tracing::warn!(%new_bind, "rudp host: bind change ignored (restart required)");
             }
-            shared.set_policy(allowed_users, unlock_session_on_auth);
+            shared.set_policy(allowed_users, unlock_session_on_auth, allow_mic_uplink);
             shared.set_stream_quality_str(&stream_quality);
+        }
+        CompToHost::MicInjectState { ready } => {
+            shared.mic_inject_ready.store(ready, Ordering::Relaxed);
         }
         CompToHost::StreamQuality { quality } => {
             shared.set_stream_quality_str(&quality);
@@ -264,6 +272,7 @@ fn run() -> Result<(), String> {
         allowed_users,
         unlock_session_on_auth,
         stream_quality,
+        allow_mic_uplink,
         ..
     } = first
     else {
@@ -292,6 +301,9 @@ fn run() -> Result<(), String> {
         allowed_users,
         unlock_session_on_auth,
     ));
+    shared
+        .allow_mic_uplink
+        .store(allow_mic_uplink, Ordering::Relaxed);
     shared.set_stream_quality_str(&stream_quality);
     let stop = Arc::new(AtomicBool::new(false));
     // Last writer error (surfaced when Quinn exits because IPC died).
@@ -449,6 +461,7 @@ mod tests {
                 lan_only: true,
                 unlock_session_on_auth: true,
                 stream_quality: "high".into(),
+                allow_mic_uplink: false,
             }
         ));
         assert_eq!(

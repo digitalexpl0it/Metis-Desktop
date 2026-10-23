@@ -86,6 +86,7 @@ pub struct IpcHostParams {
     pub allowed_users: Vec<String>,
     pub lan_only: bool,
     pub unlock_session_on_auth: bool,
+    pub allow_mic_uplink: bool,
     pub stream_quality: String,
     pub shared: Arc<EngineShared>,
     pub hub: Arc<StreamExportHub>,
@@ -105,6 +106,7 @@ fn config_msg(
     allowed_users: Vec<String>,
     lan_only: bool,
     unlock_session_on_auth: bool,
+    allow_mic_uplink: bool,
     stream_quality: &str,
 ) -> CompToHost {
     CompToHost::Config {
@@ -114,6 +116,7 @@ fn config_msg(
         lan_only,
         unlock_session_on_auth,
         stream_quality: stream_quality.to_string(),
+        allow_mic_uplink,
     }
 }
 
@@ -133,6 +136,7 @@ impl IpcHost {
             params.allowed_users.clone(),
             params.lan_only,
             params.unlock_session_on_auth,
+            params.allow_mic_uplink,
             &params.stream_quality,
         );
         let join = std::thread::Builder::new()
@@ -152,6 +156,7 @@ impl IpcHost {
         allowed_users: Vec<String>,
         lan_only: bool,
         unlock_session_on_auth: bool,
+        allow_mic_uplink: bool,
         stream_quality: &str,
     ) {
         let _ = self.policy_tx.send(config_msg(
@@ -159,6 +164,7 @@ impl IpcHost {
             allowed_users,
             lan_only,
             unlock_session_on_auth,
+            allow_mic_uplink,
             stream_quality,
         ));
     }
@@ -374,6 +380,7 @@ struct Forwarded {
     streams_gen: u64,
     audio_seq: Option<u32>,
     audio_streaming: Option<bool>,
+    mic_inject_ready: Option<bool>,
     clipboard_serial: Option<u64>,
 }
 
@@ -386,6 +393,7 @@ impl Default for Forwarded {
             streams_gen: u64::MAX,
             audio_seq: None,
             audio_streaming: None,
+            mic_inject_ready: None,
             clipboard_serial: None,
         }
     }
@@ -447,6 +455,12 @@ fn forward_state(
         }
     } else {
         st.audio_seq = None;
+    }
+
+    let mic_ready = shared.mic_inject_ready.load(Ordering::Relaxed);
+    if st.mic_inject_ready != Some(mic_ready) {
+        send(writer, &CompToHost::MicInjectState { ready: mic_ready })?;
+        st.mic_inject_ready = Some(mic_ready);
     }
 
     let clip = shared.clipboard_out.lock().ok().and_then(|g| g.clone());
@@ -612,9 +626,15 @@ fn apply_host_msg(
             }
         }
         HostToComp::Input { event } => {
-            // Input only means something while a client is authenticated.
-            if authenticated {
-                let _ = input_tx.send(event.into());
+            // Mic enable/disable must apply on disconnect teardown too.
+            match &event {
+                metis_protocol::RudpHostInput::MicEnable { enabled } => {
+                    crate::rudp_mic::apply_mic_enable(shared, *enabled);
+                }
+                _ if authenticated => {
+                    let _ = input_tx.send(event.into());
+                }
+                _ => {}
             }
         }
         HostToComp::UnlockPamSession { username } => {
@@ -631,6 +651,10 @@ fn apply_host_msg(
             if authenticated {
                 let _ = input_tx.send(RudpInputEvent::SetStreamQuality { quality });
             }
+        }
+        HostToComp::MicUplink(m) => {
+            // Accept even as the session count drops (disconnect teardown).
+            crate::rudp_mic::push_mic_packet(shared, m.seq, m.pts_us, m.opus);
         }
         HostToComp::Status {
             listening,
@@ -716,7 +740,7 @@ mod tests {
     #[test]
     fn config_message_carries_policy() {
         let bind: SocketAddr = "127.0.0.1:7843".parse().expect("addr");
-        match config_msg(bind, vec!["alice".into()], true, false, "medium") {
+        match config_msg(bind, vec!["alice".into()], true, false, false, "medium") {
             CompToHost::Config {
                 bind,
                 allowed_users,

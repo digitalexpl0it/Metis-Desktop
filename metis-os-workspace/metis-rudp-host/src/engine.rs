@@ -26,9 +26,10 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use metis_protocol::{
     MediaDatagramParams, RUDP_AUDIO_CHANNELS, RUDP_AUDIO_SAMPLE_RATE, RUDP_DEFAULT_DATAGRAM_BUDGET,
-    RUDP_MAX_SUBSCRIBED_OUTPUTS, RUDP_PROTOCOL_MIN, RUDP_PROTOCOL_VERSION, ReliableAccessUnit,
-    RudpControlMsg, RudpDamageRect, RudpHostInput, RudpMonitorInfo, RudpRejectReason,
-    build_media_datagrams, codec_to_str, encode_rudp_frame, try_decode_rudp_frame,
+    RUDP_MAX_SUBSCRIBED_OUTPUTS, RUDP_MIC_CHANNELS, RUDP_MIC_SAMPLE_RATE, RUDP_PROTOCOL_MIN,
+    RUDP_PROTOCOL_VERSION, ReliableAccessUnit, RudpControlMsg, RudpDamageRect, RudpHostInput,
+    RudpMonitorInfo, RudpRejectReason, build_media_datagrams, codec_to_str, encode_rudp_frame,
+    is_mic_datagram, try_decode_mic_datagram, try_decode_rudp_frame,
 };
 use quinn::Endpoint;
 use tokio::sync::RwLock as AsyncRwLock;
@@ -278,6 +279,23 @@ pub struct RudpAudioShared {
     seq: AtomicU32,
 }
 
+/// One Viewer→host mic Opus packet awaiting Pulse inject on the compositor.
+#[derive(Debug, Clone)]
+pub struct RudpMicPacket {
+    pub seq: u32,
+    pub pts_us: i64,
+    pub opus: Vec<u8>,
+}
+
+/// Mic uplink state shared between the Quinn demux path and Pulse inject.
+#[derive(Default)]
+pub struct RudpMicShared {
+    /// Viewers that currently have mic enabled (compositor-side demand).
+    pub demand: AtomicUsize,
+    /// Latest Opus packet (latest-wins; inject drops late under load).
+    pub latest: Mutex<Option<RudpMicPacket>>,
+}
+
 impl RudpAudioShared {
     pub fn new() -> Self {
         Self::default()
@@ -293,7 +311,7 @@ impl RudpAudioShared {
 /// compositor in-process, or the IPC writer in `metis-rudp-host`). All methods
 /// must be cheap and non-blocking — they run on Quinn / pump tasks.
 pub trait HostLink: Send + Sync {
-    /// Authenticated client input / clipboard-set.
+    /// Authenticated client input / clipboard-set / mic enable.
     fn input(&self, event: RudpHostInput);
     /// Owner authenticated and `unlock_session_on_auth` is on.
     fn unlock_pam_session(&self, username: String);
@@ -303,6 +321,8 @@ pub trait HostLink: Send + Sync {
     fn session_demand(&self, _sessions: usize, _joins: u64) {}
     /// Client requested a stream-quality preset (protocol ≥ 4).
     fn set_stream_quality(&self, _quality: String) {}
+    /// Viewer mic Opus packet (already demuxed from `MRUM`).
+    fn mic_uplink(&self, _seq: u32, _pts_us: i64, _opus: Vec<u8>) {}
     /// Listener state after bind / identity load.
     fn status(
         &self,
@@ -345,10 +365,16 @@ pub struct EngineShared {
     pub clipboard_out: Mutex<Option<RudpClipboardOut>>,
     pub clipboard_serial: AtomicU64,
     pub audio: RudpAudioShared,
+    /// Mic uplink packets + demand (compositor Pulse inject).
+    pub mic: RudpMicShared,
     /// Live allowlist of local PAM usernames.
     pub allowed_users: StdRwLock<Vec<String>>,
     /// Live: unlock Metis PAM lock after owner auth.
     pub unlock_session_on_auth: AtomicBool,
+    /// Live: allow Viewer mic uplink (`rudp.json` `allow_mic_uplink`).
+    pub allow_mic_uplink: AtomicBool,
+    /// Compositor Pulse inject armed (gates `MicReady`).
+    pub mic_inject_ready: AtomicBool,
     /// Current stream quality string (`performance` / `high` / `medium` / `low`).
     pub stream_quality: Mutex<String>,
     /// Bumped when [`Self::stream_quality`] changes — pump fans out to v4 clients.
@@ -381,8 +407,11 @@ impl EngineShared {
             clipboard_out: Mutex::new(None),
             clipboard_serial: AtomicU64::new(0),
             audio: RudpAudioShared::new(),
+            mic: RudpMicShared::default(),
             allowed_users: StdRwLock::new(allowed_users),
             unlock_session_on_auth: AtomicBool::new(unlock_session_on_auth),
+            allow_mic_uplink: AtomicBool::new(false),
+            mic_inject_ready: AtomicBool::new(false),
             stream_quality: Mutex::new("medium".into()),
             stream_quality_gen: AtomicU64::new(1),
             link,
@@ -392,13 +421,23 @@ impl EngineShared {
         }
     }
 
-    /// Replace the live policy (allowlist + unlock-on-auth).
-    pub fn set_policy(&self, allowed_users: Vec<String>, unlock_session_on_auth: bool) {
+    /// Replace the live policy (allowlist + unlock-on-auth + mic uplink).
+    pub fn set_policy(
+        &self,
+        allowed_users: Vec<String>,
+        unlock_session_on_auth: bool,
+        allow_mic_uplink: bool,
+    ) {
         if let Ok(mut guard) = self.allowed_users.write() {
             *guard = allowed_users;
         }
         self.unlock_session_on_auth
             .store(unlock_session_on_auth, Ordering::Relaxed);
+        self.allow_mic_uplink
+            .store(allow_mic_uplink, Ordering::Relaxed);
+        if !allow_mic_uplink {
+            self.mic_inject_ready.store(false, Ordering::Relaxed);
+        }
     }
 
     /// Update advertised stream quality (fans out on the next pump tick).
@@ -824,7 +863,11 @@ struct VideoSession {
     video_send: tokio::sync::Mutex<quinn::SendStream>,
     audio_ready_sent: AtomicBool,
     warned_no_dgram: AtomicBool,
-    /// Client Hello protocol (3 or 4).
+    /// Client requested mic uplink (protocol ≥ 5); cleared on lock / deny.
+    mic_enabled: AtomicBool,
+    /// `MicReady` already delivered for the current enable cycle.
+    mic_ready_sent: AtomicBool,
+    /// Client Hello protocol (3..=5).
     client_protocol: u32,
     /// Layout generation last delivered to this client (0 = none yet).
     layout_gen_sent: AtomicU64,
@@ -852,6 +895,8 @@ impl VideoSession {
             video_send: tokio::sync::Mutex::new(video_send),
             audio_ready_sent: AtomicBool::new(false),
             warned_no_dgram: AtomicBool::new(false),
+            mic_enabled: AtomicBool::new(false),
+            mic_ready_sent: AtomicBool::new(false),
             client_protocol,
             layout_gen_sent: AtomicU64::new(layout_gen_sent),
             ready_epoch: AtomicU64::new(u64::MAX),
@@ -863,6 +908,10 @@ impl VideoSession {
 
     fn supports_stream_quality(&self) -> bool {
         self.client_protocol >= 4
+    }
+
+    fn supports_mic(&self) -> bool {
+        self.client_protocol >= 5
     }
 
     /// Record a client `SubscribeOutputs` (resolved on the next pump tick).
@@ -1082,7 +1131,7 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                             let ctrl_session = Arc::clone(&session);
                             let ctrl_video = Arc::clone(&video);
                             // Control reads: keepalives + Phase 7 input → calloop,
-                            // `SubscribeOutputs` / `SetStreamQuality`.
+                            // `SubscribeOutputs` / `SetStreamQuality` / `MicEnable`.
                             tokio::spawn(async move {
                                 let mut buf = Vec::new();
                                 let mut tmp = [0u8; 2048];
@@ -1100,6 +1149,15 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                                                     ctrl_link.set_stream_quality(quality);
                                                 }
                                             }
+                                            RudpControlMsg::MicEnable { enabled } => {
+                                                handle_mic_enable(
+                                                    &ctrl_session,
+                                                    &ctrl_video,
+                                                    &ctrl_link,
+                                                    enabled,
+                                                )
+                                                .await;
+                                            }
                                             other => {
                                                 if let Some(ev) = RudpHostInput::from_control(other)
                                                 {
@@ -1110,7 +1168,26 @@ async fn connection_broker_loop(endpoint: Endpoint, ctx: BrokerCtx) {
                                     }
                                 }
                             });
+                            // Viewer → host mic datagrams (`MRUM`).
+                            let dgram_session = Arc::clone(&session);
+                            let dgram_video = Arc::clone(&video);
+                            let dgram_link = Arc::clone(&video.link);
+                            let dgram_conn = conn.clone();
+                            tokio::spawn(async move {
+                                mic_datagram_loop(
+                                    dgram_conn,
+                                    dgram_session,
+                                    dgram_video,
+                                    dgram_link,
+                                )
+                                .await;
+                            });
                             conn.closed().await;
+                            if session.mic_enabled.swap(false, Ordering::Relaxed) {
+                                video
+                                    .link
+                                    .input(RudpHostInput::MicEnable { enabled: false });
+                            }
                             sessions.write().await.remove(&session_id);
                             // After the removal so the next resolve excludes this session.
                             video.subs_dirty.store(true, Ordering::SeqCst);
@@ -1318,9 +1395,76 @@ async fn video_pump_loop(
         }
 
         // Pause media while the desktop session is locked (RDP parity).
+        // Mic uplink stops too: clear per-session enable and tell protocol ≥ 5
+        // clients so they stop sending `MRUM`.
         if video.session_locked.load(Ordering::Relaxed) {
             video.packet_outbox.clear();
+            video.mic_inject_ready.store(false, Ordering::Relaxed);
+            for session in &snap {
+                if session.mic_enabled.swap(false, Ordering::Relaxed) {
+                    session.mic_ready_sent.store(false, Ordering::Relaxed);
+                    // Drop compositor Pulse demand.
+                    video
+                        .link
+                        .input(RudpHostInput::MicEnable { enabled: false });
+                    if session.supports_mic() {
+                        let mut send = session.control_send.lock().await;
+                        let _ = write_control_msg(
+                            &mut send,
+                            &RudpControlMsg::MicEnable { enabled: false },
+                        )
+                        .await;
+                    }
+                }
+            }
             continue;
+        }
+
+        // Policy off: revoke any active mic enables.
+        if !video.allow_mic_uplink.load(Ordering::Relaxed) {
+            for session in &snap {
+                if session.mic_enabled.swap(false, Ordering::Relaxed) {
+                    session.mic_ready_sent.store(false, Ordering::Relaxed);
+                    video
+                        .link
+                        .input(RudpHostInput::MicEnable { enabled: false });
+                    if session.supports_mic() {
+                        let mut send = session.control_send.lock().await;
+                        let _ = write_control_msg(
+                            &mut send,
+                            &RudpControlMsg::MicEnable { enabled: false },
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+
+        // MicReady when compositor Pulse inject is armed.
+        let mic_ready = video.mic_inject_ready.load(Ordering::Relaxed)
+            && video.allow_mic_uplink.load(Ordering::Relaxed);
+        if mic_ready {
+            let msg = RudpControlMsg::MicReady {
+                sample_rate: RUDP_MIC_SAMPLE_RATE,
+                channels: RUDP_MIC_CHANNELS,
+                codec: "opus".into(),
+            };
+            for session in &snap {
+                if !session.supports_mic()
+                    || !session.mic_enabled.load(Ordering::Relaxed)
+                    || session.mic_ready_sent.load(Ordering::Relaxed)
+                {
+                    continue;
+                }
+                let mut send = session.control_send.lock().await;
+                if write_control_msg(&mut send, &msg).await.is_ok() {
+                    session.mic_ready_sent.store(true, Ordering::Relaxed);
+                }
+            }
+        } else {
+            for session in &snap {
+                session.mic_ready_sent.store(false, Ordering::Relaxed);
+            }
         }
 
         let clipboard = video.clipboard_out.lock().ok().and_then(|g| g.clone());
@@ -1502,6 +1646,70 @@ async fn video_pump_loop(
         }
     }
     tracing::info!("rudp host: video pump stopped");
+}
+
+/// Apply a Viewer `MicEnable` request: gate on protocol / allow / lock, ack deny,
+/// and forward to the compositor so Pulse inject can arm.
+async fn handle_mic_enable(
+    session: &VideoSession,
+    video: &EngineShared,
+    link: &Arc<dyn HostLink>,
+    enabled: bool,
+) {
+    if !session.supports_mic() {
+        return;
+    }
+    let allow = video.allow_mic_uplink.load(Ordering::Relaxed);
+    let locked = video.session_locked.load(Ordering::Relaxed);
+    if enabled {
+        if !allow || locked {
+            let was = session.mic_enabled.swap(false, Ordering::Relaxed);
+            session.mic_ready_sent.store(false, Ordering::Relaxed);
+            let mut send = session.control_send.lock().await;
+            let _ =
+                write_control_msg(&mut send, &RudpControlMsg::MicEnable { enabled: false }).await;
+            if was {
+                link.input(RudpHostInput::MicEnable { enabled: false });
+            }
+            return;
+        }
+        let was = session.mic_enabled.swap(true, Ordering::Relaxed);
+        session.mic_ready_sent.store(false, Ordering::Relaxed);
+        if !was {
+            link.input(RudpHostInput::MicEnable { enabled: true });
+        }
+        return;
+    }
+    let was = session.mic_enabled.swap(false, Ordering::Relaxed);
+    session.mic_ready_sent.store(false, Ordering::Relaxed);
+    if was {
+        link.input(RudpHostInput::MicEnable { enabled: false });
+    }
+}
+
+async fn mic_datagram_loop(
+    conn: quinn::Connection,
+    session: Arc<VideoSession>,
+    video: Arc<EngineShared>,
+    link: Arc<dyn HostLink>,
+) {
+    while let Ok(bytes) = conn.read_datagram().await {
+        if !is_mic_datagram(&bytes) {
+            continue;
+        }
+        if !session.mic_enabled.load(Ordering::Relaxed)
+            || !video.allow_mic_uplink.load(Ordering::Relaxed)
+            || video.session_locked.load(Ordering::Relaxed)
+        {
+            continue;
+        }
+        let Ok(pkt) = try_decode_mic_datagram(&bytes) else {
+            continue;
+        };
+        // Always notify the link (IPC → compositor). In-process the
+        // CalloopLink also pushes into `shared.mic.latest`.
+        link.mic_uplink(pkt.seq, pkt.pts_us, pkt.payload);
+    }
 }
 
 async fn authenticate_connection(
@@ -1940,7 +2148,7 @@ mod tests {
     #[test]
     fn set_policy_updates_allowlist_and_unlock_flag() {
         let video = test_shared();
-        video.set_policy(vec!["bob".into()], true);
+        video.set_policy(vec!["bob".into()], true, true);
         assert_eq!(
             video
                 .allowed_users
@@ -1950,6 +2158,7 @@ mod tests {
             vec!["bob".to_string()]
         );
         assert!(video.unlock_session_on_auth.load(Ordering::Relaxed));
+        assert!(video.allow_mic_uplink.load(Ordering::Relaxed));
     }
 
     #[test]

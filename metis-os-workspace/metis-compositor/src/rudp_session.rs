@@ -44,11 +44,13 @@ impl MetisState {
                         desired.allowed_users,
                         desired.lan_only,
                         desired.unlock_session_on_auth,
+                        desired.allow_mic_uplink,
                     );
                     tracing::info!(
                         bind = %host.bind,
                         allowed = ?host.allowed_users,
                         unlock_on_auth = desired.unlock_session_on_auth,
+                        allow_mic = desired.allow_mic_uplink,
                         encoder = desired.encode_prefs.backend.as_str(),
                         bitrate_kbps = desired.encode_prefs.bitrate_kbps,
                         "rudp host policy/encode refreshed (sessions kept)"
@@ -234,6 +236,19 @@ impl MetisState {
                         };
                         if let Some(host) = state.rudp_host.as_mut() {
                             host.apply_stream_quality(q);
+                        }
+                    }
+                    RudpInputEvent::MicEnable { enabled } => {
+                        if let Some(host) = state.rudp_host.as_ref() {
+                            crate::rudp_mic::apply_mic_enable(&host.shared, enabled);
+                        }
+                    }
+                    RudpInputEvent::MicUplink { seq, pts_us, opus } => {
+                        if state.session_is_locked() {
+                            return;
+                        }
+                        if let Some(host) = state.rudp_host.as_ref() {
+                            crate::rudp_mic::push_mic_packet(&host.shared, seq, pts_us, opus);
                         }
                     }
                 }

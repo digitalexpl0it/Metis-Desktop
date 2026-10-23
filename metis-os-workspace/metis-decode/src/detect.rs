@@ -25,6 +25,24 @@ pub fn decode_candidates(requested: DecoderBackend) -> Vec<(DecoderBackend, Opti
     }
 }
 
+/// Phase 24 J: under Performance, prefer NVDEC when an NVIDIA GPU is present
+/// (VAAPI → NVDEC → Soft otherwise — same as [`decode_candidates`] Auto).
+pub fn decode_candidates_prefer_nvdec() -> Vec<(DecoderBackend, Option<PathBuf>)> {
+    if has_nvidia_render_node() {
+        let mut out = vec![(DecoderBackend::Nvdec, None)];
+        out.extend(vaapi_candidates());
+        out.push((DecoderBackend::Soft, None));
+        out
+    } else {
+        decode_candidates(DecoderBackend::Auto)
+    }
+}
+
+/// True when any `/dev/dri/renderD*` node is NVIDIA (PCI vendor `0x10de`).
+pub fn has_nvidia_render_node() -> bool {
+    render_nodes().into_iter().any(|p| is_nvidia_path(&p))
+}
+
 fn vaapi_candidates() -> Vec<(DecoderBackend, Option<PathBuf>)> {
     let nodes: Vec<PathBuf> = render_nodes()
         .into_iter()
@@ -105,5 +123,18 @@ mod tests {
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].0, DecoderBackend::Nvdec);
         assert!(c[0].1.is_none());
+    }
+
+    #[test]
+    fn prefer_nvdec_ends_with_soft_and_puts_nvdec_before_soft() {
+        let c = decode_candidates_prefer_nvdec();
+        assert_eq!(c.last().map(|(b, _)| *b), Some(DecoderBackend::Soft));
+        let nv = c.iter().position(|(b, _)| *b == DecoderBackend::Nvdec);
+        let soft = c.iter().position(|(b, _)| *b == DecoderBackend::Soft);
+        assert!(nv.is_some() && soft.is_some());
+        assert!(nv.unwrap() < soft.unwrap());
+        if has_nvidia_render_node() {
+            assert_eq!(c[0].0, DecoderBackend::Nvdec);
+        }
     }
 }

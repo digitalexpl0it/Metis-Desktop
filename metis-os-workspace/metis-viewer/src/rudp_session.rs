@@ -17,7 +17,7 @@ use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 use metis_config::{RudpStreamQuality, ViewerPlacement};
-use metis_decode::{RudpCodec, open_decoder};
+use metis_decode::{DecoderInfo, RudpCodec, open_decoder, open_decoder_prefer_nvdec};
 use metis_i18n::tr;
 use metis_protocol::{
     RUDP_MAX_SUBSCRIBED_OUTPUTS, RudpControlMsg, RudpMonitorInfo, truncate_clipboard_text,
@@ -146,6 +146,8 @@ enum ToGtk {
 
 enum ToWorker {
     Input(RudpControlMsg),
+    /// Pre-built Quinn datagram (mic uplink `MRUM`).
+    Datagram(bytes::Bytes),
     Shutdown,
     TofuAccept,
     TofuDecline,
@@ -404,6 +406,9 @@ fn worker_main(
                 ToWorker::Input(m) => {
                     let _ = rt.block_on(session.send_input(m));
                 }
+                ToWorker::Datagram(d) => {
+                    let _ = session.send_datagram(d);
+                }
                 ToWorker::Shutdown | ToWorker::TofuAccept | ToWorker::TofuDecline => return,
             }
         }
@@ -447,7 +452,7 @@ fn wait_tofu_decision(worker_rx: &Receiver<ToWorker>) -> TofuWait {
             Ok(ToWorker::TofuAccept) => return TofuWait::Accept,
             Ok(ToWorker::TofuDecline) => return TofuWait::Decline,
             Ok(ToWorker::Shutdown) => return TofuWait::Shutdown,
-            Ok(ToWorker::Input(_)) => {}
+            Ok(ToWorker::Input(_)) | Ok(ToWorker::Datagram(_)) => {}
             Err(_) => return TofuWait::Shutdown,
         }
     }
@@ -557,6 +562,39 @@ fn decoder_codec(name: &str) -> RudpCodec {
     }
 }
 
+/// Phase 24 J: reopen when the host wire codec or negotiated size changes
+/// (Soft emergency H.264 / ladder fallback must not keep a stale decoder).
+fn decoder_needs_reopen(
+    info: &DecoderInfo,
+    want_codec: RudpCodec,
+    video_w: u32,
+    video_h: u32,
+) -> bool {
+    if info.codec != want_codec {
+        return true;
+    }
+    if video_w == 0 || video_h == 0 {
+        return false;
+    }
+    info.width != video_w || info.height != video_h
+}
+
+/// Performance prefers NVDEC when an NVIDIA GPU is present; other qualities
+/// keep VAAPI-first Auto.
+fn open_decoder_for_quality(
+    quality: RudpStreamQuality,
+    codec: RudpCodec,
+    width: u32,
+    height: u32,
+) -> Option<Box<dyn metis_decode::VideoDecoder>> {
+    let opened = if quality == RudpStreamQuality::Performance {
+        open_decoder_prefer_nvdec(codec, width, height)
+    } else {
+        open_decoder(codec, width, height)
+    };
+    opened.ok()
+}
+
 /// Peek strip height used for CSS slide + top-edge hit test.
 const CONN_BAR_PEEK_PX: f64 = 8.0;
 const CONN_BAR_HIDE_MS: u64 = 1500;
@@ -574,6 +612,8 @@ struct StreamWindow {
     bar: gtk::Box,
     bar_status: gtk::Label,
     clipboard_check: gtk::CheckButton,
+    mic_check: gtk::CheckButton,
+    sound_check: gtk::CheckButton,
     quality_dd: gtk::DropDown,
     pointer_over_bar: Cell<bool>,
     video_size: Cell<(u32, u32)>,
@@ -644,6 +684,14 @@ struct SessionUi {
     closed_outputs: RefCell<HashSet<String>>,
     pointer_locked: Cell<bool>,
     audio_playback: RefCell<Option<crate::rudp_audio::RudpAudioPlayback>>,
+    /// Viewer → host mic capture (started after host `MicReady`).
+    mic_capture: RefCell<Option<crate::rudp_mic::RudpMicCapture>>,
+    /// User wants mic on (default off). Actual capture waits for `MicReady`.
+    mic_wanted: Cell<bool>,
+    /// Host has advertised mic inject ready.
+    mic_ready: Cell<bool>,
+    /// Local downlink mute (default unmuted / Sound checked).
+    sound_enabled: Cell<bool>,
     /// Client-side clipboard sync (default on). Mute skips send/apply.
     clipboard_enabled: Cell<bool>,
     applying_remote_clip: Cell<bool>,
@@ -685,6 +733,10 @@ impl SessionUi {
             closed_outputs: RefCell::new(HashSet::new()),
             pointer_locked: Cell::new(false),
             audio_playback: RefCell::new(None),
+            mic_capture: RefCell::new(None),
+            mic_wanted: Cell::new(false),
+            mic_ready: Cell::new(false),
+            sound_enabled: Cell::new(true),
             clipboard_enabled: Cell::new(true),
             applying_remote_clip: Cell::new(false),
             last_remote_clip_serial: Cell::new(0),
@@ -769,6 +821,8 @@ impl SessionUi {
             return;
         }
         *self.audio_playback.borrow_mut() = None;
+        *self.mic_capture.borrow_mut() = None;
+        self.mic_ready.set(false);
         self.disconnect_clipboard();
         self.cancel_bar_hide();
         metis_config::clear_viewer_pending_placement();
@@ -791,6 +845,8 @@ impl SessionUi {
     fn shutdown(&self) {
         self.finished.set(true);
         *self.audio_playback.borrow_mut() = None;
+        *self.mic_capture.borrow_mut() = None;
+        self.mic_ready.set(false);
         self.disconnect_clipboard();
         self.cancel_bar_hide();
         metis_config::clear_viewer_pending_placement();
@@ -881,6 +937,70 @@ impl SessionUi {
         for sw in self.windows.borrow().iter() {
             if sw.clipboard_check.is_active() != enabled {
                 sw.clipboard_check.set_active(enabled);
+            }
+        }
+    }
+
+    fn set_sound_enabled(self: &Rc<Self>, enabled: bool) {
+        if self.sound_enabled.replace(enabled) == enabled {
+            return;
+        }
+        if let Some(playback) = self.audio_playback.borrow().as_ref() {
+            playback.set_muted(!enabled);
+        }
+        for sw in self.windows.borrow().iter() {
+            if sw.sound_check.is_active() != enabled {
+                sw.sound_check.set_active(enabled);
+            }
+        }
+    }
+
+    fn set_mic_wanted(self: &Rc<Self>, wanted: bool) {
+        if self.mic_wanted.replace(wanted) == wanted {
+            return;
+        }
+        for sw in self.windows.borrow().iter() {
+            if sw.mic_check.is_active() != wanted {
+                sw.mic_check.set_active(wanted);
+            }
+        }
+        self.send_input(RudpControlMsg::MicEnable { enabled: wanted });
+        if !wanted {
+            self.mic_ready.set(false);
+            *self.mic_capture.borrow_mut() = None;
+        } else {
+            self.sync_mic_capture();
+        }
+    }
+
+    /// Start/stop local capture once the host has advertised `MicReady`.
+    fn sync_mic_capture(self: &Rc<Self>) {
+        if !self.mic_wanted.get() || !self.mic_ready.get() {
+            *self.mic_capture.borrow_mut() = None;
+            return;
+        }
+        if self.mic_capture.borrow().is_some() {
+            return;
+        }
+        let tx = (*self.worker_tx).clone();
+        let on_datagram: Arc<dyn Fn(bytes::Bytes) + Send + Sync> =
+            Arc::new(move |dgram: bytes::Bytes| {
+                let _ = tx.send(ToWorker::Datagram(dgram));
+            });
+        match crate::rudp_mic::RudpMicCapture::start(on_datagram) {
+            Ok(capture) => {
+                *self.mic_capture.borrow_mut() = Some(capture);
+            }
+            Err(err) => {
+                tracing::warn!(%err, "rudp mic: capture unavailable");
+                self.mic_wanted.set(false);
+                for sw in self.windows.borrow().iter() {
+                    if sw.mic_check.is_active() {
+                        sw.mic_check.set_active(false);
+                    }
+                    sw.set_status(&tr("No microphone — mic soft-fail"));
+                }
+                self.send_input(RudpControlMsg::MicEnable { enabled: false });
             }
         }
     }
@@ -1011,6 +1131,20 @@ impl SessionUi {
         )));
         bar.append(&clipboard_check);
 
+        let mic_check = gtk::CheckButton::with_label(&tr("Mic"));
+        mic_check.set_active(self.mic_wanted.get());
+        mic_check.set_tooltip_text(Some(&tr(
+            "Send microphone audio to the remote (host must allow it in Settings). Default off.",
+        )));
+        bar.append(&mic_check);
+
+        let sound_check = gtk::CheckButton::with_label(&tr("Sound"));
+        sound_check.set_active(self.sound_enabled.get());
+        sound_check.set_tooltip_text(Some(&tr(
+            "Play remote system audio locally. Off: mute speakers only (host capture continues).",
+        )));
+        bar.append(&sound_check);
+
         let quality_labels = [tr("Performance"), tr("High"), tr("Medium"), tr("Low")];
         let quality_refs: Vec<&str> = quality_labels.iter().map(|s| s.as_str()).collect();
         let quality_dd = gtk::DropDown::from_strings(&quality_refs);
@@ -1040,6 +1174,8 @@ impl SessionUi {
             bar: bar.clone(),
             bar_status,
             clipboard_check: clipboard_check.clone(),
+            mic_check: mic_check.clone(),
+            sound_check: sound_check.clone(),
             quality_dd: quality_dd.clone(),
             pointer_over_bar: Cell::new(false),
             video_size: Cell::new((0, 0)),
@@ -1085,6 +1221,22 @@ impl SessionUi {
             clipboard_check.connect_toggled(move |check| {
                 if let Some(ui) = ui.upgrade() {
                     ui.set_clipboard_enabled(check.is_active());
+                }
+            });
+        }
+        {
+            let ui = Rc::downgrade(self);
+            mic_check.connect_toggled(move |check| {
+                if let Some(ui) = ui.upgrade() {
+                    ui.set_mic_wanted(check.is_active());
+                }
+            });
+        }
+        {
+            let ui = Rc::downgrade(self);
+            sound_check.connect_toggled(move |check| {
+                if let Some(ui) = ui.upgrade() {
+                    ui.set_sound_enabled(check.is_active());
                 }
             });
         }
@@ -1346,6 +1498,7 @@ impl SessionUi {
                 codec: _,
             } => match crate::rudp_audio::RudpAudioPlayback::start(*sample_rate, *channels) {
                 Ok(playback) => {
+                    playback.set_muted(!self.sound_enabled.get());
                     *self.audio_playback.borrow_mut() = Some(playback);
                 }
                 Err(err) => {
@@ -1359,6 +1512,25 @@ impl SessionUi {
             } => {
                 if let Some(playback) = self.audio_playback.borrow().as_ref() {
                     playback.push_packet(*seq, data);
+                }
+            }
+            SessionEvent::MicReady { .. } => {
+                self.mic_ready.set(true);
+                self.sync_mic_capture();
+            }
+            SessionEvent::MicEnable { enabled } => {
+                if !*enabled {
+                    self.mic_ready.set(false);
+                    *self.mic_capture.borrow_mut() = None;
+                    if self.mic_wanted.get() {
+                        self.mic_wanted.set(false);
+                        for sw in self.windows.borrow().iter() {
+                            if sw.mic_check.is_active() {
+                                sw.mic_check.set_active(false);
+                            }
+                            sw.set_status(&tr("Mic denied by host (or session locked)"));
+                        }
+                    }
                 }
             }
             SessionEvent::PointerLock { locked } => {
@@ -1402,7 +1574,8 @@ impl SessionUi {
     fn set_stream_quality(&self, quality: RudpStreamQuality) {
         // Always send — even when the local Cell already matches — so a host
         // that never applied (or drifted) still gets a live encode update.
-        let changed = self.stream_quality.get() != quality;
+        let prev = self.stream_quality.get();
+        let changed = prev != quality;
         self.stream_quality.set(quality);
         if changed {
             self.apply_stream_quality_ui(quality);
@@ -1410,6 +1583,10 @@ impl SessionUi {
             cfg.rudp_stream_quality = quality;
             if let Err(err) = metis_config::save_viewer_config(&cfg) {
                 tracing::warn!(%err, "failed to save viewer stream quality");
+            }
+            // Performance toggles the NVDEC-first ladder — reopen live decoders.
+            if prev == RudpStreamQuality::Performance || quality == RudpStreamQuality::Performance {
+                self.reopen_live_decoders();
             }
         }
         self.send_input(RudpControlMsg::SetStreamQuality {
@@ -1425,6 +1602,38 @@ impl SessionUi {
             sw.quality_dd.set_selected(idx);
         }
         self.applying_quality.set(false);
+    }
+
+    /// Drop and reopen every stream decoder with the current quality ladder.
+    fn reopen_live_decoders(&self) {
+        let quality = self.stream_quality.get();
+        for sw in self.windows.borrow().iter() {
+            let (w, h) = sw.video_size.get();
+            if w == 0 || h == 0 {
+                continue;
+            }
+            let Some(codec) = sw.decoder.borrow().as_ref().map(|d| d.info().codec) else {
+                continue;
+            };
+            let Some(dec) = open_decoder_for_quality(quality, codec, w, h) else {
+                *sw.decoder.borrow_mut() = None;
+                continue;
+            };
+            if !self.pointer_locked.get() {
+                let output = sw.output_id.borrow();
+                let status = if self.layout.borrow().len() >= 2 && !output.is_empty() {
+                    format!("{output} · ")
+                } else {
+                    String::new()
+                };
+                sw.set_status(&format!(
+                    "{status}{w}×{h} {} · {}",
+                    codec.as_str(),
+                    dec.info().decoder_name
+                ));
+            }
+            *sw.decoder.borrow_mut() = Some(dec);
+        }
     }
 
     /// Host topology: remember it, pick the outputs to stream, retitle windows.
@@ -1511,7 +1720,12 @@ impl SessionUi {
         } else {
             String::new()
         };
-        let opened = open_decoder(decoder_codec(codec), width, height).ok();
+        let opened = open_decoder_for_quality(
+            self.stream_quality.get(),
+            decoder_codec(codec),
+            width,
+            height,
+        );
         match opened {
             Some(dec) => {
                 if !self.pointer_locked.get() {
@@ -1534,13 +1748,20 @@ impl SessionUi {
         let Some(sw) = self.window_for_stream(au.stream_id) else {
             return;
         };
+        let want = decoder_codec(&au.codec);
+        let (w, h) = sw.video_size.get();
+        if w == 0 {
+            return;
+        }
+        let quality = self.stream_quality.get();
         let mut slot = sw.decoder.borrow_mut();
-        if slot.is_none() {
-            let (w, h) = sw.video_size.get();
-            if w == 0 {
-                return;
-            }
-            let Ok(d) = open_decoder(decoder_codec(&au.codec), w, h) else {
+        let reopen = match slot.as_ref() {
+            None => true,
+            Some(dec) => decoder_needs_reopen(dec.info(), want, w, h),
+        };
+        if reopen {
+            let Some(d) = open_decoder_for_quality(quality, want, w, h) else {
+                *slot = None;
                 return;
             };
             if !self.pointer_locked.get() {
@@ -1852,6 +2073,30 @@ fn viewer_quality_from_index(idx: u32) -> RudpStreamQuality {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_info(codec: RudpCodec, w: u32, h: u32) -> DecoderInfo {
+        DecoderInfo {
+            backend: metis_decode::DecoderBackend::Soft,
+            codec,
+            decoder_name: "h264".into(),
+            width: w,
+            height: h,
+        }
+    }
+
+    #[test]
+    fn decoder_reopens_on_codec_flip() {
+        let info = sample_info(RudpCodec::Hevc, 1920, 1080);
+        assert!(decoder_needs_reopen(&info, RudpCodec::H264, 1920, 1080));
+        assert!(!decoder_needs_reopen(&info, RudpCodec::Hevc, 1920, 1080));
+    }
+
+    #[test]
+    fn decoder_reopens_on_size_change() {
+        let info = sample_info(RudpCodec::H264, 1280, 720);
+        assert!(decoder_needs_reopen(&info, RudpCodec::H264, 1920, 1080));
+        assert!(!decoder_needs_reopen(&info, RudpCodec::H264, 0, 0));
+    }
 
     fn mon(id: &str, x: i32, y: i32, w: u32, h: u32, primary: bool) -> RudpMonitorInfo {
         RudpMonitorInfo {

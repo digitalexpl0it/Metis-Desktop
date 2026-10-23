@@ -56,6 +56,7 @@ pub use metis_rudp_host::engine::{DEFAULT_RUDP_PORT, RudpLayoutShared};
 
 use crate::rudp_audio;
 use crate::rudp_guard::{HostMarker, HostPhase, STABLE_AFTER};
+use crate::rudp_mic;
 use crate::stream_export::{ExportedFrame, StreamExportHub};
 
 /// GPU fence wait per exported frame on the frame thread. Keep this short: a
@@ -106,6 +107,16 @@ pub enum RudpInputEvent {
         text: String,
         serial: u64,
     },
+    /// Viewer → host: mic uplink enable/disable (Pulse inject demand).
+    MicEnable {
+        enabled: bool,
+    },
+    /// Viewer → host: one Opus mic packet (in-process path).
+    MicUplink {
+        seq: u32,
+        pts_us: i64,
+        opus: Vec<u8>,
+    },
     /// Authenticated RUDP session as this user — unlock Metis PAM lock if they
     /// own the session (calloop; not from the control-stream JSON enum).
     UnlockPamSession {
@@ -133,6 +144,7 @@ impl From<RudpHostInput> for RudpInputEvent {
             RudpHostInput::ClipboardSet { mime, text, serial } => {
                 Self::ClipboardSet { mime, text, serial }
             }
+            RudpHostInput::MicEnable { enabled } => Self::MicEnable { enabled },
         }
     }
 }
@@ -155,6 +167,8 @@ pub struct DesiredRudpHost {
     pub allowed_users: Vec<String>,
     pub lan_only: bool,
     pub unlock_session_on_auth: bool,
+    /// Host Settings: allow Viewer mic uplink (`MRUM`).
+    pub allow_mic_uplink: bool,
     pub encode_prefs: RudpEncodePrefs,
 }
 
@@ -325,6 +339,12 @@ impl HostLink for CalloopLink {
             .send(RudpInputEvent::SetStreamQuality { quality });
     }
 
+    fn mic_uplink(&self, seq: u32, pts_us: i64, opus: Vec<u8>) {
+        let _ = self
+            .input_tx
+            .send(RudpInputEvent::MicUplink { seq, pts_us, opus });
+    }
+
     fn status(&self, listening: bool, fingerprint: &str, bind: SocketAddr, err: Option<String>) {
         record_net_status(&self.status, listening, fingerprint, &bind.to_string(), err);
     }
@@ -346,8 +366,11 @@ pub struct RudpHostSystem {
     net: NetBackend,
     frame_join: Option<JoinHandle<()>>,
     audio_join: Option<JoinHandle<()>>,
+    mic_join: Option<JoinHandle<()>>,
     /// Engine state shared with the frame pipeline / audio / IPC forwarder.
     pub shared: Arc<EngineShared>,
+    /// Live: allow Viewer mic uplink.
+    pub allow_mic_uplink: bool,
     /// Frames submitted to the hardware encoder (for tests / metrics).
     pub frames_encoded: Arc<AtomicU64>,
     /// Bytes produced by encode drain (approx outbound payload size).
@@ -391,6 +414,7 @@ impl RudpHostSystem {
             allowed_users,
             lan_only,
             unlock_session_on_auth,
+            allow_mic_uplink,
             encode_prefs,
         } = desired;
         let stop = Arc::new(AtomicBool::new(false));
@@ -419,6 +443,9 @@ impl RudpHostSystem {
             allowed_users.clone(),
             unlock_session_on_auth,
         ));
+        shared
+            .allow_mic_uplink
+            .store(allow_mic_uplink, Ordering::Relaxed);
         shared.set_stream_quality_str(encode_prefs.stream_quality.as_str());
 
         let wake = hub.arm();
@@ -427,6 +454,11 @@ impl RudpHostSystem {
         let audio_join = Some(rudp_audio::spawn_audio_supervisor(
             Arc::clone(&stop),
             Arc::clone(&shared),
+        ));
+        let mic_join = Some(rudp_mic::spawn_mic_supervisor(
+            Arc::clone(&stop),
+            Arc::clone(&shared),
+            Arc::clone(&bridge.session_locked),
         ));
         let prefs_live = Arc::new(Mutex::new(encode_prefs.clone()));
         let prefs_gen = Arc::new(AtomicU64::new(1));
@@ -462,6 +494,9 @@ impl RudpHostSystem {
                 if let Some(audio) = audio_join {
                     let _ = audio.join();
                 }
+                if let Some(mic) = mic_join {
+                    let _ = mic.join();
+                }
                 return Err(format!("spawn rudp frame thread: {err}"));
             }
         };
@@ -492,6 +527,7 @@ impl RudpHostSystem {
                 allowed_users: allowed_users.clone(),
                 lan_only,
                 unlock_session_on_auth,
+                allow_mic_uplink,
                 stream_quality: encode_prefs.stream_quality.as_str().to_string(),
                 shared: Arc::clone(&shared),
                 hub: Arc::clone(&hub),
@@ -510,6 +546,9 @@ impl RudpHostSystem {
                 let _ = frame_join.join();
                 if let Some(audio) = audio_join {
                     let _ = audio.join();
+                }
+                if let Some(mic) = mic_join {
+                    let _ = mic.join();
                 }
                 return Err(err);
             }
@@ -533,7 +572,9 @@ impl RudpHostSystem {
             net,
             frame_join: Some(frame_join),
             audio_join,
+            mic_join,
             shared,
+            allow_mic_uplink,
             frames_encoded,
             bytes_encoded,
             encode_error,
@@ -557,17 +598,23 @@ impl RudpHostSystem {
         allowed_users: Vec<String>,
         lan_only: bool,
         unlock_session_on_auth: bool,
+        allow_mic_uplink: bool,
     ) {
         self.allowed_users = allowed_users.clone();
         self.lan_only = lan_only;
-        self.shared
-            .set_policy(allowed_users.clone(), unlock_session_on_auth);
+        self.allow_mic_uplink = allow_mic_uplink;
+        self.shared.set_policy(
+            allowed_users.clone(),
+            unlock_session_on_auth,
+            allow_mic_uplink,
+        );
         if let NetBackend::HostProcess(ipc) = &self.net {
             ipc.update_policy(
                 self.bind,
                 allowed_users,
                 lan_only,
                 unlock_session_on_auth,
+                allow_mic_uplink,
                 self.encode_prefs.stream_quality.as_str(),
             );
         }
@@ -637,6 +684,9 @@ impl RudpHostSystem {
             let _ = handle.join();
         }
         if let Some(handle) = self.audio_join.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.mic_join.take() {
             let _ = handle.join();
         }
     }
@@ -1389,6 +1439,7 @@ pub fn desired_host() -> Option<DesiredRudpHost> {
             allowed_users: cfg.allowed_users,
             lan_only: cfg.lan_only,
             unlock_session_on_auth: cfg.unlock_session_on_auth,
+            allow_mic_uplink: cfg.allow_mic_uplink,
             encode_prefs: prefs,
         });
     }
@@ -1409,6 +1460,7 @@ pub fn desired_host() -> Option<DesiredRudpHost> {
         allowed_users: cfg.allowed_users,
         lan_only: cfg.lan_only,
         unlock_session_on_auth: cfg.unlock_session_on_auth,
+        allow_mic_uplink: cfg.allow_mic_uplink,
         encode_prefs: prefs,
     })
 }
@@ -1541,6 +1593,7 @@ mod tests {
                 allowed_users: vec!["alice".into()],
                 lan_only: true,
                 unlock_session_on_auth: true,
+                allow_mic_uplink: false,
                 encode_prefs: RudpEncodePrefs::default(),
             },
             Arc::clone(&hub),

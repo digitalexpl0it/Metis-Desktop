@@ -4,10 +4,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Protocol version 4: stream quality presets (`SetStreamQuality` /
-/// `StreamQuality`). Hosts accept Hello protocol in
-/// [`RUDP_PROTOCOL_MIN`]..=[`RUDP_PROTOCOL_VERSION`].
-pub const RUDP_PROTOCOL_VERSION: u32 = 4;
+/// Protocol version 5: mic uplink (`MicEnable` / `MicReady` + `MRUM` datagrams).
+/// Hosts accept Hello protocol in
+/// [`RUDP_PROTOCOL_MIN`]..=[`RUDP_PROTOCOL_VERSION`]. Mic control is gated on
+/// Hello ≥ 5 (older clients never see mic messages).
+pub const RUDP_PROTOCOL_VERSION: u32 = 5;
 /// Oldest Hello protocol this host still accepts (v3 multi-monitor clients).
 pub const RUDP_PROTOCOL_MIN: u32 = 3;
 pub const RUDP_MAX_FRAME: usize = 64 * 1024;
@@ -141,6 +142,20 @@ pub enum RudpControlMsg {
     /// and after any change from Settings or another client).
     StreamQuality {
         quality: String,
+    },
+    /// Client → host (protocol ≥ 5): request mic uplink on/off. Default off.
+    /// Host may reply with [`Self::MicEnable`] `{ enabled: false }` when
+    /// disallowed / locked, or with [`Self::MicReady`] when inject is armed.
+    MicEnable {
+        enabled: bool,
+    },
+    /// Host → client (protocol ≥ 5): Pulse inject path ready; client may send
+    /// `MRUM` Opus datagrams at these parameters.
+    MicReady {
+        sample_rate: u32,
+        channels: u8,
+        /// `"opus"`.
+        codec: String,
     },
 }
 
@@ -281,6 +296,12 @@ mod tests {
             mime: "text/plain;charset=utf-8".into(),
             text: "hello clipboard".into(),
             serial: 7,
+        });
+        roundtrip(RudpControlMsg::MicEnable { enabled: true });
+        roundtrip(RudpControlMsg::MicReady {
+            sample_rate: 48_000,
+            channels: 1,
+            codec: "opus".into(),
         });
     }
 

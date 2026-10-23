@@ -1,6 +1,7 @@
 //! Metis Remote Viewer audio: Opus decode + cpal playback.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -19,6 +20,8 @@ struct PlaybackInner {
 /// Owns the cpal output stream for one RUDP session.
 pub struct RudpAudioPlayback {
     inner: Arc<Mutex<PlaybackInner>>,
+    /// Local downlink mute (does not stop host capture).
+    muted: Arc<AtomicBool>,
     _stream: cpal::Stream,
 }
 
@@ -50,11 +53,21 @@ impl RudpAudioPlayback {
             pcm: VecDeque::new(),
             last_seq: None,
         }));
+        let muted = Arc::new(AtomicBool::new(false));
         let cb_inner = Arc::clone(&inner);
+        let cb_muted = Arc::clone(&muted);
         let stream = device
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _| {
+                    if cb_muted.load(Ordering::Relaxed) {
+                        data.fill(0.0);
+                        // Drain so we do not backlog while muted.
+                        if let Ok(mut g) = cb_inner.lock() {
+                            g.pcm.clear();
+                        }
+                        return;
+                    }
                     let Ok(mut g) = cb_inner.lock() else {
                         data.fill(0.0);
                         return;
@@ -74,11 +87,23 @@ impl RudpAudioPlayback {
         tracing::info!(rate, channels, "rudp audio: playback started");
         Ok(Self {
             inner,
+            muted,
             _stream: stream,
         })
     }
 
+    /// Local mute — host capture continues; Viewer stops feeding speakers.
+    pub fn set_muted(&self, muted: bool) {
+        self.muted.store(muted, Ordering::Relaxed);
+        if muted && let Ok(mut g) = self.inner.lock() {
+            g.pcm.clear();
+        }
+    }
+
     pub fn push_packet(&self, seq: u32, opus: &[u8]) {
+        if self.muted.load(Ordering::Relaxed) {
+            return;
+        }
         let Ok(mut g) = self.inner.lock() else {
             return;
         };

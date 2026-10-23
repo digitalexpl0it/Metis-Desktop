@@ -26,7 +26,7 @@ use crate::{RudpControlMsg, RudpDamageRect, RudpMonitorInfo};
 /// Socket filename under `$XDG_RUNTIME_DIR/metis/`.
 pub const RUDP_HOST_IPC_SOCK: &str = "rudp-host.sock";
 /// Bumped on any incompatible change to the messages below.
-pub const RUDP_HOST_IPC_VERSION: u32 = 2;
+pub const RUDP_HOST_IPC_VERSION: u32 = 3;
 /// Upper bound for one JSON header (control-sized; hostile-peer guard).
 pub const RUDP_HOST_IPC_MAX_HEADER: usize = 1024 * 1024;
 /// Upper bound for one binary payload (one encoded access unit).
@@ -87,6 +87,16 @@ pub struct IpcEncodedAudio {
     pub datagram: Vec<u8>,
 }
 
+/// One Viewer→host mic Opus packet (payload is raw Opus, not `MRUM`-framed —
+/// the host already demuxed the Quinn datagram).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IpcMicUplink {
+    pub seq: u32,
+    pub pts_us: i64,
+    #[serde(skip)]
+    pub opus: Vec<u8>,
+}
+
 /// Compositor → host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "msg", rename_all = "snake_case")]
@@ -103,6 +113,9 @@ pub enum CompToHost {
         /// Current stream quality (`performance` / `high` / `medium` / `low`).
         #[serde(default = "default_stream_quality")]
         stream_quality: String,
+        /// When false (default), host rejects Viewer `MicEnable` and drops `MRUM`.
+        #[serde(default)]
+        allow_mic_uplink: bool,
     },
     /// Live quality change — fan out `StreamQuality` to protocol ≥ 4 clients.
     StreamQuality {
@@ -136,6 +149,10 @@ pub enum CompToHost {
         serial: u64,
         mime: String,
         text: String,
+    },
+    /// Pulse mic-inject path armed (gates host→client `MicReady`).
+    MicInjectState {
+        ready: bool,
     },
     /// Stop listening, close clients, exit.
     Shutdown,
@@ -172,6 +189,10 @@ pub enum RudpHostInput {
         text: String,
         serial: u64,
     },
+    /// Viewer → host (protocol ≥ 5): mic uplink request (compositor arms Pulse).
+    MicEnable {
+        enabled: bool,
+    },
 }
 
 impl RudpHostInput {
@@ -189,6 +210,7 @@ impl RudpHostInput {
             RudpControlMsg::ClipboardSet { mime, text, serial } => {
                 Some(Self::ClipboardSet { mime, text, serial })
             }
+            RudpControlMsg::MicEnable { enabled } => Some(Self::MicEnable { enabled }),
             _ => None,
         }
     }
@@ -231,6 +253,8 @@ pub enum HostToComp {
         bind: String,
         error: Option<String>,
     },
+    /// Viewer → host mic Opus (binary tail = Opus payload).
+    MicUplink(IpcMicUplink),
 }
 
 fn default_stream_quality() -> String {
@@ -265,7 +289,20 @@ impl RudpHostIpcMessage for CompToHost {
     }
 }
 
-impl RudpHostIpcMessage for HostToComp {}
+impl RudpHostIpcMessage for HostToComp {
+    fn payload(&self) -> &[u8] {
+        match self {
+            Self::MicUplink(m) => &m.opus,
+            _ => &[],
+        }
+    }
+
+    fn set_payload(&mut self, payload: Vec<u8>) {
+        if let Self::MicUplink(m) = self {
+            m.opus = payload;
+        }
+    }
+}
 
 /// Serialise one frame into `out` (header + payload, see module docs).
 pub fn encode_host_ipc_frame<T: RudpHostIpcMessage>(
@@ -346,6 +383,7 @@ mod tests {
             lan_only: true,
             unlock_session_on_auth: false,
             stream_quality: "medium".into(),
+            allow_mic_uplink: false,
         };
         let mut buf = Vec::new();
         encode_host_ipc_frame(&msg, &mut buf).expect("encode");
@@ -432,6 +470,10 @@ mod tests {
         assert!(
             RudpHostInput::from_control(RudpControlMsg::SubscribeOutputs { output_ids: vec![] })
                 .is_none()
+        );
+        assert_eq!(
+            RudpHostInput::from_control(RudpControlMsg::MicEnable { enabled: true }),
+            Some(RudpHostInput::MicEnable { enabled: true })
         );
     }
 

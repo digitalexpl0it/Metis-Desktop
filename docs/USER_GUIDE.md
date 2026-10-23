@@ -1285,7 +1285,14 @@ IP (`rate_limited` reject).
 
 **Audio.** While a Viewer session is connected, Metis Remote captures the host
 **default sink monitor** (system audio via Pulse/PipeWire-pulse), encodes Opus,
-and plays it on the Viewer. There is no microphone / client→host audio yet.
+and plays it on the Viewer. Use the connection-bar **Sound** check to mute
+locally (host capture continues).
+
+**Microphone uplink.** Off by default on both sides. On the host, enable
+**Settings → Metis Remote → Allow microphone from Viewer**. In the Viewer
+connection bar, turn on **Mic** (requires a capture device). Audio plays on the
+host **default speakers** (no echo cancellation yet — headphones help). Session
+lock and turning the host allow switch off stop uplink immediately.
 If Pulse is unavailable on the host, the session continues **video-only**.
 
 **Smoke-test / debug CLI:**
@@ -1325,8 +1332,9 @@ Viewer connect UI always stays on the current desktop.
 **Connection bar (Metis Remote).** While a session is open, move the pointer to
 the top edge of the stream window or press **Ctrl+Alt+Home** to slide down a
 peek strip (Windows RDP–style). It shows the host, live stream status
-(resolution / codec / decoder), a **Clipboard** toggle (client-side mute of text
-sync; default on), and **Disconnect** (ends the whole session, including every
+(resolution / codec / decoder), **Clipboard** (text sync; default on), **Mic**
+(uplink; default off — host must allow), **Sound** (local downlink mute),
+stream quality, and **Disconnect** (ends the whole session, including every
 monitor window). The strip auto-hides shortly after you leave it; Ctrl+Alt+Home
 toggles it. **Super+Q** still closes the focused window (and ends the session
 when it is the last one). Local edge bar, wallpaper, and desktop widgets return
@@ -1343,10 +1351,13 @@ Client pins: `~/.config/metis/rudp/known_hosts`.
 (`intel-media-va-driver` / Mesa VA); NVIDIA needs the proprietary driver with NVENC
 and an FFmpeg build that exposes `*_nvenc`. If the chosen encode backend cannot
 open, the host logs a clear error and does not fall back to software x264/x265.
-Viewer decode tries FFmpeg **VAAPI** then **NVDEC/cuvid**, then software
-H.264/HEVC/AV1, always downloading to CPU RGBA for GTK (no zero-copy yet). Needs an
-FFmpeg build with those decoders plus a working `libva` stack (Intel/AMD) or
-NVIDIA driver/CUDA for NVDEC; without them the Viewer falls back to software
+Viewer decode follows the host wire codec (reopens if Soft emergency or ladder
+fallback flips H.264/HEVC/AV1 mid-session). Default ladder: FFmpeg **VAAPI** →
+**NVDEC/cuvid** → software. Under **Stream quality → Performance**, NVDEC is
+tried first when an NVIDIA GPU is present. Frames download to CPU RGBA for GTK
+(`MemoryTexture`; dmabuf/GL present is not shipped yet). Needs an FFmpeg build
+with those decoders plus a working `libva` stack (Intel/AMD) or NVIDIA
+driver/CUDA for NVDEC; without them the Viewer falls back to software
 automatically. Preferred codec may be **AV1** when the GPU exposes `av1_vaapi` /
 `av1_nvenc` (otherwise the host ladder falls back). Build also needs
 `libopus-dev` (and runtime `libopus0`) for Metis Remote audio,
@@ -1665,7 +1676,7 @@ mod preference is set yet. On a real Metis session, the default modifier is Supe
 | `updates.json` | Software updates prefs: enabled, check interval, snooze, notify, auto-install security, PackageKit/Flatpak/fwupd sources, last check/error |
 | *(cache)* `~/.cache/metis/updates-snapshot.json` | Pending update list shared by Settings Check now, the edge-bar badge, and the updater |
 | `remote.json` | Classic RDP / third-party desktop sharing: enabled, backend (`gnome_rdp` default / `rustdesk` / `metis_native`), auto-start, LAN-only + firewall state |
-| `rudp.json` | Metis Remote (RUDP): enabled, UDP port (default 7843), LAN-only + firewall status, `unlock_session_on_auth`, `allowed_users` (PAM), `stream_quality` (`performance` / `high` / `medium` / `low`), `encoder` / `codec` / `bitrate_kbps`; host TLS under `rudp/host.{crt,key}` + fingerprint |
+| `rudp.json` | Metis Remote (RUDP): enabled, UDP port (default 7843), LAN-only + firewall status, `unlock_session_on_auth`, `allow_mic_uplink` (default false), `allowed_users` (PAM), `stream_quality` (`performance` / `high` / `medium` / `low`), `encoder` / `codec` / `bitrate_kbps`; host TLS under `rudp/host.{crt,key}` + fingerprint |
 | `dashboard.json` | Control Center: enabled, widgets, height %, refresh, confirm-before-kill, process monitor |
 | `gaming.json` | Graphics mode, on-battery iGPU preference, auto performance/GameMode, Flatpak GPU env, `extra_steam_paths`, Metis MangoHud/Gamescope toggles, per-appid `gamescope_profiles` |
 | `gaming-flatpak.json` | Record of applied Flatpak gaming overrides (managed by `metis-gaming`) |

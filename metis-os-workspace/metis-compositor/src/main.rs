@@ -49,6 +49,7 @@ mod rudp_audio;
 mod rudp_guard;
 mod rudp_host;
 mod rudp_host_ipc;
+mod rudp_mic;
 mod rudp_session;
 mod scratchpad;
 mod screenshot_overlay;

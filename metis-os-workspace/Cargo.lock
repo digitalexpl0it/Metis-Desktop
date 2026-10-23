@@ -3223,6 +3223,7 @@ dependencies = [
 name = "metis-viewer"
 version = "0.1.30"
 dependencies = [
+ "bytes",
  "cpal",
  "gio",
  "glib",

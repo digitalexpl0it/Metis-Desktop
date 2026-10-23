@@ -35,7 +35,7 @@ contract and verify against `metis-rudp-smoke` / Metis Viewer.
 | Default port | **7843** (configurable in `~/.config/metis/rudp.json` on the host) |
 | TLS | Host self-signed cert; client **TOFU**-pins SHA-256 fingerprint |
 | Auth | Local **PAM** username + password (allowlisted on host) |
-| Protocol version | `RUDP_PROTOCOL_VERSION` = **4** (`metis-protocol`) — stream quality; hosts still accept Hello **3..=4** |
+| Protocol version | `RUDP_PROTOCOL_VERSION` = **5** (`metis-protocol`) — mic uplink; hosts still accept Hello **3..=5** |
 | First-party Linux client | Metis Viewer → protocol **Metis Remote** |
 
 Host enablement and firewall: [User Guide — Metis Remote](USER_GUIDE.md#metis-remote-rudp).
@@ -218,13 +218,34 @@ RGBA for presentation.
 
 ## 6. Audio media
 
+### Downlink (host → client)
+
 Optional. After `AudioReady` (typically 48 kHz stereo Opus, 20 ms frames):
 
 - Datagrams magic **`MRUA`**, header 20 bytes + Opus payload.
-- Demux: if datagram starts with `MRUA`, treat as audio; `MRUV` as video.
+- Demux: if datagram starts with `MRUA`, treat as audio; `MRUV` as video;
+  **`MRUM`** as mic uplink (client → host — do **not** overload `MRUA`).
 - Decode Opus → PCM; play via platform audio (Linux Viewer uses **cpal**).
+- Local mute (Viewer **Sound** check) is client-only — keep consuming datagrams
+  or drop them; do not send a control message.
 
-No microphone uplink in v1.
+### Mic uplink (client → host, protocol ≥ 5)
+
+Opt-in on both sides. Default: client mic **off**; host
+`rudp.json` `allow_mic_uplink` **false** until Settings enables
+**Allow microphone from Viewer**.
+
+1. Client sends `MicEnable { enabled: true }` on the control stream.
+2. Host may reply `MicEnable { enabled: false }` when disallowed, session
+   locked, or Pulse inject failed; otherwise compositor arms Pulse playback
+   on the **default sink** and the host sends
+   `MicReady { sample_rate, channels, codec }` (typically **48 kHz mono Opus**).
+3. After `MicReady`, client captures mic → Opus → Quinn datagrams with magic
+   **`MRUM`** (same 20-byte header layout as `MRUA`).
+4. Session lock and `allow_mic_uplink=false` stop uplink; host sends
+   `MicEnable { enabled: false }` and drops `MRUM`.
+
+Echo cancellation / webcam are out of scope. Soft-fail if no capture device.
 
 ---
 
@@ -250,6 +271,8 @@ while let Some(ev) = session.recv_event().await {
         SessionEvent::VideoReady { width, height, codec, stream_id, output_id } => { /* decoder */ }
         SessionEvent::AccessUnit(au) => { /* demux on au.stream_id; decode au.data */ }
         SessionEvent::AudioReady { .. } | SessionEvent::AudioPacket { .. } => { /* … */ }
+        SessionEvent::MicReady { .. } => { /* start mic capture; send MRUM */ }
+        SessionEvent::MicEnable { enabled: false } => { /* stop mic */ }
         SessionEvent::PointerLock { locked } => { /* relative vs absolute */ }
         SessionEvent::ClipboardSet { text, serial, .. } => { /* set OS clipboard */ }
         SessionEvent::Disconnected => break,
@@ -259,6 +282,7 @@ while let Some(ev) = session.recv_event().await {
 session.send_input(RudpControlMsg::PointerAbsolute { x, y }).await?;
 // Multi-monitor: pick up to RUDP_MAX_SUBSCRIBED_OUTPUTS (4) layout ids; empty = primary.
 session.subscribe_outputs(vec!["DP-1".into(), "DP-2".into()]).await?;
+session.set_mic_enabled(true).await?; // protocol ≥ 5; wait for MicReady
 ```
 
 Interactive TOFU surfaces `ClientError::TofuUnknown` / `TofuMismatch`; call
@@ -283,7 +307,7 @@ Interactive TOFU surfaces `ClientError::TofuUnknown` / `TofuMismatch`; call
 
 A client is considered compatible when it can:
 
-- [ ] Complete TOFU + PAM against an enabled Metis Remote host (protocol **v4**; v3 still accepted)
+- [ ] Complete TOFU + PAM against an enabled Metis Remote host (protocol **v5**; v3–v4 still accepted)
 - [ ] Honour `DesktopLayout` + `SubscribeOutputs`; demux video by `stream_id`
 - [ ] Decode H.264 access units to a visible frame
 - [ ] Send absolute pointer + key events that move/type on an unlocked session
@@ -291,6 +315,7 @@ A client is considered compatible when it can:
 - [ ] (Optional) Play Opus audio; sync text clipboard both ways
 - [ ] (Optional) Handle HEVC/AV1 and FEC loss recovery
 - [ ] (Optional, v4) Send/receive `SetStreamQuality` / `StreamQuality`
+- [ ] (Optional, v5) `MicEnable` / `MicReady` + send `MRUM` Opus uplink
 
 Validate with: host Settings → Metis Remote enabled, then
 `metis-rudp-smoke` and/or Metis Viewer on Linux against the same host.

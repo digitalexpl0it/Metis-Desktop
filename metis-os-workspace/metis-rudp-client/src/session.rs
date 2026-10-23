@@ -91,6 +91,16 @@ pub enum SessionEvent {
     StreamQuality {
         quality: String,
     },
+    /// Host → client (protocol ≥ 5): Pulse inject ready; send `MRUM` datagrams.
+    MicReady {
+        sample_rate: u32,
+        channels: u8,
+        codec: String,
+    },
+    /// Host denied / revoked mic uplink (lock, policy, or soft-fail).
+    MicEnable {
+        enabled: bool,
+    },
     AccessUnit(AccessUnitEvent),
     Disconnected,
 }
@@ -101,7 +111,7 @@ pub struct RudpSession {
     input_tx: mpsc::Sender<RudpControlMsg>,
     session_id: String,
     _endpoint: Endpoint,
-    _conn: Connection,
+    conn: Connection,
 }
 
 impl RudpSession {
@@ -140,6 +150,18 @@ impl RudpSession {
             quality: quality.to_string(),
         })
         .await
+    }
+
+    /// Ask the host to enable/disable mic uplink (protocol ≥ 5).
+    pub async fn set_mic_enabled(&self, enabled: bool) -> Result<(), ClientError> {
+        self.send_input(RudpControlMsg::MicEnable { enabled }).await
+    }
+
+    /// Send one pre-built Quinn datagram (e.g. `MRUM` mic uplink).
+    pub fn send_datagram(&self, data: bytes::Bytes) -> Result<(), ClientError> {
+        self.conn
+            .send_datagram(data)
+            .map_err(|e| ClientError::msg(format!("send datagram: {e}")))
     }
 }
 
@@ -262,7 +284,7 @@ pub async fn connect(cfg: RudpClientConfig) -> Result<RudpSession, ClientError> 
         input_tx,
         session_id,
         _endpoint: endpoint,
-        _conn: conn,
+        conn,
     })
 }
 
@@ -344,6 +366,24 @@ async fn session_pump(
                                 RudpControlMsg::StreamQuality { quality } => {
                                     let _ = event_tx
                                         .send(SessionEvent::StreamQuality { quality })
+                                        .await;
+                                }
+                                RudpControlMsg::MicReady {
+                                    sample_rate,
+                                    channels,
+                                    codec,
+                                } => {
+                                    let _ = event_tx
+                                        .send(SessionEvent::MicReady {
+                                            sample_rate,
+                                            channels,
+                                            codec,
+                                        })
+                                        .await;
+                                }
+                                RudpControlMsg::MicEnable { enabled } => {
+                                    let _ = event_tx
+                                        .send(SessionEvent::MicEnable { enabled })
                                         .await;
                                 }
                                 RudpControlMsg::Keepalive => {}

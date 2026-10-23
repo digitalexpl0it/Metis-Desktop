@@ -22,8 +22,10 @@ Phase 22 below.
 unlock-on-auth default off, about PATH scan, out-of-process Quinn host, fuzz,
 state.rs carve) **§A–F complete 2026-10-22** — see Phase 23 below.
 **Phase 24** (Metis Remote stream quality — Performance + High / Medium / Low
-presets for gaming, CAD, Blender, movies, and everyday desktop) **opened
-2026-10-22** — see Phase 24 below.
+presets for gaming, CAD, Blender, movies, and everyday desktop) **engineering
+closed 2026-10-23** (workload validation still open) — see Phase 24 below.
+**Phase 25** (Metis Remote mic uplink + Viewer audio UX) **landed 2026-10-23**
+— see Phase 25 below.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -108,7 +110,8 @@ is tracked under **Product backlog — Desktop maturity** below.
 **Suggested order:** S1–S3 + MultiRenderer **1** + HDR float scene **2** landed
 → colour protocol default-on (**3b** / **M2**, blocked) or engineering backlog;
 Gamescope **4** and native remote **3** landed.
-**Next product stream:** **Phase 24** Metis Remote quality presets (Performance
+**Next product stream:** Phase 24 workload validation + Phase 25 follow-ons
+(webcam / AEC deferred); prior **Phase 24** Metis Remote quality presets (Performance
 for gaming / CAD / Blender / movies; High / Medium / Low for day-to-day).
 
 ### Product backlog — Themes, icons, default apps (2026-10-18)
@@ -2560,10 +2563,11 @@ latency and quality presets → **Phase 24** (not deferred forever).
 Viewer UI + live host apply). Wave 2 partial: Performance native encode, Soft
 H.264 hygiene, force-until-delivered, sparse sticky export, latency HUD, and
 **G capture cadence** (full-rate sticky pending under Performance/High), and
-**E** zero-copy RGB→NV12 (DRM_PRIME + VAAPI/CUDA VPP with mmap fallback). Still
-open: **J** Viewer decode stretch. Goal: compete with Parsec on LAN for
-**gaming, CAD, Blender, movie streaming**, while keeping safer / cheaper
-presets for everyday remote desktop. Quinn stays out-of-process (Phase 23).
+**E** zero-copy RGB→NV12 (DRM_PRIME + VAAPI/CUDA VPP with mmap fallback), and
+**J** Viewer decode (wire-codec reopen + Performance NVDEC-first; dmabuf/GL
+present deferred). Goal: compete with Parsec on LAN for **gaming, CAD,
+Blender, movie streaming**, while keeping safer / cheaper presets for everyday
+remote desktop. Quinn stays out-of-process (Phase 23).
 
 **Product bar:** glass-to-glass on the order of **1–2 frames** on LAN under
 Performance; never build a multi-second video backlog (Viewer cursor is local —
@@ -2634,9 +2638,10 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
       encode_status; Viewer connection bar shows decode µs.
 - [x] **I. Bitrate profiles** (2026-10-22) — Low ~8 / Medium ~25 / High ~50 /
       Performance ~80 Mbps; VAAPI CQP ladder matches those bands (QP 34/28/22/16).
-- [ ] **J. Viewer decode** — HW decode path already exists; under Performance
-      prefer matching codec; optional future zero-copy present (dmabuf/GL) —
-      stretch, not blocker for presets shipping.
+- [x] **J. Viewer decode** (2026-10-23) — reopen decoder when AU wire codec /
+      size flips; Performance uses NVDEC-first ladder when an NVIDIA GPU is
+      present (else VAAPI-first Auto). Present stays CPU RGBA →
+      `MemoryTexture`; **dmabuf/GL zero-copy present deferred** (stretch).
 
 ### Workloads to validate
 
@@ -2652,12 +2657,51 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
 ### Explicitly out of scope for Phase 24
 
 - Win/mac first-party Viewer shipping
-- Mic uplink / webcam
+- Mic uplink / webcam → **Phase 25** (mic landed; webcam still deferred)
 - Replacing Metis native RDP / GRD
 - Putting Quinn back inside the compositor
 
 **Dependencies:** Phase 23 host process; live encode-prefs apply (2026-10-22);
 `metis-encode` isolated + in-process open paths; Settings Metis Remote page.
+
+**Engineering closed 2026-10-23** aside from workload validation checkboxes
+above. Product stream continues in **Phase 25**.
+
+---
+
+## Phase 25 — Metis Remote mic uplink + Viewer audio UX
+
+**Status 2026-10-23:** **Landed** (protocol v5 + host Pulse inject + Viewer Mic /
+Sound + Settings allow). Webcam, multi-device mic picker, AEC, and A/V lip-sync
+remain deferred (`pts_us` still reserved).
+
+### Product bar
+
+- Viewer can speak into the remote session when both sides opt in.
+- Default **mic off** (more sensitive than clipboard).
+- Host can disallow remote mic entirely (`allow_mic_uplink`, default false).
+- Session lock stops uplink and host inject.
+- Soft-fail if no mic / Pulse (video + downlink audio keep working).
+
+### Landed
+
+- [x] **Protocol v5** — `MicEnable` / `MicReady`; uplink datagram magic **`MRUM`**
+      (distinct from downlink `MRUA`); `RUDP_CLIENT` §6 / §10; CHANGELOG.
+- [x] **Host path** — `metis-rudp-host` demux `MRUM` → IPC → compositor Opus
+      decode → Pulse playback on default sink; honour allow + lock; Settings
+      **Allow microphone from Viewer**.
+- [x] **Viewer** — connection-bar **Mic** (default off) + **Sound** (local
+      downlink mute); cpal input → Opus → `MRUM` after `MicReady`.
+- [x] **Docs / tests** — USER_GUIDE; protocol/unit roundtrips for mic msgs +
+      `MRUM` header.
+
+### Explicitly out of Phase 25
+
+- Webcam / camera uplink
+- Multi-device mic picker / advanced routing
+- AEC / full duplex echo cancellation
+- A/V lip-sync (keep carrying `pts_us`)
+- Changing downlink Opus format
 
 ---
 
@@ -2698,7 +2742,7 @@ recent hosts; no passwords).
 | `input.json` | Mouse, touchpad, keyboard, scroll-strip kinetic (`scroll_strip`) (live-reload) |
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action |
 | `outputs.json` | Per-output scale, enabled, layout, saved video mode, night-light prefs (live connector-keyed map; profiles live in `output-profiles.json`) |
-| `rudp.json` | Metis Remote: enable, port, LAN/firewall, allowlist, unlock-on-auth, encoder/codec/bitrate; **Phase 24:** `stream_quality` (`performance` / `high` / `medium` / `low`) |
+| `rudp.json` | Metis Remote: enable, port, LAN/firewall, allowlist, unlock-on-auth, encoder/codec/bitrate; **Phase 24:** `stream_quality`; **Phase 25:** `allow_mic_uplink` (default false) |
 
 ### `bar.json` (defaults)
 

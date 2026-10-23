@@ -150,6 +150,10 @@ pub struct RudpConfig {
     /// `ext-session-lock` lockers.
     #[serde(default = "default_false")]
     pub unlock_session_on_auth: bool,
+    /// Allow Viewer microphone uplink (Opus `MRUM` → host Pulse). Default
+    /// **off** — more sensitive than clipboard; host must opt in explicitly.
+    #[serde(default = "default_false")]
+    pub allow_mic_uplink: bool,
     /// Local usernames allowed to authenticate (PAM). Empty while disabled is
     /// fine; on first enable Settings seeds `$USER`.
     #[serde(default)]
@@ -207,6 +211,7 @@ impl Default for RudpConfig {
             port: default_port(),
             lan_only: default_true(),
             unlock_session_on_auth: default_false(),
+            allow_mic_uplink: default_false(),
             allowed_users: Vec::new(),
             encoder: RudpEncoderBackend::default(),
             codec: RudpVideoCodec::default(),
@@ -629,6 +634,7 @@ mod tests {
         assert_eq!(cfg.codec, RudpVideoCodec::H264);
         assert_eq!(cfg.bitrate_kbps, DEFAULT_RUDP_BITRATE_KBPS);
         assert!(!cfg.unlock_session_on_auth);
+        assert!(!cfg.allow_mic_uplink);
         assert!(cfg.lan_only);
     }
 
@@ -645,6 +651,7 @@ mod tests {
     fn unlock_session_on_auth_defaults_false_when_absent() {
         let cfg: RudpConfig = serde_json::from_str(r#"{"enabled":false}"#).expect("de");
         assert!(!cfg.unlock_session_on_auth);
+        assert!(!cfg.allow_mic_uplink);
     }
 
     #[test]

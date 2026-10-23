@@ -1,8 +1,10 @@
 //! Video decode for Metis Remote (RUDP).
 //!
-//! Decodes H.264 / HEVC access units into packed RGBA8 frames via system
-//! FFmpeg. [`open_decoder`] tries VAAPI → NVDEC/cuvid → software, always
-//! downloading hardware surfaces to CPU RGBA for GTK.
+//! Decodes H.264 / HEVC / AV1 access units into packed RGBA8 frames via system
+//! FFmpeg. [`open_decoder`] tries VAAPI → NVDEC/cuvid → software;
+//! [`open_decoder_prefer_nvdec`] puts NVDEC first when an NVIDIA GPU is present
+//! (Phase 24 J / Performance). Hardware surfaces are always downloaded to CPU
+//! RGBA for GTK (`MemoryTexture`); dmabuf/GL present is deferred.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
@@ -11,9 +13,12 @@ mod ffmpeg_dec;
 mod ffmpeg_hw;
 mod types;
 
+pub use detect::{decode_candidates, decode_candidates_prefer_nvdec, has_nvidia_render_node};
 pub use ffmpeg_dec::FfmpegSoftDecoder;
 pub use ffmpeg_hw::FfmpegHwDecoder;
 pub use types::{DecodeError, DecodeResult, DecodedFrame, DecoderBackend, DecoderInfo, RudpCodec};
+
+use std::path::PathBuf;
 
 /// Video decoder: push compressed AUs, pull RGBA frames.
 pub trait VideoDecoder: Send {
@@ -35,6 +40,16 @@ pub fn open_decoder(
     open_decoder_with(DecoderBackend::Auto, codec, width, height)
 }
 
+/// Open a decoder preferring NVDEC when an NVIDIA render node exists
+/// (Phase 24 J — Viewer Performance). Falls back to Auto order otherwise.
+pub fn open_decoder_prefer_nvdec(
+    codec: RudpCodec,
+    width: u32,
+    height: u32,
+) -> DecodeResult<Box<dyn VideoDecoder>> {
+    open_from_candidates(decode_candidates_prefer_nvdec(), codec, width, height)
+}
+
 /// Open a decoder for `backend` (Auto expands to the candidate ladder).
 pub fn open_decoder_with(
     backend: DecoderBackend,
@@ -42,7 +57,15 @@ pub fn open_decoder_with(
     width: u32,
     height: u32,
 ) -> DecodeResult<Box<dyn VideoDecoder>> {
-    let candidates = detect::decode_candidates(backend);
+    open_from_candidates(detect::decode_candidates(backend), codec, width, height)
+}
+
+fn open_from_candidates(
+    candidates: Vec<(DecoderBackend, Option<PathBuf>)>,
+    codec: RudpCodec,
+    width: u32,
+    height: u32,
+) -> DecodeResult<Box<dyn VideoDecoder>> {
     let mut last_err = DecodeError::Unavailable("no decoder candidates".into());
 
     for (cand_backend, device) in candidates {

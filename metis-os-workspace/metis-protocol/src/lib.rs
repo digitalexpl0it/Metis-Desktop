@@ -5,6 +5,7 @@ mod rate_limit;
 mod rudp_audio;
 mod rudp_ctrl;
 mod rudp_host_ipc;
+mod rudp_mic;
 mod rudp_video;
 
 pub use metis_grid::{GridLayout, GridMetrics, LayoutKind, MonitorRect, PixelRect};
@@ -25,10 +26,15 @@ pub use rudp_ctrl::{
     truncate_clipboard_text, try_decode_rudp_frame,
 };
 pub use rudp_host_ipc::{
-    CompToHost, HostToComp, IpcEncodedAudio, IpcEncodedVideo, IpcStreamInfo,
+    CompToHost, HostToComp, IpcEncodedAudio, IpcEncodedVideo, IpcMicUplink, IpcStreamInfo,
     RUDP_HOST_IPC_MAX_HEADER, RUDP_HOST_IPC_MAX_PAYLOAD, RUDP_HOST_IPC_SOCK, RUDP_HOST_IPC_VERSION,
     RudpHostInput, RudpHostIpcMessage, encode_host_ipc_frame, read_host_ipc_frame,
     rudp_host_ipc_dir, rudp_host_ipc_path, write_host_ipc_frame,
+};
+pub use rudp_mic::{
+    MicDatagram, RUDP_MIC_CHANNELS, RUDP_MIC_DATAGRAM_VERSION, RUDP_MIC_FRAME_MS,
+    RUDP_MIC_FRAME_SAMPLES, RUDP_MIC_HEADER_LEN, RUDP_MIC_MAGIC, RUDP_MIC_SAMPLE_RATE,
+    encode_mic_datagram, is_mic_datagram, try_decode_mic_datagram,
 };
 pub use rudp_video::{
     CODEC_AV1, CODEC_H264, CODEC_HEVC, DatagramHeader, FLAG_DAMAGE_FULL, FLAG_FEC, FLAG_KEY,
