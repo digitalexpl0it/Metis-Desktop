@@ -99,8 +99,7 @@ fn run_capture_session(stop: &AtomicBool, audio: &RudpAudioShared) -> Result<(),
     use libpulse_simple_binding::Simple;
     use opus::{Application, Bitrate, Channels, Encoder};
 
-    let monitor = resolve_monitor_source()
-        .ok_or_else(|| "no default sink monitor (is PipeWire/Pulse running?)".to_string())?;
+    let monitor = resolve_monitor_source();
 
     let channels = RUDP_AUDIO_CHANNELS;
     let rate = RUDP_AUDIO_SAMPLE_RATE;
@@ -182,7 +181,19 @@ fn run_capture_session(stop: &AtomicBool, audio: &RudpAudioShared) -> Result<(),
     Ok(())
 }
 
-fn resolve_monitor_source() -> Option<String> {
+/// Default-sink monitor for system-audio capture.
+///
+/// Uses `pactl` when present (clearer logs); otherwise Pulse/PipeWire's
+/// `@DEFAULT_MONITOR@` alias so Metis Remote audio still works without
+/// `pulseaudio-utils` installed.
+fn resolve_monitor_source() -> String {
+    if let Some(name) = pactl_default_sink_monitor() {
+        return name;
+    }
+    "@DEFAULT_MONITOR@".into()
+}
+
+fn pactl_default_sink_monitor() -> Option<String> {
     let out = std::process::Command::new("pactl")
         .args(["get-default-sink"])
         .output()

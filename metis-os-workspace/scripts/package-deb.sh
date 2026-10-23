@@ -112,11 +112,13 @@ write_control() {
   case "$CONTROL_PROFILE" in
     ubuntu26.04)
       # Ubuntu 26.04 (resolute) ships libdisplay-info3 (0.3); libdisplay-info1 is gone.
-      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0t64 | libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3t64 | libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd, network-manager"
+      # Audio: libpulse0 (API), pulseaudio-utils (pactl), pipewire stack (session),
+      # libopus0 (Metis Remote Opus), libasound2 (Viewer cpal).
+      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0t64 | libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, pulseaudio-utils, pipewire, pipewire-pulse, wireplumber, libopus0, libasound2t64 | libasound2, libssl3t64 | libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd, network-manager"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, pipewire, pipewire-pulse, wireplumber, network-manager-openvpn, openssh-client, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, network-manager-openvpn, openssh-client, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
       suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools, ibus, fcitx5-chinese-addons, fcitx5-mozc, fcitx5-anthy"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."
@@ -125,11 +127,13 @@ write_control() {
       fi
       ;;
     debian13)
-      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd, network-manager"
+      # Audio: libpulse0 (API), pulseaudio-utils (pactl), pipewire stack (session),
+      # libopus0 (Metis Remote Opus), libasound2 (Viewer cpal).
+      depends="libgtk-4-1 (>= 4.18), libadwaita-1-0, libglib2.0-0, libpango-1.0-0, libcairo2, libgraphene-1.0-0, libseat1, libinput10, libudev1, libgbm1, libdrm2, libegl1, libgles2, libwayland-client0, libwayland-server0, libxkbcommon0, libpipewire-0.3-0, libpulse0, pulseaudio-utils, pipewire, pipewire-pulse, wireplumber, libopus0, libasound2, libssl3, libpam0g, libdisplay-info3 | libdisplay-info2 | libdisplay-info1, libeis1, liblcms2-2, libfreerdp3-3, libfreerdp-server3-3, libfreerdp-shadow3-3, libfreerdp-shadow-subsystem3-3, libwinpr3-3, xdg-desktop-portal, kitty, pkexec, polkitd, network-manager"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, pipewire, pipewire-pulse, wireplumber, network-manager-openvpn, openssh-client, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, network-manager-openvpn, openssh-client, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
       suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools, ibus, fcitx5-chinese-addons, fcitx5-mozc, fcitx5-anthy"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."

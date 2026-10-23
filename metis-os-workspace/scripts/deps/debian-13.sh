@@ -67,6 +67,10 @@ METIS_APT_PACKAGES=(
   pipewire
   pipewire-pulse
   wireplumber
+  # pactl (Metis Remote + equalizer monitor discovery); Opus / ALSA runtimes.
+  pulseaudio-utils
+  libopus0
+  libasound2
   # Phase 20 §A — Wayland IME (Fcitx5 preferred; engines are Suggests on .deb).
   fcitx5
   fcitx5-frontend-gtk4
