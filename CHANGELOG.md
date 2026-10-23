@@ -57,6 +57,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Security
 
+- **Tokio `AsyncFd` I/O-safety advisory** — bump `tokio` **1.53.1 → 1.53.3**
+  (`RUSTSEC-2026-0386`). Drop stale `getrandom@0.3.4` `cargo-deny` ban skip.
 - **Phase 23 §A — AccountsService icon confused-deputy** — `pk-accounts-set-icon`
   no longer takes a user path as root. The unprivileged side opens with
   `O_NOFOLLOW`, caps size, and decodes as PNG/JPEG; root installs **stdin bytes**
