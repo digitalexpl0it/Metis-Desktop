@@ -110,9 +110,9 @@ is tracked under **Product backlog — Desktop maturity** below.
 **Suggested order:** S1–S3 + MultiRenderer **1** + HDR float scene **2** landed
 → colour protocol default-on (**3b** / **M2**, blocked) or engineering backlog;
 Gamescope **4** and native remote **3** landed.
-**Next product stream:** Phase 24 workload validation + Phase 25 follow-ons
-(webcam / AEC deferred); prior **Phase 24** Metis Remote quality presets (Performance
-for gaming / CAD / Blender / movies; High / Medium / Low for day-to-day).
+**Next product stream:** Phase 24/25 **live validation** (Gaming / CAD /
+Blender / Movie / Everyday + mic allow/deny/lock / Sound mute) — CI unblocked
+2026-10-23 (`libavfilter-dev` + smoke mic arms). Webcam / AEC deferred.
 
 ### Product backlog — Themes, icons, default apps (2026-10-18)
 
@@ -2645,6 +2645,8 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
 
 ### Workloads to validate
 
+*(Human / two-machine pass — agent cannot drive GPU sessions. Tick when run.)*
+
 - [ ] **Gaming** — fullscreen Proton/native; relative mouse + pointer lock;
       motion without multi-second trail.
 - [ ] **CAD / Blender** — orbit / pan / scrub timeline; UI text remains sharp
@@ -2694,6 +2696,8 @@ remain deferred (`pts_us` still reserved).
       downlink mute); cpal input → Opus → `MRUM` after `MicReady`.
 - [x] **Docs / tests** — USER_GUIDE; protocol/unit roundtrips for mic msgs +
       `MRUM` header.
+- [ ] **Live validation** — allow + Mic → host hears; allow off / lock deny;
+      Sound mute local-only (human; same sprint as Phase 24 workloads).
 
 ### Explicitly out of Phase 25
 
