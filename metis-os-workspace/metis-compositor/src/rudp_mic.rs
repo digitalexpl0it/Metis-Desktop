@@ -205,13 +205,17 @@ fn run_inject_session(stop: &AtomicBool, shared: &EngineShared) -> Result<(), St
 pub fn apply_mic_enable(shared: &EngineShared, enabled: bool) {
     if enabled {
         shared.mic.demand.fetch_add(1, Ordering::SeqCst);
-    } else {
-        let _ = shared
-            .mic
-            .demand
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |d| {
-                Some(d.saturating_sub(1))
-            });
+        return;
+    }
+    // Saturating decrement without deprecated `AtomicUsize::fetch_update`.
+    let demand = &shared.mic.demand;
+    loop {
+        let cur = demand.load(Ordering::SeqCst);
+        let next = cur.saturating_sub(1);
+        match demand.compare_exchange(cur, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => break,
+            Err(_) => continue,
+        }
     }
 }
 
