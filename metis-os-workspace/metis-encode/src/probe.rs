@@ -144,10 +144,13 @@ pub fn probe_encoder_open(cfg: &EncoderConfig, drm_render_node: &str) -> bool {
 
 /// Codec try order. VAAPI prefers H.264 first — many Intel iGPUs lack HEVC
 /// encode entrypoints and libva/ffmpeg have aborted the process on open.
-/// `Soft` only ever encodes AV1.
+/// `Soft` prefers H.264 for interactive desktop, then AV1.
 pub fn codec_ladder(preferred: RudpCodec, backend: EncoderBackend) -> Vec<RudpCodec> {
     match backend {
-        EncoderBackend::Soft => vec![RudpCodec::Av1],
+        EncoderBackend::Soft => match preferred {
+            RudpCodec::Av1 => vec![RudpCodec::Av1, RudpCodec::H264],
+            _ => vec![RudpCodec::H264, RudpCodec::Av1],
+        },
         EncoderBackend::Vaapi | EncoderBackend::Auto => match preferred {
             // Always probe H.264 before HEVC on VAAPI; AV1 after H.264 when preferred.
             RudpCodec::H264 => vec![RudpCodec::H264, RudpCodec::Av1, RudpCodec::Hevc],
@@ -191,13 +194,19 @@ mod tests {
     }
 
     #[test]
-    fn soft_is_av1_only() {
-        for preferred in [RudpCodec::H264, RudpCodec::Hevc, RudpCodec::Av1] {
-            assert_eq!(
-                codec_ladder(preferred, EncoderBackend::Soft),
-                vec![RudpCodec::Av1]
-            );
-        }
+    fn soft_prefers_h264_then_av1() {
+        assert_eq!(
+            codec_ladder(RudpCodec::H264, EncoderBackend::Soft),
+            vec![RudpCodec::H264, RudpCodec::Av1]
+        );
+        assert_eq!(
+            codec_ladder(RudpCodec::Hevc, EncoderBackend::Soft),
+            vec![RudpCodec::H264, RudpCodec::Av1]
+        );
+        assert_eq!(
+            codec_ladder(RudpCodec::Av1, EncoderBackend::Soft),
+            vec![RudpCodec::Av1, RudpCodec::H264]
+        );
     }
 
     #[test]

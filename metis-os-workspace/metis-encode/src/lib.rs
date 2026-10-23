@@ -97,13 +97,23 @@ pub fn open_encoder(
         match opened {
             Ok(enc) => {
                 if rung.backend == EncoderBackend::Soft {
-                    tracing::warn!(
-                        attempt = %label,
-                        encoder = %enc.info().encoder_name,
-                        width = cfg.width,
-                        height = cfg.height,
-                        "metis-encode: using CPU software AV1 (high CPU load)"
-                    );
+                    if rung.codec == RudpCodec::Av1 {
+                        tracing::warn!(
+                            attempt = %label,
+                            encoder = %enc.info().encoder_name,
+                            width = cfg.width,
+                            height = cfg.height,
+                            "metis-encode: using CPU software AV1 (high CPU load)"
+                        );
+                    } else {
+                        tracing::warn!(
+                            attempt = %label,
+                            encoder = %enc.info().encoder_name,
+                            width = cfg.width,
+                            height = cfg.height,
+                            "metis-encode: using CPU software encode (Soft)"
+                        );
+                    }
                 } else {
                     tracing::info!(
                         attempt = %label,

@@ -182,11 +182,12 @@ fn soft_av1_encode_produces_keyframe() {
     encode_roundtrip(EncoderBackend::Soft, RudpCodec::Av1, "/dev/null");
 }
 
-/// Explicit `Soft` forces AV1 on the CPU even when H.264 is the preferred codec.
+/// Explicit `Soft` prefers interactive H.264 (`libx264`) when that is the
+/// configured codec (default); Soft AV1 remains available when Av1 is preferred.
 #[test]
-fn soft_backend_forces_av1_over_preferred_codec() {
-    if metis_encode::soft_av1_encoder_name().is_none() {
-        eprintln!("skipped: no software AV1 encoder in FFmpeg");
+fn soft_backend_prefers_h264_for_interactive() {
+    if metis_encode::soft_h264_encoder_name().is_none() {
+        eprintln!("skipped: no software H.264 encoder (libx264) in FFmpeg");
         return;
     }
     let _g = serial();
@@ -194,7 +195,7 @@ fn soft_backend_forces_av1_over_preferred_codec() {
     let config = cfg(320, 240, EncoderBackend::Soft); // codec = H264
     let enc = ProcessEncoder::spawn(&config, "/dev/null", None).expect("soft worker init");
     assert_eq!(enc.info().backend, EncoderBackend::Soft);
-    assert_eq!(enc.info().codec, RudpCodec::Av1);
+    assert_eq!(enc.info().codec, RudpCodec::H264);
 }
 
 /// Spawn a worker for exactly `backend`/`codec`, encode 10 frames (padded
