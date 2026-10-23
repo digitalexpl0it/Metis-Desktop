@@ -31,7 +31,7 @@ pub use ffmpeg_enc::FfmpegHwEncoder;
 pub use null::NullEncoder;
 pub use probe::{codec_ladder, probe_binary_path, probe_encoder_open};
 pub use process::{ProcessEncoder, open_isolated_encoder};
-pub use soft_enc::{FfmpegSoftEncoder, soft_av1_encoder_name};
+pub use soft_enc::{FfmpegSoftEncoder, soft_av1_encoder_name, soft_h264_encoder_name};
 pub use types::{
     DEFAULT_BITRATE_KBPS, DEFAULT_FPS_HINT, DamageRect, EncodeError, EncodeInput, EncodedPacket,
     EncoderBackend, EncoderConfig, EncoderInfo, RudpCodec,
@@ -61,11 +61,10 @@ pub trait HwEncoder: Send {
 /// Open an encoder **in the calling process** for `cfg` using
 /// `drm_render_node` (e.g. `/dev/dri/renderD128`).
 ///
-/// Only call this from the isolated worker; the compositor must use
-/// [`open_isolated_encoder`]. Each rung of [`encode_ladder`] is probed in a
-/// child first so an abort on open doesn't lose the fallback ladder. VAAPI
-/// tries H.264 first; `Auto` + AV1 tries HW AV1, then software AV1, then HW
-/// H.264/HEVC; `Soft` is software AV1 only.
+/// Prefer [`open_isolated_encoder`] from the compositor except Wave 2
+/// Performance (`prefer_native_encode`). Each rung of [`encode_ladder`] is
+/// probed in a child first so an abort on open doesn't lose the fallback
+/// ladder. `Soft` prefers H.264 (`libx264`) then AV1.
 pub fn open_encoder(
     cfg: &EncoderConfig,
     drm_render_node: &str,

@@ -97,12 +97,12 @@ pub struct EncodeAttempt {
 
 /// Ordered encode attempts for `requested` / `preferred`.
 ///
-/// - `Soft`: software AV1 only (never falls back to hardware).
+/// - `Soft`: software H.264 first (interactive), then software AV1.
 /// - `Vaapi` / `Nvenc`: that backend's [`codec_ladder`].
 /// - `Auto` + preferred AV1: hardware AV1 on every candidate backend, then
 ///   software AV1, then the remaining hardware H.264/HEVC ladder.
-/// - `Auto` otherwise: hardware ladders only (software AV1 is CPU-heavy and
-///   never chosen unless AV1 was asked for or `Soft` was selected explicitly).
+/// - `Auto` + preferred H.264/HEVC: hardware ladders, then **Soft H.264** as the
+///   last interactive fallback (not Soft AV1 — too slow for day-to-day UI).
 pub fn encode_ladder(
     requested: EncoderBackend,
     preferred: RudpCodec,
@@ -123,13 +123,21 @@ fn build_ladder(
     candidates: &[(EncoderBackend, PathBuf)],
     drm_render_node: &str,
 ) -> Vec<EncodeAttempt> {
-    let soft = EncodeAttempt {
+    let soft_h264 = EncodeAttempt {
+        backend: EncoderBackend::Soft,
+        codec: RudpCodec::H264,
+        device: PathBuf::from(drm_render_node),
+    };
+    let soft_av1 = EncodeAttempt {
         backend: EncoderBackend::Soft,
         codec: RudpCodec::Av1,
         device: PathBuf::from(drm_render_node),
     };
     if requested == EncoderBackend::Soft {
-        return vec![soft];
+        return match preferred {
+            RudpCodec::Av1 => vec![soft_av1, soft_h264],
+            _ => vec![soft_h264, soft_av1],
+        };
     }
 
     let hw: Vec<&(EncoderBackend, PathBuf)> = candidates
@@ -147,7 +155,7 @@ fn build_ladder(
                 device: device.clone(),
             });
         }
-        out.push(soft);
+        out.push(soft_av1.clone());
     }
     for (backend, device) in &hw {
         for codec in codec_ladder(preferred, *backend) {
@@ -160,6 +168,11 @@ fn build_ladder(
                 device: device.clone(),
             });
         }
+    }
+    // Interactive Soft H.264 last for Auto+H264 so Medium never sits on Soft AV1.
+    // Explicit Vaapi/Nvenc stay hardware-only (crash-contain Soft separately).
+    if requested == EncoderBackend::Auto && !av1_first {
+        out.push(soft_h264);
     }
     out
 }
@@ -228,23 +241,34 @@ mod tests {
     }
 
     #[test]
-    fn explicit_soft_is_soft_av1_only() {
+    fn explicit_soft_prefers_h264_then_av1() {
         let cands = [(EncoderBackend::Vaapi, node("/dev/dri/renderD128"))];
-        for preferred in [RudpCodec::H264, RudpCodec::Hevc, RudpCodec::Av1] {
-            let l = build_ladder(
-                EncoderBackend::Soft,
-                preferred,
-                &cands,
-                "/dev/dri/renderD128",
-            );
-            assert_eq!(pairs(&l), vec![(EncoderBackend::Soft, RudpCodec::Av1)]);
-        }
-        let l = encode_ladder(
+        let l = build_ladder(
             EncoderBackend::Soft,
             RudpCodec::H264,
-            "/dev/dri/renderD-missing",
+            &cands,
+            "/dev/dri/renderD128",
         );
-        assert_eq!(pairs(&l), vec![(EncoderBackend::Soft, RudpCodec::Av1)]);
+        assert_eq!(
+            pairs(&l),
+            vec![
+                (EncoderBackend::Soft, RudpCodec::H264),
+                (EncoderBackend::Soft, RudpCodec::Av1),
+            ]
+        );
+        let l = build_ladder(
+            EncoderBackend::Soft,
+            RudpCodec::Av1,
+            &cands,
+            "/dev/dri/renderD128",
+        );
+        assert_eq!(
+            pairs(&l),
+            vec![
+                (EncoderBackend::Soft, RudpCodec::Av1),
+                (EncoderBackend::Soft, RudpCodec::H264),
+            ]
+        );
     }
 
     #[test]
@@ -292,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_non_av1_never_uses_soft() {
+    fn auto_non_av1_ends_with_soft_h264() {
         let cands = [(EncoderBackend::Vaapi, node("/dev/dri/renderD128"))];
         for preferred in [RudpCodec::H264, RudpCodec::Hevc] {
             let l = build_ladder(
@@ -301,8 +325,11 @@ mod tests {
                 &cands,
                 "/dev/dri/renderD128",
             );
-            assert!(l.iter().all(|a| a.backend != EncoderBackend::Soft));
             assert_eq!(l[0].codec, RudpCodec::H264);
+            assert_eq!(
+                l.last().map(|a| (a.backend, a.codec)),
+                Some((EncoderBackend::Soft, RudpCodec::H264))
+            );
         }
     }
 

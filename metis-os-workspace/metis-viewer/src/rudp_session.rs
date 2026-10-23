@@ -579,11 +579,26 @@ struct StreamWindow {
     video_size: Cell<(u32, u32)>,
     last_pos: Cell<(f64, f64)>,
     decoder: RefCell<Option<Box<dyn metis_decode::VideoDecoder>>>,
+    /// Base status (size · codec · decoder) without latency suffix.
+    status_base: RefCell<String>,
+    /// Last access-unit decode+present (µs) for the connection-bar latency HUD.
+    last_decode_us: Cell<u64>,
 }
 
 impl StreamWindow {
     fn set_status(&self, text: &str) {
-        self.bar_status.set_text(text);
+        *self.status_base.borrow_mut() = text.to_string();
+        self.refresh_status_hud();
+    }
+
+    fn refresh_status_hud(&self) {
+        let base = self.status_base.borrow();
+        let us = self.last_decode_us.get();
+        if us == 0 || base.is_empty() {
+            self.bar_status.set_text(base.as_str());
+        } else {
+            self.bar_status.set_text(&format!("{base} · decode {us}µs"));
+        }
     }
 
     fn set_bar_revealed(&self, revealed: bool) {
@@ -1030,6 +1045,8 @@ impl SessionUi {
             video_size: Cell::new((0, 0)),
             last_pos: Cell::new((0.0, 0.0)),
             decoder: RefCell::new(None),
+            status_base: RefCell::new(String::new()),
+            last_decode_us: Cell::new(0),
         });
         sw.set_bar_revealed(self.bar_revealed.get());
         self.windows.borrow_mut().push(Rc::clone(&sw));
@@ -1531,11 +1548,18 @@ impl SessionUi {
             }
             *slot = Some(d);
         }
-        if let Some(dec) = slot.as_mut()
-            && let Ok(Some(frame)) = dec.push_au(&au.data)
-        {
-            sw.video_size.set((frame.width, frame.height));
-            present_rgba(&sw.picture, &frame.rgba, frame.width, frame.height);
+        if let Some(dec) = slot.as_mut() {
+            let t0 = std::time::Instant::now();
+            if let Ok(Some(frame)) = dec.push_au(&au.data) {
+                sw.video_size.set((frame.width, frame.height));
+                present_rgba(&sw.picture, &frame.rgba, frame.width, frame.height);
+                sw.last_decode_us.set(
+                    u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX),
+                );
+                if !self.pointer_locked.get() {
+                    sw.refresh_status_hud();
+                }
+            }
         }
     }
 }

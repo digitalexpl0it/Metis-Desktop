@@ -54,6 +54,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **Metis Remote typing produced wrong characters** — Viewer maps keys from
   GTK keyvals (evdev table) instead of trusting hardware scancodes that were
   sometimes treated as XKB and off-by-8 (e.g. A→U).
+- **Metis Remote local-feel (dismiss / Soft)** — forced full frames stay pending
+  until fence + encode succeed (not at export publish). `close-popovers` arms
+  Remote immediately. Soft **H.264** emergency while HW encoder backoff so menu
+  dismiss no longer waits 5–15s. Force epochs coalesce; sparse export reuses a
+  sticky pool slot. Performance can use in-process encode
+  (`prefer_native_encode` / `METIS_RUDP_NATIVE_ENCODE`). Latency HUD: host
+  fence/encode µs in encode status; Viewer connection bar shows decode µs.
 
 ### Security
 

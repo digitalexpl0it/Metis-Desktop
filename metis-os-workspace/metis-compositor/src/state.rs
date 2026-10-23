@@ -2099,6 +2099,9 @@ impl MetisState {
     ) {
         self.suppress_bar_edge_cmd_until =
             Some(std::time::Instant::now() + std::time::Duration::from_millis(350));
+        // Arm Metis Remote immediately — do not wait for shell idle → popdown →
+        // Wayland commit or the Viewer keeps the open menu for seconds.
+        self.notify_rudp_scene_change();
         if let Err(err) = metis_protocol::write_runtime_command("close-popovers") {
             tracing::debug!(%err, "failed to write close-popovers");
         }

@@ -46,7 +46,7 @@ use std::time::{Duration, Instant};
 use metis_config::{RudpEncoderBackend, RudpVideoCodec};
 use metis_encode::{
     DEFAULT_BITRATE_KBPS, DEFAULT_FPS_HINT, EncodeError, EncodeInput, EncoderBackend,
-    EncoderConfig, HwEncoder, NullEncoder, RudpCodec, open_isolated_encoder,
+    EncoderConfig, HwEncoder, NullEncoder, RudpCodec, open_encoder, open_isolated_encoder,
 };
 use metis_protocol::{CODEC_AV1, CODEC_H264, CODEC_HEVC, RudpDamageRect, RudpHostInput};
 use metis_rudp_host::engine::{self, EngineShared, HostLink, MediaPacket, OutboundPacket};
@@ -429,6 +429,8 @@ impl RudpHostSystem {
         ));
         let prefs_live = Arc::new(Mutex::new(encode_prefs.clone()));
         let prefs_gen = Arc::new(AtomicU64::new(1));
+        let last_fence_us = Arc::new(AtomicU64::new(0));
+        let last_encode_us = Arc::new(AtomicU64::new(0));
         let frame_ctx = FramePipelineCtx {
             hub: Arc::clone(&hub),
             wake,
@@ -445,6 +447,8 @@ impl RudpHostSystem {
             marker: Arc::clone(&marker),
             started: Instant::now(),
             session_locked: Arc::clone(&bridge.session_locked),
+            last_fence_us: Arc::clone(&last_fence_us),
+            last_encode_us: Arc::clone(&last_encode_us),
         };
         let frame_join = match std::thread::Builder::new()
             .name("metis-rudp-frames".into())
@@ -674,20 +678,73 @@ fn open_hw_encoder(
     render_node: &str,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Box<dyn HwEncoder>, EncodeError> {
+    open_encoder_with_backend(
+        prefs,
+        to_encode_backend(prefs.backend),
+        to_encode_codec(prefs.codec),
+        width,
+        height,
+        render_node,
+        cancel,
+        prefs.prefer_native_encode,
+    )
+}
+
+/// Soft H.264 emergency path while HW worker is in backoff (UI dismiss must not
+/// wait 5–15s). Always isolated — never in-process Soft in the compositor.
+fn open_soft_emergency_encoder(
+    prefs: &RudpEncodePrefs,
+    width: u32,
+    height: u32,
+    render_node: &str,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Box<dyn HwEncoder>, EncodeError> {
+    open_encoder_with_backend(
+        prefs,
+        EncoderBackend::Soft,
+        RudpCodec::H264,
+        width,
+        height,
+        render_node,
+        cancel,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_encoder_with_backend(
+    prefs: &RudpEncodePrefs,
+    backend: EncoderBackend,
+    codec: RudpCodec,
+    width: u32,
+    height: u32,
+    render_node: &str,
+    cancel: &Arc<AtomicBool>,
+    prefer_native: bool,
+) -> Result<Box<dyn HwEncoder>, EncodeError> {
     if std::env::var_os("METIS_ENCODE_NULL").is_some() {
         tracing::warn!("METIS_ENCODE_NULL set — using NullEncoder");
         return Ok(Box::new(NullEncoder::new(width, height)));
     }
     let cfg = EncoderConfig {
-        backend: to_encode_backend(prefs.backend),
-        codec: to_encode_codec(prefs.codec),
+        backend,
+        codec,
         width,
         height,
         fps_hint: DEFAULT_FPS_HINT,
         bitrate_kbps: prefs.bitrate_kbps.max(500),
         gop_secs: prefs.gop_secs.max(1),
     };
-    // Out-of-process: a libva / CUDA crash kills the worker, not the session.
+    // Performance: in-process encode (Wave 2). Crash while Streaming is caught by
+    // rudp_guard on next login. Medium/High/Low stay isolated.
+    if prefer_native || std::env::var_os("METIS_RUDP_NATIVE_ENCODE").is_some() {
+        tracing::info!(
+            backend = ?backend,
+            codec = %codec.as_str(),
+            "rudp encode: opening in-process encoder (Performance / METIS_RUDP_NATIVE_ENCODE)"
+        );
+        return open_encoder(&cfg, render_node);
+    }
     open_isolated_encoder(&cfg, render_node, Some(Arc::clone(cancel)))
 }
 
@@ -712,6 +769,10 @@ struct FramePipelineCtx {
     marker: Arc<HostMarker>,
     started: Instant,
     session_locked: Arc<AtomicBool>,
+    /// Last fence wait (µs) for latency HUD / status.
+    last_fence_us: Arc<AtomicU64>,
+    /// Last encode submit+drain (µs).
+    last_encode_us: Arc<AtomicU64>,
 }
 
 impl FramePipelineCtx {
@@ -941,8 +1002,9 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                         continue;
                     }
                     // Bounded GPU fence wait on this thread — never on calloop / Quinn.
-                    // Timed-out frames are gone from the hub; force a full re-export
-                    // so dismissed UI cannot ghost on the Viewer until idle damage.
+                    // Timed-out frames are gone from the hub; force stays pending
+                    // (not marked delivered) so dismiss cannot ghost.
+                    let fence_t0 = Instant::now();
                     if !frame.wait_ready(FENCE_TIMEOUT) {
                         let msg = "GPU fence not signalled — dropping frame, forcing refresh";
                         if warn_limiter.should_log(msg) {
@@ -953,10 +1015,15 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                                 "rudp encode: {msg}"
                             );
                         }
+                        ctx.last_fence_us
+                            .store(fence_t0.elapsed().as_micros() as u64, Ordering::Relaxed);
                         ctx.request_refresh();
                         continue;
                     }
+                    ctx.last_fence_us
+                        .store(fence_t0.elapsed().as_micros() as u64, Ordering::Relaxed);
                     let damage_full = frame.damage_full;
+                    let force_epoch = frame.force_epoch;
                     let pipe = pipes.entry(frame.output_name.clone()).or_default();
                     let mode = if damage_full {
                         EncodeMode::Full
@@ -981,12 +1048,19 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                     let Some(pipe) = pipes.get_mut(&frame.output_name) else {
                         continue;
                     };
+                    let enc_t0 = Instant::now();
                     if process_frame(&ctx, pipe, &mut warn_limiter, &render_node, &frame, multi) {
+                        ctx.last_encode_us
+                            .store(enc_t0.elapsed().as_micros() as u64, Ordering::Relaxed);
+                        if let Some(epoch) = force_epoch {
+                            ctx.hub
+                                .mark_forced_delivered(frame.output_name.as_str(), epoch);
+                        }
                         fps = fps.saturating_add(1);
                         last = Some((frame.seq, frame.width, frame.height, frame.fds.len()));
-                    } else if damage_full {
-                        // Full/dismiss frame failed encode (worker reopen, etc.) —
-                        // idle desks would otherwise keep the pre-dismiss image.
+                    } else if damage_full || force_epoch.is_some() {
+                        // Full/dismiss frame failed encode — keep force pending
+                        // and retry without waiting on the 5s/15s open backoff.
                         ctx.request_refresh();
                     }
                     // Dropping `frame` returns its pool BO via SlotReleaseGuard.
@@ -1005,6 +1079,8 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                     .ok()
                     .and_then(|g| g.clone())
                     .unwrap_or_else(|| "none".into());
+                let fence_us = ctx.last_fence_us.load(Ordering::Relaxed);
+                let encode_us = ctx.last_encode_us.load(Ordering::Relaxed);
                 tracing::debug!(
                     fps,
                     seq,
@@ -1013,9 +1089,15 @@ fn frame_pipeline_loop(ctx: FramePipelineCtx) {
                     planes,
                     streams = pipes.len(),
                     encoder = %active,
+                    fence_us,
+                    encode_us,
                     bytes = ctx.bytes_encoded.load(Ordering::Relaxed),
                     "rudp host: encode rate"
                 );
+                // Latency HUD snapshot in encode_status (Settings / debug).
+                ctx.set_status(format!(
+                    "{active} | fence {fence_us}µs encode {encode_us}µs"
+                ));
             }
             fps = 0;
             last_log = Instant::now();
@@ -1053,15 +1135,47 @@ fn process_frame(
     if !size_matches {
         // Size change or no encoder yet: replace the worker.
         pipe.encoder = None;
-        if !pipe.supervisor.may_open(now) {
-            return false;
-        }
+        let urgent = frame.damage_full || frame.force_epoch.is_some();
         let prefs = ctx
             .prefs
             .lock()
             .map(|g| g.clone())
             .unwrap_or_else(|e| e.into_inner().clone());
-        match open_hw_encoder(&prefs, frame.width, frame.height, render_node, &ctx.stop) {
+        let opened = if pipe.supervisor.may_open(now) {
+            match open_hw_encoder(&prefs, frame.width, frame.height, render_node, &ctx.stop) {
+                Ok(enc) => Ok(enc),
+                Err(EncodeError::Cancelled) => return false,
+                Err(hw_err) if urgent => {
+                    tracing::warn!(
+                        output = %frame.output_name,
+                        err = %hw_err,
+                        "rudp encode: HW open failed on Full/forced — Soft H.264 emergency"
+                    );
+                    open_soft_emergency_encoder(
+                        &prefs,
+                        frame.width,
+                        frame.height,
+                        render_node,
+                        &ctx.stop,
+                    )
+                    .inspect_err(|_| {
+                        // Record HW failure for backoff; Soft miss does not
+                        // extend the ladder further this turn.
+                        let _ = pipe.supervisor.record_failure(now);
+                    })
+                }
+                Err(err) => Err(err),
+            }
+        } else if urgent {
+            tracing::warn!(
+                output = %frame.output_name,
+                "rudp encode: HW backoff — Soft H.264 emergency for Full/forced frame"
+            );
+            open_soft_emergency_encoder(&prefs, frame.width, frame.height, render_node, &ctx.stop)
+        } else {
+            return false;
+        };
+        match opened {
             Ok(enc) => {
                 let info = enc.info();
                 let mut label = format!(
@@ -1077,7 +1191,8 @@ fn process_frame(
                 tracing::info!(
                     output = %frame.output_name,
                     %label,
-                    "rudp encode: encoder ready (isolated worker)"
+                    native = prefs.prefer_native_encode,
+                    "rudp encode: encoder ready"
                 );
                 let codec = codec_to_wire(info.codec);
                 ctx.set_status(label);
@@ -1093,6 +1208,15 @@ fn process_frame(
             Err(EncodeError::Cancelled) => return false,
             Err(err) => {
                 let msg = err.to_string();
+                if urgent && !pipe.supervisor.may_open(now) {
+                    tracing::warn!(
+                        output = %frame.output_name,
+                        err = %msg,
+                        "rudp encode: Soft emergency open failed — refresh and retry"
+                    );
+                    ctx.set_error(Some(msg));
+                    return false;
+                }
                 if pipe.supervisor.record_failure(now) {
                     tracing::error!(
                         output = %frame.output_name,

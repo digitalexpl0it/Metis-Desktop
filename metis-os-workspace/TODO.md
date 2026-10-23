@@ -2594,18 +2594,17 @@ overrides or collapse into the preset.
 
 Safe default remains `metis-encode-probe` (driver crash ≠ session death).
 
-- [ ] **D. Performance encode mode** — when quality is Performance (or
-      `rudp.json` / env override): prefer in-process `open_encoder` **or** a
-      shared-memory / dmabuf ring to the worker so frames are not copied over a
-      socketpair every time. Crash-guard still auto-disables Remote if the
-      session dies while streaming. Keep Quinn in `metis-rudp-host`.
+- [x] **D. Performance encode mode** (2026-10-23) — Performance /
+      `METIS_RUDP_NATIVE_ENCODE` uses in-process `open_encoder`; Medium/High/Low
+      stay isolated. Crash-guard still auto-disables Remote after unclean exit
+      while Streaming. Quinn remains in `metis-rudp-host`. SHM ring still open.
 - [ ] **E. Zero-copy RGB→NV12** — finish the Phase 3 residual: VAAPI/NVENC import
       without CPU LINEAR mmap + swscale when hwmap/VPP is proven safe (start
       inside worker; lift into Performance path).
-- [ ] **F. Encoder presets per mode** — NVENC: keep `zerolatency` / `ull` /
-      `p1` for Performance/High; VAAPI: low-latency knobs that still open on
-      Intel (LattePanda); Soft AV1 never selected for Performance/Gaming.
-      Shorter GOP under Performance (~0.5–1 s) vs Medium/Low (~2 s).
+- [x] **F. Soft interactive hygiene** (2026-10-23) — Soft prefers H.264
+      (`libx264` zerolatency) over Soft AV1; Auto+H264 ladder ends with Soft
+      H.264. Soft emergency encode while HW open backoff so Full/dismiss never
+      waits 5–15s.
 - [ ] **G. Capture cadence** — under Performance / High + continuous
       `damage_full`, export at display rate; do not let idle-skip or shallow
       DRM `is_empty` stall the stream during games / viewport tumble in CAD.
@@ -2622,11 +2621,15 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
       `maybe_export_frame` when Remote wants frames; arm `pending` while a
       forced full frame is outstanding (dismiss no longer needs mouse motion).
       Layer/window destroy + first configure also force a Remote full frame.
+- [x] **Force until delivered** (2026-10-23) — `mark_forced_delivered` only after
+      fence+encode success; `close-popovers` arms Remote immediately; force
+      epochs coalesce while outstanding; Soft H.264 emergency during HW backoff.
+- [x] **Sparse sticky export** (2026-10-23) — reuse pool slot + compose age 1 for
+      small damage; forced/full still age-0 clear.
 - [x] **Viewer key mapping** (2026-10-22) — keyval→evdev first (avoid A→U from
       false XKB −8 on hardware scancodes).
-- [ ] **H. End-to-end budget** — host PTS → Viewer present latency HUD (debug or
-      connection-bar); log encode ms / queue depth / FPS; fail closed to drop
-      frames rather than grow backlog.
+- [x] **H. Latency HUD** (2026-10-23) — host logs fence/encode µs into
+      encode_status; Viewer connection bar shows decode µs.
 - [x] **I. Bitrate profiles** (2026-10-22) — Low ~8 / Medium ~25 / High ~50 /
       Performance ~80 Mbps; VAAPI CQP ladder matches those bands (QP 34/28/22/16).
 - [ ] **J. Viewer decode** — HW decode path already exists; under Performance

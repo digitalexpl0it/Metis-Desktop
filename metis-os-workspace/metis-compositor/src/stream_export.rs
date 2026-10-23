@@ -85,6 +85,10 @@ pub struct ExportedFrame {
     pub damage_full: bool,
     /// Sparse physical dirty rects when `!damage_full`; empty when full.
     pub damage: Vec<DamageRect>,
+    /// When set, this frame satisfies a [`StreamExportHub::request_full_frame`]
+    /// epoch — the encode thread must call [`StreamExportHub::mark_forced_delivered`]
+    /// only after fence wait + successful encode (not at publish time).
+    pub force_epoch: Option<u64>,
     /// Explicit sync fence FD when the GLES sync point is exportable.
     /// Prefer awaiting this on the encode thread (never on the render path).
     pub fence: Option<OwnedFd>,
@@ -93,6 +97,8 @@ pub struct ExportedFrame {
     pub sync: SyncPoint,
     /// RAII: clears `busy_slots[index]` when the last clone is dropped.
     _slot_guard: Option<Arc<SlotReleaseGuard>>,
+    /// Pool slot index (for sparse sticky reuse).
+    pub(crate) slot_index: Option<usize>,
 }
 
 impl std::fmt::Debug for ExportedFrame {
@@ -108,8 +114,9 @@ impl std::fmt::Debug for ExportedFrame {
             .field("planes", &self.fds.len())
             .field("damage_full", &self.damage_full)
             .field("damage_rects", &self.damage.len())
+            .field("force_epoch", &self.force_epoch)
             .field("has_fence", &self.fence.is_some())
-            .field("slot", &self._slot_guard.as_ref().map(|g| g.slot_index))
+            .field("slot", &self.slot_index)
             .finish()
     }
 }
@@ -228,6 +235,8 @@ struct PoolState {
     slots: Vec<PoolSlot>,
     busy: Vec<bool>,
     fourcc: Fourcc,
+    /// Last slot used for a successful publish (sparse sticky reuse).
+    sticky_slot: Option<usize>,
 }
 
 /// Persistent scene-damage tracker (separate from full-frame pool compose).
@@ -236,8 +245,12 @@ struct ExportDamageState {
     scale: Scale<f64>,
     transform: Transform,
     tracker: OutputDamageTracker,
+    /// Compose tracker for sparse sticky-slot redraws (age > 0).
+    compose_tracker: OutputDamageTracker,
     /// Next `damage_output` age: 0 after reset, then 1.
     first: bool,
+    /// Sticky slot retained valid previous pixels for sparse blit.
+    sticky_valid: bool,
 }
 
 impl PoolState {
@@ -246,6 +259,7 @@ impl PoolState {
             slots: Vec::new(),
             busy: Vec::new(),
             fourcc: Fourcc::Xrgb8888,
+            sticky_slot: None,
         }
     }
 
@@ -269,6 +283,7 @@ impl PoolState {
         }
         self.slots.clear();
         self.busy.clear();
+        self.sticky_slot = None;
         let mut allocator =
             DmabufAllocator(GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING));
 
@@ -312,9 +327,22 @@ impl PoolState {
     }
 
     /// Acquire a free pool slot. Returns `None` if all slots are busy (skip frame).
-    fn acquire(pool: &Arc<Mutex<PoolState>>) -> Option<(Dmabuf, Arc<SlotReleaseGuard>)> {
+    ///
+    /// When `prefer_sticky` is set and that slot is free, reuse it so sparse
+    /// compose can use damage age > 0 (previous pixels retained).
+    fn acquire(
+        pool: &Arc<Mutex<PoolState>>,
+        prefer_sticky: bool,
+    ) -> Option<(Dmabuf, Arc<SlotReleaseGuard>, usize)> {
         let mut state = pool.lock().ok()?;
-        let idx = state.busy.iter().position(|&b| !b)?;
+        let idx = if prefer_sticky
+            && let Some(s) = state.sticky_slot
+            && state.busy.get(s).copied() == Some(false)
+        {
+            s
+        } else {
+            state.busy.iter().position(|&b| !b)?
+        };
         state.busy[idx] = true;
         let dmabuf = state.slots.get(idx)?.dmabuf.clone();
         drop(state);
@@ -322,7 +350,13 @@ impl PoolState {
             slot_index: idx,
             pool: Arc::clone(pool),
         });
-        Some((dmabuf, guard))
+        Some((dmabuf, guard, idx))
+    }
+
+    fn note_published_slot(pool: &Arc<Mutex<PoolState>>, idx: usize) {
+        if let Ok(mut state) = pool.lock() {
+            state.sticky_slot = Some(idx);
+        }
     }
 }
 
@@ -478,7 +512,31 @@ impl StreamExportHub {
 
     /// Ask for the next export of **every** subscribed output to be a full
     /// frame, even without scene damage.
+    ///
+    /// Coalesces while a force epoch is still outstanding (not yet delivered
+    /// for every subscribed / primary output) so GTK commit storms do not
+    /// stack N encodes.
     pub fn request_full_frame(&self) {
+        let epoch = self.force_epoch.load(Ordering::SeqCst);
+        let floor = self.force_floor.load(Ordering::SeqCst);
+        if epoch > floor {
+            let Ok(done) = self.forced_done.lock() else {
+                return;
+            };
+            let Ok(subs) = self.subscribed.lock() else {
+                return;
+            };
+            let still_pending = if subs.is_empty() {
+                // Primary-only: any missing or lagging delivery keeps the epoch.
+                done.is_empty() || done.values().any(|&d| d < epoch)
+            } else {
+                subs.iter()
+                    .any(|name| done.get(name).copied().unwrap_or(0) < epoch)
+            };
+            if still_pending {
+                return;
+            }
+        }
         self.force_epoch.fetch_add(1, Ordering::SeqCst);
     }
 
@@ -495,6 +553,12 @@ impl StreamExportHub {
             .and_then(|m| m.get(output_name).copied())
             .unwrap_or(0);
         epoch > done
+    }
+
+    /// Mark that `output_name` has successfully encoded a forced full frame for
+    /// `epoch`. Call from the encode thread only — never at export publish.
+    pub fn mark_forced_delivered(&self, output_name: &str, epoch: u64) {
+        self.mark_forced_done(output_name, epoch);
     }
 
     fn mark_forced_done(&self, output_name: &str, epoch: u64) {
@@ -788,14 +852,21 @@ pub fn maybe_export_frame(
     // pointer (responsive). Compositing the host cursor caused a laggy double-
     // cursor that never lined up with the client's position.
 
-    // Acquire before damage_output so a full pool cannot consume scene damage
-    // without publishing (ghost dismissed UI until the next accidental damage).
-    let Some((mut dmabuf, slot_guard)) = PoolState::acquire(&pool_arc) else {
+    // Prefer sticky slot when not forced so sparse compose can keep prior pixels.
+    let prefer_sticky = !forced;
+    let Some((mut dmabuf, slot_guard, slot_index)) = PoolState::acquire(&pool_arc, prefer_sticky)
+    else {
         tracing::debug!("stream export: pool exhausted — force retry");
         state.stream_export.request_full_frame();
         state.schedule_redraw();
         return;
     };
+    let sticky_reused = prefer_sticky
+        && pool_arc
+            .lock()
+            .ok()
+            .and_then(|p| p.sticky_slot)
+            .is_some_and(|s| s == slot_index);
 
     // Scene damage (persistent per-output tracker). Slot is held; drop it if idle.
     let damage_decision = match state.stream_export.damage.lock() {
@@ -815,7 +886,13 @@ pub fn maybe_export_frame(
                         scale: output_scale,
                         transform,
                         tracker: OutputDamageTracker::new(size_phys, output_scale, transform),
+                        compose_tracker: OutputDamageTracker::new(
+                            size_phys,
+                            output_scale,
+                            transform,
+                        ),
                         first: true,
+                        sticky_valid: false,
                     },
                 );
             }
@@ -854,12 +931,24 @@ pub fn maybe_export_frame(
         }
     };
     let Some((damage_full, damage)) = damage_decision else {
-        // Idle or damage lock failed: release the slot without publishing.
         drop(slot_guard);
         return;
     };
 
-    // Full-frame compose into the pool BO (age 0 / throwaway tracker).
+    // Full clear when forced / large damage / sticky invalid; else sparse blit
+    // into the reused sticky BO (age 1 on the persistent compose tracker).
+    let use_sparse_blit = !forced
+        && !damage_full
+        && sticky_reused
+        && state
+            .stream_export
+            .damage
+            .lock()
+            .ok()
+            .and_then(|m| m.get(output_name.as_str()).map(|d| d.sticky_valid))
+            .unwrap_or(false);
+    let compose_age: usize = if use_sparse_blit { 1 } else { 0 };
+
     let sync = {
         let mut framebuffer = match renderer.bind(&mut dmabuf) {
             Ok(fb) => fb,
@@ -870,18 +959,71 @@ pub fn maybe_export_frame(
                 return;
             }
         };
-        let mut compose_tracker =
-            OutputDamageTracker::new(size_phys, output_scale, Transform::Normal);
-        match compose_tracker.render_output(renderer, &mut framebuffer, 0, &elements, CLEAR_COLOR) {
-            Ok(r) => r.sync,
-            Err(err) => {
-                tracing::warn!(?err, "stream export: render_output failed");
-                state.stream_export.request_full_frame();
+        let render_sync = if use_sparse_blit {
+            let hub = Arc::clone(&state.stream_export);
+            let Ok(mut map) = hub.damage.lock() else {
+                hub.request_full_frame();
                 state.schedule_redraw();
                 return;
+            };
+            let Some(dmg) = map.get_mut(output_name.as_str()) else {
+                drop(map);
+                hub.request_full_frame();
+                state.schedule_redraw();
+                return;
+            };
+            match dmg.compose_tracker.render_output(
+                renderer,
+                &mut framebuffer,
+                compose_age,
+                &elements,
+                CLEAR_COLOR,
+            ) {
+                Ok(r) => r.sync,
+                Err(err) => {
+                    tracing::warn!(?err, "stream export: sparse render_output failed");
+                    dmg.sticky_valid = false;
+                    drop(map);
+                    hub.request_full_frame();
+                    state.schedule_redraw();
+                    return;
+                }
             }
-        }
+        } else {
+            let mut compose_tracker =
+                OutputDamageTracker::new(size_phys, output_scale, Transform::Normal);
+            match compose_tracker.render_output(
+                renderer,
+                &mut framebuffer,
+                0,
+                &elements,
+                CLEAR_COLOR,
+            ) {
+                Ok(r) => {
+                    if let Ok(mut map) = state.stream_export.damage.lock()
+                        && let Some(dmg) = map.get_mut(output_name.as_str())
+                    {
+                        dmg.compose_tracker =
+                            OutputDamageTracker::new(size_phys, output_scale, transform);
+                        dmg.sticky_valid = true;
+                    }
+                    r.sync
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "stream export: render_output failed");
+                    if let Ok(mut map) = state.stream_export.damage.lock()
+                        && let Some(dmg) = map.get_mut(output_name.as_str())
+                    {
+                        dmg.sticky_valid = false;
+                    }
+                    state.stream_export.request_full_frame();
+                    state.schedule_redraw();
+                    return;
+                }
+            }
+        };
         // Intentionally no sync.wait() here — fence travels with the frame.
+        render_sync
     };
 
     let fence = sync.export();
@@ -897,6 +1039,7 @@ pub fn maybe_export_frame(
     let fmt = AllocBuffer::format(&dmabuf);
     let stride = strides.first().copied().unwrap_or(width.saturating_mul(4));
     let seq = state.stream_export.seq.fetch_add(1, Ordering::Relaxed) + 1;
+    PoolState::note_published_slot(&pool_arc, slot_index);
     let frame = ExportedFrame {
         seq,
         output_name: output_name.to_string(),
@@ -908,17 +1051,15 @@ pub fn maybe_export_frame(
         fds,
         offsets,
         strides,
-        damage_full,
+        damage_full: damage_full || forced,
         damage,
+        force_epoch: forced.then_some(forced_epoch),
         fence,
         sync,
         _slot_guard: Some(slot_guard),
+        slot_index: Some(slot_index),
     };
-    if forced {
-        state
-            .stream_export
-            .mark_forced_done(output_name.as_str(), forced_epoch);
-    }
+    // Force clears only after encode delivery (see rudp_host frame pipeline).
     state.stream_export.try_publish(frame);
 }
 
@@ -955,9 +1096,11 @@ mod tests {
             strides: vec![400],
             damage_full: true,
             damage: Vec::new(),
+            force_epoch: None,
             fence: None,
             sync: SyncPoint::signaled(),
             _slot_guard: None,
+            slot_index: None,
         }
     }
 
@@ -1086,11 +1229,34 @@ mod tests {
         );
         // Satisfying one output must not clear the other.
         let epoch = hub.force_epoch.load(Ordering::SeqCst);
-        hub.mark_forced_done("DP-1", epoch);
+        hub.mark_forced_delivered("DP-1", epoch);
         assert!(!hub.forced_frame_pending_for("DP-1", "DP-1"));
         assert!(hub.forced_frame_pending_for("DP-2", "DP-1"));
+        // Coalesce while DP-2 still pending — epoch must not stack.
+        let before = hub.force_epoch.load(Ordering::SeqCst);
         hub.request_full_frame();
+        assert_eq!(hub.force_epoch.load(Ordering::SeqCst), before);
+        hub.mark_forced_delivered("DP-2", epoch);
+        hub.request_full_frame();
+        assert!(hub.force_epoch.load(Ordering::SeqCst) > before);
         assert!(hub.forced_frame_pending_for("DP-1", "DP-1"));
+        hub.disarm();
+    }
+
+    #[test]
+    fn force_stays_pending_until_mark_delivered() {
+        let hub = StreamExportHub::new();
+        let _wake = hub.arm();
+        hub.set_demand(true);
+        let epoch = hub.force_epoch.load(Ordering::SeqCst);
+        assert!(hub.forced_frame_pending_for("eDP-1", "eDP-1"));
+        // Publish alone must not clear force (encode delivery owns that).
+        let mut frame = test_frame(1);
+        frame.force_epoch = Some(epoch);
+        hub.try_publish(frame);
+        assert!(hub.forced_frame_pending_for("eDP-1", "eDP-1"));
+        hub.mark_forced_delivered("eDP-1", epoch);
+        assert!(!hub.forced_frame_pending_for("eDP-1", "eDP-1"));
         hub.disarm();
     }
 
@@ -1148,6 +1314,7 @@ mod tests {
             slots: Vec::new(),
             busy: vec![true, true],
             fourcc: Fourcc::Xrgb8888,
+            sticky_slot: None,
         }));
         {
             let guard = Arc::new(SlotReleaseGuard {
@@ -1167,6 +1334,7 @@ mod tests {
             slots: Vec::new(),
             busy: vec![true, true],
             fourcc: Fourcc::Xrgb8888,
+            sticky_slot: None,
         }));
         let hub = StreamExportHub::new();
         let _wake = hub.arm();

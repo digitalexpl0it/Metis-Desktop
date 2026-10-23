@@ -1,12 +1,13 @@
-//! FFmpeg software AV1 encoder (CPU) fed from LINEAR compositor dmabufs.
+//! FFmpeg software encoders (CPU) fed from LINEAR compositor dmabufs.
 //!
 //! Frame path: `mmap` the LINEAR dmabuf (bracketed by `DMA_BUF_IOCTL_SYNC`) →
-//! swscale to YUV420P (the pixel format `libsvtav1` / `libaom-av1` accept; they
-//! do not take NV12) → encode on the CPU. No GPU or render node is needed, so
-//! this is the last-resort AV1 path when `av1_vaapi` / `av1_nvenc` are missing.
+//! swscale to YUV420P → encode on the CPU. Supports **H.264 (`libx264`)** for
+//! interactive Soft fallback and **AV1** (`libsvtav1` / `libaom-av1`) as a
+//! heavier last resort. No GPU or render node is needed.
 //!
 //! Like the hardware encoders this only ever runs inside the isolated
-//! `metis-encode-probe worker` process — never inside the compositor.
+//! `metis-encode-probe worker` process — never inside the compositor (except
+//! Wave 2 Performance native, which does not use Soft).
 
 use std::ffi::CString;
 use std::ptr;
@@ -26,6 +27,8 @@ use crate::types::{
 /// real-time encoder; `libaom-av1` is the portable fallback; `librav1e` is
 /// accepted as a last resort; bare `av1` covers distro builds that alias it.
 const SOFT_AV1_CANDIDATES: [&str; 4] = ["libsvtav1", "libaom-av1", "librav1e", "av1"];
+/// Interactive Soft path — prefer zerolatency H.264 over Soft AV1.
+const SOFT_H264_CANDIDATES: [&str; 2] = ["libx264", "h264"];
 
 /// Cap on encoder worker threads (diminishing returns, keeps the desktop responsive).
 const MAX_SOFT_THREADS: usize = 8;
@@ -65,6 +68,24 @@ pub fn soft_av1_encoder_name() -> Option<&'static str> {
     pick_soft_av1_encoder(encoder_exists)
 }
 
+/// Best software H.264 encoder name when present (`libx264`).
+pub fn soft_h264_encoder_name() -> Option<&'static str> {
+    ensure_ffmpeg();
+    SOFT_H264_CANDIDATES
+        .iter()
+        .copied()
+        .find(|name| encoder_exists(name))
+}
+
+fn available_soft_h264_encoders() -> Vec<&'static str> {
+    ensure_ffmpeg();
+    SOFT_H264_CANDIDATES
+        .iter()
+        .copied()
+        .filter(|name| encoder_exists(name))
+        .collect()
+}
+
 /// Target kbps → `AVCodecContext::bit_rate` bits/s without overflow.
 fn kbps_to_bits(kbps: u32) -> i64 {
     i64::from(kbps).saturating_mul(1000)
@@ -82,6 +103,10 @@ fn soft_thread_count() -> i32 {
 fn encoder_options(name: &str) -> Dictionary<'static> {
     let mut opts = Dictionary::new();
     match name {
+        "libx264" | "h264" => {
+            opts.set("preset", "ultrafast");
+            opts.set("tune", "zerolatency");
+        }
         "libsvtav1" => {
             // Preset 11 = real-time (valid on SVT-AV1 1.x–2.x; 12+ gets remapped);
             // low-delay prediction (no look-ahead latency) and true IDRs on
@@ -125,42 +150,69 @@ pub struct FfmpegSoftEncoder {
 unsafe impl Send for FfmpegSoftEncoder {}
 
 impl FfmpegSoftEncoder {
-    /// Open a software AV1 encoder for `cfg` (bitrate / fps from the config).
+    /// Open a software encoder for `cfg` (H.264 via `libx264`, or AV1).
     ///
-    /// Only AV1 is supported; `cfg.backend` is ignored. Tries each installed
-    /// candidate (`libsvtav1`, `libaom-av1`, …) until one opens.
+    /// `cfg.backend` is ignored. H.264 is preferred for interactive Soft
+    /// fallback; AV1 remains available when requested.
     pub fn open(cfg: &EncoderConfig) -> EncodeResult<Self> {
         ensure_ffmpeg();
         let cfg = cfg.clone().sanitize();
-        if cfg.codec != RudpCodec::Av1 {
-            return Err(EncodeError::Unavailable(format!(
-                "software encode supports AV1 only (requested {})",
-                cfg.codec.as_str()
-            )));
+        match cfg.codec {
+            RudpCodec::H264 => {
+                Self::open_codec(&cfg, RudpCodec::H264, &available_soft_h264_encoders())
+            }
+            RudpCodec::Av1 => {
+                Self::open_codec(&cfg, RudpCodec::Av1, &available_soft_av1_encoders())
+            }
+            RudpCodec::Hevc => Err(EncodeError::Unavailable(
+                "software encode does not support HEVC (use H.264 or AV1)".into(),
+            )),
         }
-        let candidates = available_soft_av1_encoders();
+    }
+
+    fn open_codec(
+        cfg: &EncoderConfig,
+        codec: RudpCodec,
+        candidates: &[&'static str],
+    ) -> EncodeResult<Self> {
         if candidates.is_empty() {
-            return Err(EncodeError::Unavailable(
-                "no software AV1 encoder in FFmpeg (install libsvtav1 or libaom-av1)".into(),
-            ));
+            let hint = match codec {
+                RudpCodec::H264 => "install libx264 / ffmpeg with libx264",
+                RudpCodec::Av1 => "install libsvtav1 or libaom-av1",
+                RudpCodec::Hevc => "unsupported",
+            };
+            return Err(EncodeError::Unavailable(format!(
+                "no software {} encoder in FFmpeg ({hint})",
+                codec.as_str()
+            )));
         }
         let mut errors: Vec<String> = Vec::new();
         for name in candidates {
-            match Self::open_named(&cfg, name) {
+            match Self::open_named(cfg, codec, name) {
                 Ok(enc) => return Ok(enc),
                 Err(err) => {
-                    tracing::warn!(encoder = name, %err, "metis-encode: soft AV1 open failed");
+                    tracing::warn!(
+                        encoder = name,
+                        codec = %codec.as_str(),
+                        %err,
+                        "metis-encode: soft open failed"
+                    );
                     errors.push(format!("{name}: {err}"));
                 }
             }
         }
         Err(EncodeError::Unavailable(format!(
-            "no software AV1 encoder opened ({})",
+            "no software {} encoder opened ({})",
+            codec.as_str(),
             errors.join("; ")
         )))
     }
 
-    fn open_named(cfg: &EncoderConfig, name: &'static str) -> EncodeResult<Self> {
+    fn open_named(
+        cfg: &EncoderConfig,
+        rudp_codec: RudpCodec,
+        name: &'static str,
+    ) -> EncodeResult<Self> {
         let c_name = CString::new(name).map_err(|e| EncodeError::InvalidInput(e.to_string()))?;
         let width = i32::try_from(cfg.width)
             .map_err(|_| EncodeError::InvalidInput("width out of range".into()))?;
@@ -170,13 +222,13 @@ impl FfmpegSoftEncoder {
         let bit_rate = kbps_to_bits(cfg.bitrate_kbps);
 
         unsafe {
-            let codec = ffi::avcodec_find_encoder_by_name(c_name.as_ptr());
-            if codec.is_null() {
+            let av_codec = ffi::avcodec_find_encoder_by_name(c_name.as_ptr());
+            if av_codec.is_null() {
                 return Err(EncodeError::Unavailable(format!(
                     "FFmpeg encoder `{name}` not found"
                 )));
             }
-            let mut ctx = ffi::avcodec_alloc_context3(codec);
+            let mut ctx = ffi::avcodec_alloc_context3(av_codec);
             if ctx.is_null() {
                 return Err(EncodeError::Ffmpeg("avcodec_alloc_context3 failed".into()));
             }
@@ -202,7 +254,7 @@ impl FfmpegSoftEncoder {
             // caller's pointer; ffmpeg-next's Dictionary Drop would not see that
             // and double-free. Disown before open and free leftovers here.
             let mut opts_ptr = encoder_options(name).disown();
-            let open_err = ffi::avcodec_open2(ctx, codec, &mut opts_ptr);
+            let open_err = ffi::avcodec_open2(ctx, av_codec, &mut opts_ptr);
             if !opts_ptr.is_null() {
                 ffi::av_dict_free(&mut opts_ptr);
             }
@@ -229,7 +281,7 @@ impl FfmpegSoftEncoder {
             Ok(Self {
                 info: EncoderInfo {
                     backend: EncoderBackend::Soft,
-                    codec: RudpCodec::Av1,
+                    codec: rudp_codec,
                     encoder_name: name.to_string(),
                     width: cfg.width,
                     height: cfg.height,
@@ -348,10 +400,10 @@ mod tests {
     }
 
     #[test]
-    fn non_av1_codec_is_rejected() {
+    fn hevc_soft_is_rejected() {
         let cfg = EncoderConfig {
             backend: EncoderBackend::Soft,
-            codec: RudpCodec::H264,
+            codec: RudpCodec::Hevc,
             width: 64,
             height: 64,
             fps_hint: 30,
@@ -362,6 +414,25 @@ mod tests {
             FfmpegSoftEncoder::open(&cfg),
             Err(EncodeError::Unavailable(_))
         ));
+    }
+
+    #[test]
+    fn soft_h264_opens_when_libx264_present() {
+        let Some(_) = soft_h264_encoder_name() else {
+            eprintln!("skipped: no software H.264 encoder in FFmpeg");
+            return;
+        };
+        let cfg = EncoderConfig {
+            backend: EncoderBackend::Soft,
+            codec: RudpCodec::H264,
+            width: 128,
+            height: 128,
+            fps_hint: 30,
+            bitrate_kbps: 2_000,
+            gop_secs: 1,
+        };
+        let enc = FfmpegSoftEncoder::open(&cfg).expect("soft H.264 open");
+        assert_eq!(enc.info().codec, RudpCodec::H264);
     }
 
     #[test]
