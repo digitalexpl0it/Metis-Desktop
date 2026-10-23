@@ -309,7 +309,9 @@ async fn smoke_session(
                 SessionEvent::AudioReady { .. }
                 | SessionEvent::AudioPacket { .. }
                 | SessionEvent::ClipboardSet { .. }
-                | SessionEvent::StreamQuality { .. },
+                | SessionEvent::StreamQuality { .. }
+                | SessionEvent::MicReady { .. }
+                | SessionEvent::MicEnable { .. },
             )) => {}
             Ok(Some(SessionEvent::Disconnected)) | Ok(None) => break,
             Err(_) => {}
