@@ -89,7 +89,7 @@ fn dma_buf_sync(fd: BorrowedFd<'_>, flags: u64) {
 }
 
 /// Size of the dmabuf behind `fd` (dmabufs support `SEEK_END`), if known.
-fn dmabuf_size(fd: BorrowedFd<'_>) -> Option<usize> {
+pub(crate) fn dmabuf_size(fd: BorrowedFd<'_>) -> Option<usize> {
     // SAFETY: lseek on a valid fd; dmabuf offsets are not shared state we rely on.
     let end = unsafe { libc::lseek(fd.as_raw_fd(), 0, libc::SEEK_END) };
     if end <= 0 {

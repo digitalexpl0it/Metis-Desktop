@@ -61,6 +61,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   sticky pool slot. Performance can use in-process encode
   (`prefer_native_encode` / `METIS_RUDP_NATIVE_ENCODE`). Latency HUD: host
   fence/encode µs in encode status; Viewer connection bar shows decode µs.
+- **Metis Remote capture cadence (Phase 24 G)** — under **Performance** / **High**,
+  a short sticky window after full damage keeps DRM pending and skips idle
+  export drop so games / CAD orbit do not freeze on shallow DRM-empty frames.
+  Medium / Low still idle-skip.
+- **Metis Remote zero-copy encode (Phase 24 E)** — hardware upload prefers
+  DRM_PRIME + VAAPI `scale_vaapi` / CUDA `scale_cuda` RGB→NV12 (no CPU mmap when
+  it works); falls back to LINEAR mmap + swscale per encoder. Force mmap with
+  `METIS_ENCODE_ZEROCOPY=0`.
 
 ### Security
 

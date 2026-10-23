@@ -422,6 +422,7 @@ impl RudpHostSystem {
         shared.set_stream_quality_str(encode_prefs.stream_quality.as_str());
 
         let wake = hub.arm();
+        hub.set_full_rate_capture(encode_prefs.stream_quality.full_rate_capture());
         let marker = Arc::new(HostMarker::create());
         let audio_join = Some(rudp_audio::spawn_audio_supervisor(
             Arc::clone(&stop),
@@ -587,11 +588,13 @@ impl RudpHostSystem {
             "rudp host: encode prefs updated live (sessions kept)"
         );
         let quality = prefs.stream_quality.as_str().to_string();
+        let full_rate = prefs.stream_quality.full_rate_capture();
         self.encode_prefs = prefs.clone();
         if let Ok(mut slot) = self.prefs_live.lock() {
             *slot = prefs;
         }
         self.prefs_gen.fetch_add(1, Ordering::SeqCst);
+        self.hub.set_full_rate_capture(full_rate);
         self.advertise_stream_quality(&quality);
         // Wake export so idle desktops still reopen the encoder promptly.
         self.hub.request_full_frame();

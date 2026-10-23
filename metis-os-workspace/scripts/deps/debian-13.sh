@@ -50,6 +50,7 @@ METIS_APT_PACKAGES=(
   libwinpr3-dev
   libavformat-dev
   libavutil-dev
+  libavfilter-dev
   libswscale-dev
   libswresample-dev
   libva-dev

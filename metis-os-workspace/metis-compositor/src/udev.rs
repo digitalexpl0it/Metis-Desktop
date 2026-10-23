@@ -1331,28 +1331,34 @@ impl MetisState {
         // RUDP forced full-frame (fence drop / encode miss / pool miss): arm a
         // vblank even when the scene looks DRM-empty so export can publish
         // without waiting for mouse motion.
+        // Phase 24 G: under Performance/High sticky full damage, keep pending
+        // the same way (do not let shallow DRM is_empty stall the stream).
         if self.stream_export.wants_frames() {
             let primary = self.primary_key();
-            let force_names: Vec<String> = self
+            let keep_names: Vec<String> = self
                 .udev
                 .as_ref()
                 .map(|u| {
                     u.surfaces()
                         .filter(|s| !s.user_disabled)
                         .filter(|s| {
+                            let name = s.output.name();
                             self.stream_export
-                                .forced_frame_pending_for(s.output.name().as_str(), &primary)
+                                .forced_frame_pending_for(name.as_str(), &primary)
+                                || self
+                                    .stream_export
+                                    .full_rate_pending_for(name.as_str(), &primary)
                         })
                         .map(|s| s.output.name().to_string())
                         .collect()
                 })
                 .unwrap_or_default();
-            if !force_names.is_empty()
+            if !keep_names.is_empty()
                 && let Some(udev) = self.udev.as_mut()
             {
                 for surface in udev.surfaces_mut() {
                     if !surface.user_disabled
-                        && force_names
+                        && keep_names
                             .iter()
                             .any(|n| n.as_str() == surface.output.name().as_str())
                     {

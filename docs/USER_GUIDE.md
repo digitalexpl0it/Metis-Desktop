@@ -1229,11 +1229,12 @@ not ship Win/mac clients yet; that doc is the integration contract.
    (saved in `viewer.json`, not in the host’s `rudp.json`).
    Nothing is captured or encoded until an authenticated client connects —
    enabling the host adds no GPU work on its own. Capture uses a LINEAR GBM
-   pool; frames are converted to NV12 and encoded inside a separate
-   `metis-encode-probe worker` process. A driver crash or hang there restarts
-   the encoder (with back-off, up to three times) and never takes down the
-   desktop. Unchanged frames are skipped; sparse vs full damage is tagged for
-   the client.
+   pool. Hardware encode prefers **GPU zero-copy** (DRM_PRIME import + VAAPI /
+   CUDA RGB→NV12); if that path fails it falls back to CPU mmap + swscale.
+   Medium / High / Low encode inside a separate `metis-encode-probe worker`
+   (driver crash restarts the encoder, not the desktop). **Performance** may
+   encode in-process for lower latency. Unchanged frames are skipped; sparse
+   vs full damage is tagged for the client.
 
    If a desktop session ever ends unexpectedly while Remote is starting or
    streaming, Metis turns the host off at the next login and Settings shows a

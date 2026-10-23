@@ -74,6 +74,12 @@ impl RudpStreamQuality {
         matches!(self, Self::Performance)
     }
 
+    /// Phase 24 G: hold display-rate capture while damage stays full-ish
+    /// (Performance / High). Medium / Low keep idle-skip.
+    pub fn full_rate_capture(self) -> bool {
+        matches!(self, Self::Performance | Self::High)
+    }
+
     pub fn is_default(&self) -> bool {
         *self == Self::Medium
     }
@@ -582,6 +588,14 @@ mod tests {
         assert_eq!(cfg.bitrate_kbps, 80_000);
         cfg.apply_stream_quality(RudpStreamQuality::Low);
         assert_eq!(cfg.bitrate_kbps, 8_000);
+    }
+
+    #[test]
+    fn full_rate_capture_perf_and_high_only() {
+        assert!(RudpStreamQuality::Performance.full_rate_capture());
+        assert!(RudpStreamQuality::High.full_rate_capture());
+        assert!(!RudpStreamQuality::Medium.full_rate_capture());
+        assert!(!RudpStreamQuality::Low.full_rate_capture());
     }
 
     #[test]

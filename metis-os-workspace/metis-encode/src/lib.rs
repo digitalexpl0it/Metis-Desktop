@@ -1,14 +1,16 @@
 //! Video encode for Metis Remote (RUDP): hardware (VAAPI / NVENC) plus a CPU
-//! software AV1 fallback (`libsvtav1` / `libaom-av1`).
+//! software fallback (`libx264` / Soft AV1).
 //!
-//! Compositor frames arrive as LINEAR dmabufs, are read with `DMA_BUF_IOCTL_SYNC`
-//! bracketing, converted to NV12 and uploaded to VAAPI (Intel/AMD) or NVENC
-//! (NVIDIA) hardware frames, or to YUV420P for the software AV1 encoder.
+//! Compositor frames arrive as LINEAR dmabufs. Hardware upload prefers Phase 24
+//! **E** zero-copy (DRM_PRIME + VAAPI/CUDA VPP RGB→NV12); on failure it falls
+//! back to `DMA_BUF_IOCTL_SYNC` mmap + swscale + `av_hwframe_transfer_data`.
+//! Soft encode always uses the mmap path. Set `METIS_ENCODE_ZEROCOPY=0` to force
+//! mmap.
 //!
 //! Driver code (libva / CUDA / FFmpeg) can segfault or abort. The compositor
-//! therefore only uses [`open_isolated_encoder`], which runs everything in a
-//! `metis-encode-probe worker` child process and talks to it over a socketpair.
-//! [`open_encoder`] is the in-process path used *inside* that worker.
+//! default is [`open_isolated_encoder`] (worker). [`open_encoder`] runs
+//! in-process inside that worker, and under Performance
+//! (`prefer_native_encode`) in the compositor encode thread.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
@@ -22,6 +24,10 @@ mod process;
 mod soft_enc;
 mod types;
 mod worker;
+mod zerocopy;
+mod zerocopy_drm;
+mod zerocopy_nvenc;
+mod zerocopy_vaapi;
 
 pub use detect::{
     EncodeAttempt, detect_preferred_backend, encode_candidates, encode_ladder,

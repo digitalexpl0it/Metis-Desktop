@@ -47,17 +47,19 @@ If your image lacks `libgtk4-layer-shell-dev`, run `METIS_LAYER_SHELL_FROM_SOURC
 ### Metis Remote (RUDP) encode — FFmpeg
 
 Hardware encode for Metis Remote (`metis-encode`) links against system FFmpeg
-(`libavcodec` / `libavutil` / `libswresample`) and imports compositor dmabufs via
-DRM-PRIME (VAAPI on Intel/AMD, NVENC on NVIDIA). The Viewer client
-(`metis-decode`) uses the same FFmpeg stack for software H.264/HEVC decode
-(+ `libswscale` to RGBA). CI (`ci.yml` / `release-deb.yml`) and
+(`libavcodec` / `libavutil` / `libavfilter` / `libswresample`) and imports
+compositor dmabufs. **Phase 24 E:** prefer DRM_PRIME + `scale_vaapi` /
+`scale_cuda` RGB→NV12 (zero-copy); fall back to LINEAR mmap + swscale +
+`av_hwframe_transfer_data`. Force the mmap path with `METIS_ENCODE_ZEROCOPY=0`.
+The Viewer client (`metis-decode`) uses the same FFmpeg stack for software
+H.264/HEVC decode (+ `libswscale` to RGBA). CI (`ci.yml` / `release-deb.yml`) and
 `scripts/deps/{debian-13,ubuntu-26.04}.sh` install the same -dev set. Install
 locally:
 
 ```bash
 sudo apt install -y \
   ffmpeg \
-  libavcodec-dev libavformat-dev libavutil-dev \
+  libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev \
   libswscale-dev libswresample-dev \
   libva-dev
 ```
@@ -65,24 +67,19 @@ sudo apt install -y \
 Runtime: keep `ffmpeg` installed. Intel/AMD also need a VAAPI driver
 (`intel-media-va-driver-non-free` / `mesa-va-drivers` as appropriate). NVIDIA
 needs the proprietary driver with encode support and an FFmpeg build that
-ships `hevc_nvenc` / `h264_nvenc`. Install also ships `metis-encode-probe`,
-which must sit next to `metis-compositor`: it is both the codec probe and the
-isolated encode worker (`metis-encode-probe worker 3`). The compositor never
-loads FFmpeg / libva / CUDA in-process, so a driver abort or segfault only
-restarts the worker. There is no silent software x264/x265 encode fallback —
-if the chosen backend cannot open, the host logs the full attempt ladder.
-The only CPU path is **software AV1** (`libsvtav1`, else `libaom-av1`; install
-an FFmpeg built with one of them): `Auto` + preferred AV1 tries GPU AV1 →
-software AV1 → GPU H.264/HEVC, and Settings **Encoder → Software** forces
-software AV1 only. It is CPU-heavy; frames are converted to YUV420P instead of
-NV12. Its tests skip when FFmpeg lacks a software AV1 encoder.
+ships `hevc_nvenc` / `h264_nvenc` (and ideally `scale_cuda` for zero-copy).
+Install also ships `metis-encode-probe`, which must sit next to
+`metis-compositor`: it is both the codec probe and the isolated encode worker
+(`metis-encode-probe worker 3`). Medium/High/Low load FFmpeg only in that
+worker; **Performance** may open the encoder in-process. Soft paths use
+`libx264` (interactive) or software AV1 (`libsvtav1` / `libaom-av1`).
 
 Hardware smoke test (real VAAPI encode through the worker, plus a deliberate
 worker `abort()` that must come back as a clean error):
 
 ```bash
 cd metis-os-workspace
-# VAAPI (Intel / AMD render node):
+# VAAPI (Intel / AMD); also exercises zero-copy try + mmap force:
 METIS_TEST_RENDER_NODE=/dev/dri/renderD128 cargo test -p metis-encode --test worker_smoke -- --nocapture
 # NVENC (NVIDIA, H.264 + HEVC; optional METIS_TEST_NVENC_NODE=/dev/dri/renderD12x):
 METIS_TEST_NVENC=1 cargo test -p metis-encode --test worker_smoke -- --nocapture

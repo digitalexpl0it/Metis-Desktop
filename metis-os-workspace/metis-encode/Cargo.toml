@@ -14,4 +14,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing-subscriber = { workspace = true }
 # System FFmpeg (libavcodec) — VAAPI/NVENC encoders + swscale upload path.
-ffmpeg-next = { version = "8", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
+# `filter` enables libavfilter for Phase 24 E zero-copy VPP (scale_vaapi / scale_cuda).
+ffmpeg-next = { version = "8", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling", "filter"] }

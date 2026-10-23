@@ -138,6 +138,45 @@ fn hardware_encode_produces_keyframe() {
     encode_roundtrip(EncoderBackend::Vaapi, RudpCodec::H264, &node);
 }
 
+/// Force mmap upload (`METIS_ENCODE_ZEROCOPY=0`) — must still produce an IDR.
+#[test]
+fn hardware_encode_mmap_zerocopy_off() {
+    let Some(node) = hw_node() else {
+        eprintln!("skipped: set METIS_TEST_RENDER_NODE");
+        return;
+    };
+    let _g = serial();
+    use_built_probe();
+    // SAFETY: test-only env inherited by the worker child.
+    unsafe { std::env::set_var("METIS_ENCODE_ZEROCOPY", "0") };
+    let result = std::panic::catch_unwind(|| {
+        encode_roundtrip_unlocked(EncoderBackend::Vaapi, RudpCodec::H264, &node);
+    });
+    unsafe { std::env::remove_var("METIS_ENCODE_ZEROCOPY") };
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+/// Prefer zero-copy VPP when the render node can open VAAPI (falls back to mmap).
+#[test]
+fn hardware_encode_zerocopy_try() {
+    let Some(node) = hw_node() else {
+        eprintln!("skipped: set METIS_TEST_RENDER_NODE");
+        return;
+    };
+    let _g = serial();
+    use_built_probe();
+    unsafe { std::env::set_var("METIS_ENCODE_ZEROCOPY", "1") };
+    let result = std::panic::catch_unwind(|| {
+        encode_roundtrip_unlocked(EncoderBackend::Vaapi, RudpCodec::H264, &node);
+    });
+    unsafe { std::env::remove_var("METIS_ENCODE_ZEROCOPY") };
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 /// NVENC device: `METIS_TEST_NVENC_NODE`, else the first NVIDIA render node.
 /// Opt in with `METIS_TEST_NVENC=1` (needs the proprietary driver + an FFmpeg
 /// built with NVENC; run inside a desktop session that can see `/dev/nvidia*`).
@@ -203,6 +242,12 @@ fn soft_backend_prefers_h264_for_interactive() {
 fn encode_roundtrip(backend: EncoderBackend, codec: RudpCodec, node: &str) {
     let _g = serial();
     use_built_probe();
+    encode_roundtrip_unlocked(backend, codec, node);
+}
+
+/// Like [`encode_roundtrip`] but assumes the caller already holds [`serial`]
+/// and set `METIS_ENCODE_PROBE` (for env-flagged zero-copy tests).
+fn encode_roundtrip_unlocked(backend: EncoderBackend, codec: RudpCodec, node: &str) {
     let (w, h, stride) = (640, 360, 640 * 4 + 64);
     let mut config = cfg(w, h, backend);
     config.codec = codec;

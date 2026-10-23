@@ -1270,8 +1270,8 @@ latency and clear setup docs.
       fence waits / Quinn shutdown; encoder restart back-off (3 then give up);
       crash-loop guard marker auto-disables the host with a Settings notice;
       Auto backend = render-GPU encoder first, cross-vendor fallback.
-      Residual: zero-copy VAAPI import via VPP (RGB→NV12) once it can be
-      proven safe inside the worker.
+      Residual **closed 2026-10-23 (Phase 24 E):** zero-copy VAAPI/CUDA VPP
+      RGB→NV12 with mmap fallback (`METIS_ENCODE_ZEROCOPY`).
 - [x] **RUDP encoded-packet queue** (2026-10-03) — bounded keyframe-aware
       outbox replaces latest-wins `EncodedPacket` slot so deltas survive slow
       keyframe uni-stream writes (export hub stays latest-wins).
@@ -2556,12 +2556,12 @@ latency and quality presets → **Phase 24** (not deferred forever).
 
 ## Phase 24 — Metis Remote stream quality (Performance + presets)
 
-**Status 2026-10-22:** **Wave 1 landed** (presets + protocol v4 + Settings /
-Viewer UI + live host apply). Follow-up fixes same day: Viewer always sends
-`SetStreamQuality` + re-assert on subscribe; VAAPI QP bands distinct per
-preset; dual GTK scroll controllers + Continuous axis inject; export pool
-retry after consumed damage. Wave 2 (native/SHM Performance encode path,
-zero-copy, latency HUD) remains open. Goal: compete with Parsec on LAN for
+**Status 2026-10-23:** **Wave 1 landed** (presets + protocol v4 + Settings /
+Viewer UI + live host apply). Wave 2 partial: Performance native encode, Soft
+H.264 hygiene, force-until-delivered, sparse sticky export, latency HUD, and
+**G capture cadence** (full-rate sticky pending under Performance/High), and
+**E** zero-copy RGB→NV12 (DRM_PRIME + VAAPI/CUDA VPP with mmap fallback). Still
+open: **J** Viewer decode stretch. Goal: compete with Parsec on LAN for
 **gaming, CAD, Blender, movie streaming**, while keeping safer / cheaper
 presets for everyday remote desktop. Quinn stays out-of-process (Phase 23).
 
@@ -2598,16 +2598,18 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
       `METIS_RUDP_NATIVE_ENCODE` uses in-process `open_encoder`; Medium/High/Low
       stay isolated. Crash-guard still auto-disables Remote after unclean exit
       while Streaming. Quinn remains in `metis-rudp-host`. SHM ring still open.
-- [ ] **E. Zero-copy RGB→NV12** — finish the Phase 3 residual: VAAPI/NVENC import
-      without CPU LINEAR mmap + swscale when hwmap/VPP is proven safe (start
-      inside worker; lift into Performance path).
+- [x] **E. Zero-copy RGB→NV12** (2026-10-23) — DRM_PRIME source frames +
+      `scale_vaapi` / `scale_cuda` in `metis-encode`; mmap+swscale fallback per
+      instance. `METIS_ENCODE_ZEROCOPY=0` forces mmap. Worker and Performance
+      share `FfmpegHwEncoder` (no separate upload API).
 - [x] **F. Soft interactive hygiene** (2026-10-23) — Soft prefers H.264
       (`libx264` zerolatency) over Soft AV1; Auto+H264 ladder ends with Soft
       H.264. Soft emergency encode while HW open backoff so Full/dismiss never
       waits 5–15s.
-- [ ] **G. Capture cadence** — under Performance / High + continuous
-      `damage_full`, export at display rate; do not let idle-skip or shallow
-      DRM `is_empty` stall the stream during games / viewport tumble in CAD.
+- [x] **G. Capture cadence** (2026-10-23) — Performance / High set
+      `full_rate_capture`; after a full/forced export, a 250 ms sticky window
+      arms DRM `pending` and bypasses idle export-skip so shallow `is_empty`
+      frames do not stall games / CAD tumble. Medium / Low idle-skip unchanged.
 
 ### Latency hygiene (all modes; stricter under Performance)
 

@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet};
 use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use metis_encode::DamageRect;
@@ -64,6 +64,15 @@ const DEBUG_ENCODE_SLEEP: Duration = Duration::from_millis(6);
 pub const DAMAGE_FULL_THRESHOLD: f64 = 0.35;
 /// More than this many rects → treat as full-frame (metadata cap).
 pub const DAMAGE_RECT_CAP: usize = 32;
+/// Phase 24 G: keep display-rate export briefly after a full/forced frame under
+/// Performance / High so shallow DRM-empty frames do not stall the stream.
+pub const FULL_RATE_STICKY_MS: u64 = 250;
+
+fn mono_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
 
 /// One composited output frame for the RUDP encode worker (one per output).
 ///
@@ -370,6 +379,10 @@ pub struct StreamExportHub {
     /// A consumer actually wants frames (e.g. an authenticated RUDP client).
     /// Armed-but-idle costs nothing: no second compose, no pool BOs touched.
     demand: AtomicBool,
+    /// Phase 24 G: Performance / High — hold display-rate capture while sticky.
+    full_rate_capture: AtomicBool,
+    /// Monotonic ms of last published full/forced export (`0` = never / cleared).
+    last_full_export_ms: AtomicU64,
     /// Monotonic "export a complete picture" request counter. An output is
     /// forced while `force_epoch` exceeds both [`Self::force_floor`] and the
     /// epoch it last satisfied ([`Self::forced_done`]) — client join / encoder
@@ -404,6 +417,8 @@ impl StreamExportHub {
         Self {
             enabled: AtomicBool::new(false),
             demand: AtomicBool::new(false),
+            full_rate_capture: AtomicBool::new(false),
+            last_full_export_ms: AtomicU64::new(0),
             force_epoch: AtomicU64::new(0),
             force_floor: AtomicU64::new(0),
             forced_done: Mutex::new(HashMap::new()),
@@ -435,11 +450,53 @@ impl StreamExportHub {
             self.request_full_frame();
             tracing::info!("stream export: consumer attached — producing frames");
         } else if !wanted && was {
+            self.clear_full_rate_sticky();
             if let Ok(mut latest) = self.latest.lock() {
                 latest.clear();
             }
             tracing::info!("stream export: no consumer — export idle");
         }
+    }
+
+    /// Live-update Phase 24 G full-rate policy from stream quality.
+    pub fn set_full_rate_capture(&self, enabled: bool) {
+        self.full_rate_capture.store(enabled, Ordering::SeqCst);
+        if !enabled {
+            self.clear_full_rate_sticky();
+        }
+    }
+
+    pub fn full_rate_capture(&self) -> bool {
+        self.full_rate_capture.load(Ordering::Relaxed)
+    }
+
+    /// Stamp the sticky clock after a successful full/forced publish.
+    pub fn note_full_export(&self) {
+        self.last_full_export_ms
+            .store(mono_ms().max(1), Ordering::SeqCst);
+    }
+
+    fn clear_full_rate_sticky(&self) {
+        self.last_full_export_ms.store(0, Ordering::SeqCst);
+    }
+
+    /// True when Performance/High sticky window is still open.
+    pub fn sticky_full_active(&self) -> bool {
+        if !self.full_rate_capture.load(Ordering::Relaxed) {
+            return false;
+        }
+        let last = self.last_full_export_ms.load(Ordering::Relaxed);
+        if last == 0 {
+            return false;
+        }
+        mono_ms().saturating_sub(last) <= FULL_RATE_STICKY_MS
+    }
+
+    /// Arm DRM `pending` for this output under full-rate sticky (Phase 24 G).
+    pub fn full_rate_pending_for(&self, output_name: &str, primary_key: &str) -> bool {
+        self.wants_frames()
+            && self.sticky_full_active()
+            && self.is_output_exported(output_name, primary_key)
     }
 
     /// Replace the set of outputs to export (empty ⇒ primary output only).
@@ -612,6 +669,7 @@ impl StreamExportHub {
         }
         self.reset_damage_trackers();
         self.demand.store(false, Ordering::SeqCst);
+        self.clear_full_rate_sticky();
         self.clear_forced();
         self.enabled.store(true, Ordering::SeqCst);
         tracing::info!("stream export: armed (latest-wins + slot RAII, wake cap {WAKE_CAP})");
@@ -621,6 +679,7 @@ impl StreamExportHub {
     pub fn disarm(&self) {
         self.enabled.store(false, Ordering::SeqCst);
         self.demand.store(false, Ordering::SeqCst);
+        self.clear_full_rate_sticky();
         self.clear_forced();
         if let Ok(mut slot) = self.wake_tx.lock() {
             *slot = None;
@@ -930,9 +989,15 @@ pub fn maybe_export_frame(
             }
         }
     };
-    let Some((damage_full, damage)) = damage_decision else {
-        drop(slot_guard);
-        return;
+    // Phase 24 G: under Performance/High sticky, bridge idle damage with a
+    // full compose (do not bump force_epoch — avoids Soft emergency noise).
+    let (damage_full, damage) = match damage_decision {
+        Some(v) => v,
+        None if state.stream_export.sticky_full_active() => (true, Vec::new()),
+        None => {
+            drop(slot_guard);
+            return;
+        }
     };
 
     // Full clear when forced / large damage / sticky invalid; else sparse blit
@@ -1059,6 +1124,9 @@ pub fn maybe_export_frame(
         _slot_guard: Some(slot_guard),
         slot_index: Some(slot_index),
     };
+    if frame.damage_full {
+        state.stream_export.note_full_export();
+    }
     // Force clears only after encode delivery (see rudp_host frame pipeline).
     state.stream_export.try_publish(frame);
 }
@@ -1282,6 +1350,42 @@ mod tests {
         );
         hub.disarm();
         assert!(!hub.forced_frame_pending_for("eDP-1", "eDP-1"));
+    }
+
+    #[test]
+    fn full_rate_sticky_expires_and_requires_policy() {
+        let hub = StreamExportHub::new();
+        let _wake = hub.arm();
+        hub.set_demand(true);
+        hub.set_full_rate_capture(true);
+        assert!(!hub.sticky_full_active(), "no full export yet");
+        assert!(!hub.full_rate_pending_for("eDP-1", "eDP-1"));
+        hub.note_full_export();
+        assert!(hub.sticky_full_active());
+        assert!(hub.full_rate_pending_for("eDP-1", "eDP-1"));
+        assert!(
+            !hub.full_rate_pending_for("DP-2", "eDP-1"),
+            "unsubscribed primary-only"
+        );
+        // Medium/Low: policy off must not keep pending even with a fresh stamp.
+        hub.set_full_rate_capture(false);
+        assert!(!hub.sticky_full_active());
+        assert!(!hub.full_rate_pending_for("eDP-1", "eDP-1"));
+        hub.set_full_rate_capture(true);
+        hub.note_full_export();
+        assert!(hub.sticky_full_active());
+        hub.set_demand(false);
+        assert!(
+            !hub.sticky_full_active(),
+            "demand off clears sticky so reconnect does not spin"
+        );
+        hub.set_demand(true);
+        hub.note_full_export();
+        assert!(hub.sticky_full_active());
+        // Wait out the sticky window (mono_ms may be < sticky at process start).
+        std::thread::sleep(Duration::from_millis(FULL_RATE_STICKY_MS + 30));
+        assert!(!hub.sticky_full_active());
+        hub.disarm();
     }
 
     #[test]

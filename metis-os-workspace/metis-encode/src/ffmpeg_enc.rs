@@ -1,15 +1,17 @@
 //! FFmpeg VAAPI / NVENC encoder fed from LINEAR compositor dmabufs.
 //!
-//! Frame path: `mmap` the LINEAR XRGB dmabuf (bracketed by `DMA_BUF_IOCTL_SYNC`)
-//! → swscale to NV12 → `av_hwframe_transfer_data` into a VAAPI / CUDA surface →
-//! encode. There is deliberately no `av_hwframe_map` DRM_PRIME import: mapping a
-//! DRM_PRIME frame whose frames context is derived from the destination context
-//! is treated by libavutil as an *unmap* and dereferences our descriptor as an
-//! internal `HWMapDescriptor` (segfault). A correct zero-copy path would also
-//! need a VPP RGB→NV12 conversion stage.
+//! Upload paths (Phase 24 E):
+//! 1. **Zero-copy (preferred):** DRM_PRIME import + VAAPI `scale_vaapi` / CUDA
+//!    `scale_cuda` RGB→NV12 into the encoder hardware pool.
+//! 2. **Fallback:** `mmap` + `DMA_BUF_IOCTL_SYNC` + swscale NV12 +
+//!    `av_hwframe_transfer_data`.
 //!
-//! This module only ever runs inside the isolated `metis-encode-probe worker`
-//! process (see [`crate::process`]) — never inside the compositor.
+//! There is deliberately no bare `av_hwframe_map` of a DRM_PRIME frame whose
+//! frames context is derived only from the encoder destination pool (that path
+//! segfaults). Zero-copy uses an owned source DRM_PRIME frames context.
+//!
+//! Used inside the isolated `metis-encode-probe worker` by default, and
+//! in-process under Performance (`prefer_native_encode`).
 
 use std::ffi::CString;
 use std::ptr;
@@ -19,11 +21,14 @@ use ffmpeg_next::ffi;
 use ffmpeg_next::format::Pixel;
 
 use crate::HwEncoder;
-use crate::convert::{DmabufConverter, check, drain_packets, ensure_ffmpeg};
+use crate::convert::{DmabufConverter, check, drain_packets, ensure_ffmpeg, fourcc_to_sw_pixel};
 use crate::types::{
     EncodeError, EncodeInput, EncodeResult, EncodedPacket, EncoderBackend, EncoderConfig,
     EncoderInfo, RudpCodec,
 };
+use crate::zerocopy::{ZerocopyPreference, zerocopy_preference};
+use crate::zerocopy_nvenc::NvencCudaUpload;
+use crate::zerocopy_vaapi::VaapiVppUpload;
 
 /// FFmpeg hardware encoder name; `None` for [`EncoderBackend::Soft`] (see `soft_enc`).
 fn encoder_codec_name(backend: EncoderBackend, codec: RudpCodec) -> Option<&'static str> {
@@ -62,6 +67,12 @@ fn bitrate_kbps_to_vaapi_qp(bitrate_kbps: u32) -> i32 {
     }
 }
 
+enum UploadMode {
+    Mmap,
+    VaapiVpp(VaapiVppUpload),
+    NvencCuda(NvencCudaUpload),
+}
+
 pub struct FfmpegHwEncoder {
     info: EncoderInfo,
     ctx: *mut ffi::AVCodecContext,
@@ -69,7 +80,7 @@ pub struct FfmpegHwEncoder {
     hw_frames: *mut ffi::AVBufferRef,
     /// Hardware encode surface (VAAPI / CUDA).
     hw_frame: *mut ffi::AVFrame,
-    /// Software NV12 staging frame.
+    /// Software NV12 staging frame (mmap path).
     sw_frame: *mut ffi::AVFrame,
     packet: *mut ffi::AVPacket,
     pts: i64,
@@ -78,6 +89,7 @@ pub struct FfmpegHwEncoder {
     pending_damage_full: bool,
     pending_damage: Vec<crate::DamageRect>,
     converter: DmabufConverter,
+    upload: UploadMode,
 }
 
 // Safety: the encoder is owned and used by exactly one thread at a time.
@@ -249,6 +261,36 @@ impl FfmpegHwEncoder {
                 return Err(EncodeError::Ffmpeg("av_frame/packet alloc failed".into()));
             }
 
+            // Default export fourcc is XRGB8888 → BGR0 / BGRZ.
+            let default_sw = fourcc_to_sw_pixel(0x3432_5258).unwrap_or(Pixel::BGRZ);
+            let upload = match (zerocopy_preference(), backend) {
+                (ZerocopyPreference::Off, _) => UploadMode::Mmap,
+                (ZerocopyPreference::Try, EncoderBackend::Nvenc) => {
+                    match NvencCudaUpload::open(hw_device, hw_frames, width, height, default_sw) {
+                        Ok(z) => UploadMode::NvencCuda(z),
+                        Err(err) => {
+                            tracing::warn!(
+                                %err,
+                                "metis-encode: NVENC zero-copy open failed — mmap fallback"
+                            );
+                            UploadMode::Mmap
+                        }
+                    }
+                }
+                (ZerocopyPreference::Try, _) => {
+                    match VaapiVppUpload::open(hw_device, hw_frames, width, height, default_sw) {
+                        Ok(z) => UploadMode::VaapiVpp(z),
+                        Err(err) => {
+                            tracing::warn!(
+                                %err,
+                                "metis-encode: VAAPI zero-copy open failed — mmap fallback"
+                            );
+                            UploadMode::Mmap
+                        }
+                    }
+                }
+            };
+
             Ok(Self {
                 info: EncoderInfo {
                     backend,
@@ -269,12 +311,12 @@ impl FfmpegHwEncoder {
                 pending_damage_full: true,
                 pending_damage: Vec::new(),
                 converter: DmabufConverter::new(Pixel::NV12),
+                upload,
             })
         }
     }
 
-    /// mmap the LINEAR dmabuf, swscale to NV12, upload into `hw_frame`.
-    unsafe fn upload_frame(&mut self, input: &EncodeInput<'_>) -> EncodeResult<()> {
+    unsafe fn upload_frame_mmap(&mut self, input: &EncodeInput<'_>) -> EncodeResult<()> {
         unsafe {
             self.converter
                 .convert(input, self.info.width, self.info.height, self.sw_frame)?;
@@ -294,6 +336,39 @@ impl FfmpegHwEncoder {
             };
         }
         Ok(())
+    }
+
+    /// Upload into `hw_frame` (zero-copy or mmap). On zero-copy submit failure,
+    /// permanently fall back to mmap for this encoder instance.
+    unsafe fn upload_frame(&mut self, input: &EncodeInput<'_>) -> EncodeResult<()> {
+        let pts = self.pts;
+        let key = self.force_keyframe;
+        let hw = self.hw_frame;
+        match &mut self.upload {
+            UploadMode::Mmap => unsafe { self.upload_frame_mmap(input) },
+            UploadMode::VaapiVpp(z) => match unsafe { z.upload(input, hw, pts, key) } {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    tracing::warn!(
+                        %err,
+                        "metis-encode: VAAPI zero-copy upload failed — switching to mmap"
+                    );
+                    self.upload = UploadMode::Mmap;
+                    unsafe { self.upload_frame_mmap(input) }
+                }
+            },
+            UploadMode::NvencCuda(z) => match unsafe { z.upload(input, hw, pts, key) } {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    tracing::warn!(
+                        %err,
+                        "metis-encode: NVENC zero-copy upload failed — switching to mmap"
+                    );
+                    self.upload = UploadMode::Mmap;
+                    unsafe { self.upload_frame_mmap(input) }
+                }
+            },
+        }
     }
 }
 
@@ -344,6 +419,8 @@ impl HwEncoder for FfmpegHwEncoder {
 impl Drop for FfmpegHwEncoder {
     fn drop(&mut self) {
         self.converter.reset();
+        // Drop upload filters before tearing down device/frames they borrow.
+        self.upload = UploadMode::Mmap;
         unsafe {
             if !self.packet.is_null() {
                 ffi::av_packet_free(&mut self.packet);
