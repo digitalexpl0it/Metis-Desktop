@@ -1553,9 +1553,8 @@ impl SessionUi {
             if let Ok(Some(frame)) = dec.push_au(&au.data) {
                 sw.video_size.set((frame.width, frame.height));
                 present_rgba(&sw.picture, &frame.rgba, frame.width, frame.height);
-                sw.last_decode_us.set(
-                    u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX),
-                );
+                sw.last_decode_us
+                    .set(u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX));
                 if !self.pointer_locked.get() {
                     sw.refresh_status_hud();
                 }
