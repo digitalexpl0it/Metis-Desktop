@@ -50,7 +50,7 @@ jobs:
             liblcms2-dev \
             libwayland-dev wayland-protocols \
             libeis-dev \
-            libavcodec-dev libavformat-dev libavutil-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev \
             libswscale-dev libswresample-dev \
             libva-dev \
             freerdp3-dev libwinpr3-dev \
