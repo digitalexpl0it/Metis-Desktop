@@ -100,9 +100,13 @@ pub fn show() {
     // does not live across `borrow_mut()` (that panic killed the whole edge bar).
     // Re-applied each time so the reused window follows theme changes.
     ensure_opaque_css();
+    services::updates_set_updater_visible(true);
     let existing = WINDOW.with(|cell| cell.borrow().clone());
     if let Some(state) = existing {
-        refresh_content(&state);
+        // Keep progress UI if Install is already running (toast / re-open race).
+        if !state.applying.get() {
+            refresh_content(&state);
+        }
         state.window.set_visible(true);
         state.window.present();
         schedule_fit_window(&state.window);
@@ -115,12 +119,23 @@ pub fn show() {
             *cell.borrow_mut() = Some(state);
         });
     }
-    // Soft re-check only when we have nothing pending — otherwise a PackageKit-only
-    // pass can blank a list Settings just found (Flatpak/fwupd or a flaky pkcon).
-    if services::updates_pending_count() == 0 {
-        glib::timeout_add_local_once(std::time::Duration::from_secs(2), || {
-            services::updates_request_check(true);
-        });
+    // Refresh the list after open so a stale login cache is not Install's only
+    // view — soft PackageKit/distro (debounced). Full Flatpak/fwupd only when
+    // nothing is pending yet. Skipped while an install is already running.
+    if !services::updates_apply_in_flight() {
+        if services::updates_pending_count() == 0 {
+            glib::timeout_add_local_once(std::time::Duration::from_secs(2), || {
+                if !services::updates_apply_in_flight() {
+                    services::updates_request_check(true);
+                }
+            });
+        } else {
+            glib::timeout_add_local_once(std::time::Duration::from_secs(1), || {
+                if !services::updates_apply_in_flight() {
+                    services::updates_request_check(false);
+                }
+            });
+        }
     }
 }
 
@@ -299,9 +314,12 @@ fn ensure_opaque_css() {
             background-color: {accent};
             border: 1px solid {accent};
         }}
+        /* Barber-pole: tile 24×24 matches a 12px stripe period at −45° so the
+           loop is seamless. Pin to left/top — Adwaita centers backgrounds and
+           that made the diagonals look like jagged lightning across the bar. */
         @keyframes metis-updater-stripe {{
-            from {{ background-position: 0 0; }}
-            to {{ background-position: 24px 0; }}
+            from {{ background-position: left top; }}
+            to {{ background-position: 24px top; }}
         }}
         window.metis-updater progressbar.metis-updater-row-progress {{
             min-width: 88px;
@@ -309,27 +327,36 @@ fn ensure_opaque_css() {
         }}
         window.metis-updater progressbar.metis-updater-row-progress trough {{
             min-height: 12px;
+            padding: 0;
             border-radius: 999px;
             background-color: rgba({text_rgb}, 0.12);
         }}
         window.metis-updater progressbar.metis-updater-row-progress progress {{
             min-height: 12px;
+            margin: 0;
             border-radius: 999px;
             background-color: {accent};
+            background-position: left top;
+            background-repeat: repeat;
         }}
         window.metis-updater progressbar.metis-updater-row-progress-active progress {{
             min-height: 12px;
+            margin: 0;
             border-radius: 999px;
             background-color: {accent};
             background-image: repeating-linear-gradient(
                 -45deg,
-                {accent},
-                {accent} 5px,
-                #ffffff 5px,
-                #ffffff 10px
+                {accent} 0px,
+                {accent} 6px,
+                rgba(255, 255, 255, 0.40) 6px,
+                rgba(255, 255, 255, 0.40) 12px
             );
-            background-size: 20px 20px;
-            animation: metis-updater-stripe 0.55s linear infinite;
+            background-size: 24px 24px;
+            background-repeat: repeat;
+            background-position: left top;
+            background-origin: padding-box;
+            background-clip: padding-box;
+            animation: metis-updater-stripe 0.7s linear infinite;
         }}
         "#
     );
@@ -549,6 +576,7 @@ fn build() -> UpdaterState {
     // Hide instead of destroy: an in-flight install still holds the widgets,
     // and `show()` reuses the same window. No RefCell access on this path.
     window.connect_close_request(|window| {
+        services::updates_set_updater_visible(false);
         window.set_visible(false);
         glib::Propagation::Stop
     });
@@ -635,6 +663,9 @@ fn build() -> UpdaterState {
             WINDOW.with(|cell| {
                 if let Some(state) = cell.borrow().as_ref()
                     && state.window.is_visible()
+                    // Never rebuild rows mid-install — a finishing soft check
+                    // used to wipe progress and look like Update all reset.
+                    && !state.applying.get()
                 {
                     refresh_content(state);
                 }
@@ -1344,6 +1375,11 @@ fn update_selection_chrome(
 }
 
 fn refresh_content(state: &UpdaterState) {
+    // Defensive: callers should already skip while applying.
+    if state.applying.get() {
+        return;
+    }
+
     let snap = services::updates_snapshot();
     let count = snap.total_count();
 

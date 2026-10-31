@@ -5,6 +5,19 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-10-31]
+
+### Fixed
+
+- **Updater Install vs soft-check race** — Opening Software Updates soon after
+  login no longer lets the background PackageKit list finish mid-**Update all**,
+  reset the progress UI, and re-toast “updates ready”. Soft checks pause while
+  installing; the updater refreshes on open; toasts are suppressed while the
+  window is open; the login cache no longer re-notifies the same count.
+- **Updater row progress stripes** — Active package bars pin the barber-pole
+  pattern to the top-left (was theme-centered) with a matching tile size so the
+  diagonals no longer look like jagged lightning.
+
 ## [2026-10-23]
 
 ### Added

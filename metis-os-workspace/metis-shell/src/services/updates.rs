@@ -37,14 +37,35 @@ thread_local! {
     /// When a re-check is queued, prefer a full (Flatpak/fwupd) pass if any
     /// waiter asked for one — soft checks must not resurrect a stale list.
     static RECHECK_QUEUED_FULL: Cell<bool> = const { Cell::new(false) };
+    /// Install in progress — soft checks must not clobber the updater UI or
+    /// fight PackageKit for the dpkg lock.
+    static APPLY_IN_FLIGHT: Cell<bool> = const { Cell::new(false) };
+    /// Updater window is mapped — suppress "updates available" toasts the user
+    /// already sees in the list.
+    static UPDATER_VISIBLE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Run the queued forced re-check once the in-flight check has finished.
 fn drain_recheck_queue() {
+    if APPLY_IN_FLIGHT.get() {
+        // Leave RECHECK_* set; apply's Finished handler starts the post-install
+        // check (and will drain anything still queued).
+        return;
+    }
     if RECHECK_QUEUED.replace(false) {
         let full = RECHECK_QUEUED_FULL.replace(false);
         run_check(full, true);
     }
+}
+
+/// True while PackageKit / Flatpak / fwupd apply is running.
+pub fn apply_in_flight() -> bool {
+    APPLY_IN_FLIGHT.get()
+}
+
+/// Tell the service the Software Updates window is shown or hidden.
+pub fn set_updater_visible(visible: bool) {
+    UPDATER_VISIBLE.set(visible);
 }
 
 /// Soft checks closer than this are skipped (cached snapshot wins).
@@ -126,7 +147,11 @@ pub fn spawn_updates_service() {
     }
     SERVICE_STARTED.set(true);
     if let Some(snap) = load_cached_snapshot() {
+        let count = snap.total_count();
         SNAPSHOT.with(|s| *s.borrow_mut() = snap);
+        // Seed so the first soft check after login does not re-toast the same
+        // cached count the edge-bar badge already shows.
+        LAST_NOTIFIED_COUNT.with(|c| c.set(count));
     }
     schedule_snooze_expiry_refresh(&load_updates_config());
     fire_refresh();
@@ -195,6 +220,15 @@ fn run_check(manual: bool, force: bool) {
     if !manual && !force && !cfg.enabled {
         return;
     }
+    // Installing: do not start a competing pkcon get-updates (dpkg lock + UI
+    // reset). Force post-apply checks still run after APPLY_IN_FLIGHT clears.
+    if APPLY_IN_FLIGHT.get() && !force {
+        RECHECK_QUEUED.set(true);
+        if manual {
+            RECHECK_QUEUED_FULL.set(true);
+        }
+        return;
+    }
     if !manual
         && !force
         && let Some(at) = LAST_CHECK_AT.get()
@@ -243,6 +277,15 @@ fn run_check(manual: bool, force: bool) {
             LAST_CHECK_AT.set(Some(Instant::now()));
             if CHECK_GEN.with(|g| g.get()) != r#gen {
                 drain_recheck_queue();
+                return glib::ControlFlow::Break;
+            }
+            // Apply started while this check was still listing — discard so we
+            // neither toast nor rebuild the install UI mid-flight.
+            if APPLY_IN_FLIGHT.get() {
+                RECHECK_QUEUED.set(true);
+                if manual {
+                    RECHECK_QUEUED_FULL.set(true);
+                }
                 return glib::ControlFlow::Break;
             }
             if !manual {
@@ -313,6 +356,12 @@ fn run_check(manual: bool, force: bool) {
 
 fn maybe_notify(cfg: &UpdatesConfig, count: usize) {
     if !cfg.notify_on_available || cfg.is_snoozed() || count == 0 {
+        LAST_NOTIFIED_COUNT.with(|c| c.set(count));
+        return;
+    }
+    // User already has the updater open — toasting "updates ready" mid-browse
+    // or mid-install is noise (and looked like Install had reset).
+    if UPDATER_VISIBLE.get() {
         LAST_NOTIFIED_COUNT.with(|c| c.set(count));
         return;
     }
@@ -448,6 +497,12 @@ pub fn start_apply_scope(
     let (tx, rx) = mpsc::sync_channel::<UpdateProgressEvent>(64);
     let full_recheck = scope_needs_full_recheck(&scope, &sources);
     let scope_for_prune = scope.clone();
+    // Block soft checks and invalidate any list-in-flight so its completion
+    // cannot rebuild the updater / grab the PackageKit lock during install.
+    APPLY_IN_FLIGHT.set(true);
+    CHECK_GEN.with(|g| g.set(g.get().wrapping_add(1)));
+    RECHECK_QUEUED.set(false);
+    RECHECK_QUEUED_FULL.set(false);
     std::thread::spawn(move || {
         let _ = updates_apply_scope(&sources, &scope, Some(tx));
     });
@@ -469,6 +524,7 @@ pub fn start_apply_scope(
                     }
                     on_event(ev);
                     if done {
+                        APPLY_IN_FLIGHT.set(false);
                         // Flatpak/fwupd were just applied (or cleared). A soft
                         // PackageKit-only check would clone the pre-apply list
                         // back in — use a full check when those sources ran.
@@ -478,6 +534,7 @@ pub fn start_apply_scope(
                 }
                 Err(mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
                 Err(mpsc::TryRecvError::Disconnected) => {
+                    APPLY_IN_FLIGHT.set(false);
                     run_check(full_recheck, true);
                     return glib::ControlFlow::Break;
                 }

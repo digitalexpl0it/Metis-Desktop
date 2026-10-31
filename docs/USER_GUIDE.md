@@ -119,25 +119,30 @@ Widgets appear in the order set by `bar.json#widgets`. The defaults:
 | **Notifications** | *(optional)* Legacy bell — opens the same Notification Center as the clock. Removed from the default bar layout in Phase 13. |
 | **Clock** | Date/time with unread badge. Click opens the **Notification Center** (right panel): notifications, calendar events, and calendar/tools (world clocks, stopwatch, timer, alarms). **Esc** closes. |
 
-**Software updates.** After you log in, the shell runs a soft PackageKit/distro
-check about **90 seconds** later (with a few follow-up retries if the package
-manager was still busy), then again on the schedule under Settings → System →
-Updates (default **every 6 hours**). Soft checks are unprivileged and time-bounded
-so a stuck `apt`/`pkcon` cannot block later probes. **Settings → Check now** runs
-a full check (PackageKit/distro + Flatpak + fwupd) and shares the result with the
-edge-bar Updates icon and the updater window via
+**Software updates.** After you log in, the shell restores the last cached list
+(if any), then runs a soft PackageKit/distro check about **90 seconds** later
+(with a few follow-up retries if the package manager was still busy), then again
+on the schedule under Settings → System → Updates (default **every 6 hours**).
+Opening the updater also triggers a soft re-check (or a full check when the list
+is empty) so you are not installing from a stale login cache. Soft checks are
+unprivileged and time-bounded so a stuck `apt`/`pkcon` cannot block later
+probes; they pause while **Update all** / per-item **Install** is running so they
+cannot steal the package lock or reset the progress UI. **Settings → Check now**
+runs a full check (PackageKit/distro + Flatpak + fwupd) and shares the result
+with the edge-bar Updates icon and the updater window via
 `~/.cache/metis/updates-snapshot.json`. When updates are found you get a
 notification with **Install** / **Later**, and the Updates icon appears on the
-edge bar. Authentication is only required when you **Install**. The updater lists
-packages with select-all / per-item **Install**, zebra rows, a count-based
-overall progress bar (and current package name), per-row striped mini progress
-that becomes an **Installed** pill when each package finishes (the list scrolls
-to follow the active package), and a restart banner when
-`/var/run/reboot-required` (or PackageKit) says so. Metis’s PolicyKit dialog
-slides down as a top-center overlay above other windows. If a package hits a
-modified config file under `/etc`, the updater asks **Keep my version** or
-**Use package version** instead of failing silently. Flatpak and fwupd may still
-show their own prompts when elevation is required.
+edge bar (no repeat toast while the updater is already open). Authentication is
+only required when you **Install**. The updater lists packages with select-all /
+per-item **Install**, zebra rows, a count-based overall progress bar (and
+current package name), per-row striped mini progress that becomes an
+**Installed** pill when each package finishes (the list scrolls to follow the
+active package), and a restart banner when `/var/run/reboot-required` (or
+PackageKit) says so. Metis’s PolicyKit dialog slides down as a top-center
+overlay above other windows. If a package hits a modified config file under
+`/etc`, the updater asks **Keep my version** or **Use package version** instead
+of failing silently. Flatpak and fwupd may still show their own prompts when
+elevation is required.
 
 **Per-output bars.** With multiple outputs you can show the bar on **all
 displays** (each is independent and live) or **the primary display only** —
@@ -1759,6 +1764,7 @@ changes live.
 | LAN firewall not applied / Retry times out | Install `nftables` (or active `ufw`); ensure `metis-polkit-agent` is running (`ps` / session logs); use **Retry firewall apply** under Security, or `pkexec metis-remote firewall apply`. On polkit 127+, confirm `systemctl is-active polkit-agent-helper.socket` |
 | PolicyKit password dialog missing / auth fails | Confirm `metis-polkit-agent` is running; kill competing GNOME/KDE agents if register fails. Helper path: socket `/run/polkit/agent-helper.socket` or setuid `polkit-agent-helper-1`. Auth is a top-center layer-shell overlay — it should sit above the updater and other apps |
 | Settings says updates available but updater / bar icon empty | Rebuild/reinstall shell + settings (shared `updates-snapshot.json`). Use **Check now**, then **Open updater**; the badge should match |
+| Update all seems to reset / toast reappears mid-install | Fixed 2026-10-31: background soft checks no longer race Install (PackageKit lock + UI rebuild). Rebuild/reinstall the shell. Prefer waiting for the polkit prompt if authentication is required |
 | Update install stops on a config-file prompt | The updater should offer **Keep my version** / **Use package version**. If packages were left half-configured from an older build: `sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --fix-broken install` |
 | User list shows default icon instead of DE picture | Metis reads `~/.face`, `~/.face.icon`, then `/var/lib/AccountsService/icons/<username>`. Set a picture in Settings → Users or ensure the AccountsService icon exists and is world-readable |
 | RDP connects but screen is black | Confirm you are on a DRM session (not nested dev); unlock if the session is locked; check `metis-remote status` and PipeWire/portal stack |
