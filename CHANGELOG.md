@@ -14,9 +14,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   reset the progress UI, and re-toast “updates ready”. Soft checks pause while
   installing; the updater refreshes on open; toasts are suppressed while the
   window is open; the login cache no longer re-notifies the same count.
-- **Updater row progress stripes** — Active package bars pin the barber-pole
-  pattern to the top-left (was theme-centered) with a matching tile size so the
-  diagonals no longer look like jagged lightning.
+- **Updater progress stripes** — Barber-pole uses vertical bands (diagonals
+  clipped into triangles on the pill edge) on both the per-package bars and the
+  main overall progress bar.
 
 ## [2026-10-23]
 

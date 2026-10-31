@@ -214,16 +214,22 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
     }}
     .metis-updater-progress {{
         margin: 2px 0;
+        min-height: 12px;
     }}
     .metis-updater-progress trough {{
         border-radius: 999px;
-        min-height: 8px;
+        min-height: 12px;
+        padding: 0;
+        overflow: hidden;
         background-color: rgba({text_rgb}, 0.08);
     }}
     .metis-updater-progress progress {{
         border-radius: 999px;
-        min-height: 8px;
+        min-height: 12px;
+        margin: 0;
         background-color: {accent};
+        /* Stripes + animation live in the updater’s opaque USER CSS so they
+           survive Adwaita; keep solid fill here as the non-opaque fallback. */
     }}
     .metis-updater-actions {{
         margin-top: 6px;

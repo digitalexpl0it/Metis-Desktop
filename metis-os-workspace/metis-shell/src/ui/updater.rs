@@ -314,46 +314,46 @@ fn ensure_opaque_css() {
             background-color: {accent};
             border: 1px solid {accent};
         }}
-        /* Barber-pole: tile 24×24 matches a 12px stripe period at −45° so the
-           loop is seamless. Pin to left/top — Adwaita centers backgrounds and
-           that made the diagonals look like jagged lightning across the bar. */
+        /* Vertical barber-pole (90°) — diagonals clipped into little triangles
+           on the pill’s top edge. Same pattern on row + main progress bars. */
         @keyframes metis-updater-stripe {{
-            from {{ background-position: left top; }}
-            to {{ background-position: 24px top; }}
+            from {{ background-position: 0 0; }}
+            to {{ background-position: 16px 0; }}
+        }}
+        window.metis-updater progressbar.metis-updater-row-progress,
+        window.metis-updater progressbar.metis-updater-progress {{
+            min-height: 12px;
         }}
         window.metis-updater progressbar.metis-updater-row-progress {{
             min-width: 88px;
-            min-height: 12px;
         }}
-        window.metis-updater progressbar.metis-updater-row-progress trough {{
+        window.metis-updater progressbar.metis-updater-row-progress trough,
+        window.metis-updater progressbar.metis-updater-progress trough {{
             min-height: 12px;
             padding: 0;
+            overflow: hidden;
             border-radius: 999px;
             background-color: rgba({text_rgb}, 0.12);
         }}
-        window.metis-updater progressbar.metis-updater-row-progress progress {{
+        window.metis-updater progressbar.metis-updater-row-progress progress,
+        window.metis-updater progressbar.metis-updater-progress progress {{
             min-height: 12px;
             margin: 0;
             border-radius: 999px;
             background-color: {accent};
-            background-position: left top;
-            background-repeat: repeat;
         }}
-        window.metis-updater progressbar.metis-updater-row-progress-active progress {{
-            min-height: 12px;
-            margin: 0;
-            border-radius: 999px;
-            background-color: {accent};
+        window.metis-updater progressbar.metis-updater-row-progress-active progress,
+        window.metis-updater progressbar.metis-updater-progress-active progress {{
             background-image: repeating-linear-gradient(
-                -45deg,
+                90deg,
                 {accent} 0px,
-                {accent} 6px,
-                rgba(255, 255, 255, 0.40) 6px,
-                rgba(255, 255, 255, 0.40) 12px
+                {accent} 8px,
+                rgba(255, 255, 255, 0.28) 8px,
+                rgba(255, 255, 255, 0.28) 16px
             );
-            background-size: 24px 24px;
-            background-repeat: repeat;
-            background-position: left top;
+            background-size: 16px 100%;
+            background-repeat: repeat-x;
+            background-position: 0 0;
             background-origin: padding-box;
             background-clip: padding-box;
             animation: metis-updater-stripe 0.7s linear infinite;
@@ -712,6 +712,9 @@ fn begin_apply(
     handles.progress.set_visible(true);
     handles.progress.set_fraction(0.0);
     handles.progress.set_show_text(true);
+    handles
+        .progress
+        .add_css_class("metis-updater-progress-active");
     set_count_progress(&handles, 0, apply_total);
     handles.progress_item.set_visible(true);
     handles.progress_item.set_text("");
@@ -813,6 +816,9 @@ fn begin_apply(
                         None => {
                             applying.set(false);
                             install_btn.set_sensitive(true);
+                            handles
+                                .progress
+                                .remove_css_class("metis-updater-progress-active");
                             handles.status.set_text(&metis_i18n::tr(
                                 "Update paused — finish the config conflict to continue",
                             ));
@@ -834,6 +840,9 @@ fn begin_apply(
                             let on_done: Rc<dyn Fn(Result<(), String>)> = Rc::new(move |result| {
                                 applying.set(false);
                                 install_btn.set_sensitive(true);
+                                handles
+                                    .progress
+                                    .remove_css_class("metis-updater-progress-active");
                                 match result {
                                     Ok(()) => {
                                         set_count_progress(&handles, apply_total, apply_total);
@@ -870,6 +879,9 @@ fn begin_apply(
                 track.pulse_stop.set(true);
                 applying_cb.set(false);
                 install_btn.set_sensitive(true);
+                handles
+                    .progress
+                    .remove_css_class("metis-updater-progress-active");
                 if ok {
                     if let Some(prev) = track.current_item.borrow_mut().take() {
                         row_set_installed(&handles.row_status.borrow(), &prev);
