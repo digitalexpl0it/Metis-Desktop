@@ -56,3 +56,13 @@ Happy to supply a minimal compositor repro or ASAN traces if useful.
 Seen in the [Metis](https://github.com/digitalexpl0it/Metis) Smithay compositor
 (Phase 5 colour pipeline). Product workaround: keep the global **opt-in** until a
 server-side fix ships.
+
+### Proposed fix (2026-11-14)
+
+PR: [Smithay/wayland-rs#996](https://github.com/Smithay/wayland-rs/pull/996)
+
+`dispatch_all_clients` now sets `PENDING_DESTRUCTORS` for the duration of
+`wl_event_loop_dispatch` so `ObjectData::destroyed` / `ResourceUserData` free
+runs only after the batch (the drain after dispatch already existed). Metis will
+**not** depend on a personal fork; colour management stays `METIS_COLOR_MGMT=1`
+opt-in until that fix is on crates.io and pulled in via smithay.
