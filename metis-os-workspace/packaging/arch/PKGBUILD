@@ -5,7 +5,7 @@
 #   cd metis-os-workspace/packaging/arch && makepkg -si
 
 pkgname=metis-desktop
-pkgver=0.1.0.12
+pkgver=0.1.0.31
 pkgrel=1
 pkgdesc="Metis Wayland desktop environment (compositor, shell, settings)"
 arch=('x86_64')
