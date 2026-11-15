@@ -72,10 +72,7 @@ impl MetisState {
         if self.window_is_capture_overlay(id) {
             return false;
         }
-        !rec
-            .app_id
-            .as_deref()
-            .is_some_and(is_metis_chrome_app_id)
+        !rec.app_id.as_deref().is_some_and(is_metis_chrome_app_id)
     }
 
     /// Super+U / `ToggleScratchpad`: send focused desk window, or hide/show MRU.
