@@ -37,11 +37,11 @@ impl DecorationsRuntime {
     pub fn maybe_refresh(&mut self) -> bool {
         let path = metis_config::decorations_config_path();
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if mtime != self.path_mtime {
+        let changed = mtime != self.path_mtime;
+        if changed {
             self.reload();
-            return true;
         }
-        false
+        changed
     }
 
     /// `Some(true)` force SSD, `Some(false)` force CSD, `None` Auto.

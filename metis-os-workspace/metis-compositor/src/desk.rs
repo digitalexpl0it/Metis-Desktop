@@ -2032,16 +2032,17 @@ impl MetisState {
             if was_visible_on_source {
                 let on_ws: std::collections::HashSet<u32> = window_ids.iter().copied().collect();
                 desk.layout.tiles.retain(|t| {
-                    if let TileKind::App {
-                        window_id: Some(wid),
-                        ..
-                    } = &t.kind
-                        && on_ws.contains(wid)
-                    {
+                    let take = matches!(
+                        &t.kind,
+                        TileKind::App {
+                            window_id: Some(wid),
+                            ..
+                        } if on_ws.contains(wid)
+                    );
+                    if take {
                         tiles.push(t.clone());
-                        return false;
                     }
-                    true
+                    !take
                 });
             }
             (kind, scroll, tiles)

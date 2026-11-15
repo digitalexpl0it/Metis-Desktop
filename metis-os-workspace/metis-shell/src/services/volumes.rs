@@ -400,10 +400,7 @@ fn looks_like_serial_or_uuid(name: &str) -> bool {
     }
     // Long unbroken hex / alphanumeric serials (no spaces), common for raw device ids.
     let alnum: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    if alnum.len() >= 12 && alnum.chars().all(|c| c.is_ascii_hexdigit()) && !s.contains(' ') {
-        return true;
-    }
-    false
+    alnum.len() >= 12 && alnum.chars().all(|c| c.is_ascii_hexdigit()) && !s.contains(' ')
 }
 
 fn volume_id(volume: &gio::Volume) -> String {

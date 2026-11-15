@@ -74,13 +74,7 @@ pub fn sanitize_startup_config(mut cfg: StartupConfig) -> StartupConfig {
     let mut seen = std::collections::HashSet::new();
     cfg.entries.retain(|e| {
         let id = e.id.trim();
-        if !is_safe_launch_id(id) {
-            return false;
-        }
-        if !seen.insert(id.to_string()) {
-            return false;
-        }
-        true
+        is_safe_launch_id(id) && seen.insert(id.to_string())
     });
     for e in &mut cfg.entries {
         e.id = e.id.trim().to_string();

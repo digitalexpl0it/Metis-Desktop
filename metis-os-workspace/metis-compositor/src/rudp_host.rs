@@ -923,11 +923,11 @@ impl EncoderSupervisor {
 
     /// True exactly once when a back-off has expired.
     fn take_retry_refresh(&mut self, now: Instant) -> bool {
-        if self.refresh_on_retry && self.may_open(now) {
+        let due = self.refresh_on_retry && self.may_open(now);
+        if due {
             self.refresh_on_retry = false;
-            return true;
         }
-        false
+        due
     }
 }
 

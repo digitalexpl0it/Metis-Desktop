@@ -393,13 +393,7 @@ fn resolve_graphics_mode(program: &str, cfg: &GamingConfig) -> bool {
         GraphicsMode::Auto | GraphicsMode::DesktopIgpuGamesDgpu => {
             // Games / launchers only (browsers stay on the compositor GPU).
             let wants_dgpu = command_prefers_dgpu(program);
-            if !wants_dgpu {
-                return false;
-            }
-            if cfg.on_battery_prefer_igpu && on_battery() {
-                return false;
-            }
-            true
+            wants_dgpu && !(cfg.on_battery_prefer_igpu && on_battery())
         }
     }
 }

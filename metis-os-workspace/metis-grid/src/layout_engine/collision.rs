@@ -14,10 +14,7 @@ pub fn collides(a: &LayoutItem, b: &LayoutItem) -> bool {
     if a.bottom() <= b.row {
         return false;
     }
-    if a.row >= b.bottom() {
-        return false;
-    }
-    true
+    a.row < b.bottom()
 }
 
 pub fn get_first_collision<'a>(

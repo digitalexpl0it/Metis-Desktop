@@ -1319,14 +1319,14 @@ impl XwmHandler for MetisState {
     }
 
     fn allow_selection_access(&mut self, xwm: XwmId, _selection: SelectionTarget) -> bool {
-        if let Some(keyboard) = self.seat.get_keyboard()
-            && let Some(KeyboardFocusTarget::Window(w)) = keyboard.current_focus()
-            && let Some(surface) = w.x11_surface()
-            && surface.xwm_id() == Some(xwm)
-        {
-            return true;
-        }
-        false
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return false;
+        };
+        let Some(KeyboardFocusTarget::Window(w)) = keyboard.current_focus() else {
+            return false;
+        };
+        w.x11_surface()
+            .is_some_and(|surface| surface.xwm_id() == Some(xwm))
     }
 
     fn send_selection(

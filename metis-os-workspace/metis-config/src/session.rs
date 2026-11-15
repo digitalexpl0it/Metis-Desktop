@@ -252,10 +252,7 @@ pub fn sanitize_session_snapshot(mut snap: SessionSnapshot) -> SessionSnapshot {
         if is_metis_chrome_app_id(app) {
             return false;
         }
-        if !desk.is_empty() && !is_safe_launch_id(desk) {
-            return false;
-        }
-        true
+        desk.is_empty() || is_safe_launch_id(desk)
     });
     for w in &mut snap.windows {
         w.output = w.output.trim().to_string();

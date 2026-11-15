@@ -459,9 +459,10 @@ fn build_overlay() -> Rc<SearchOverlay> {
                     && o.preview_open.get()
                 {
                     close_preview(o);
-                    return true;
+                    true
+                } else {
+                    false
                 }
-                false
             });
             if !closed_preview {
                 dismiss();
@@ -1457,10 +1458,7 @@ fn match_looks_like_content(hit: &SearchHit, query: &str) -> bool {
     }
     let compact_q: String = q.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     let compact_base: String = base.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    if compact_q.len() >= 2 && compact_base.contains(&compact_q) {
-        return false;
-    }
-    true
+    compact_q.len() < 2 || !compact_base.contains(&compact_q)
 }
 
 fn mime_is_image(mime: Option<&str>) -> bool {

@@ -79,11 +79,7 @@ fn metis_bar_region_contains(
         return true;
     }
 
-    if layer.bbox().to_f64().contains(local) {
-        return true;
-    }
-
-    false
+    layer.bbox().to_f64().contains(local)
 }
 
 fn layer_accepts_pointer(

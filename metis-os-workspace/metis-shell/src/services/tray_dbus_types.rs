@@ -168,13 +168,7 @@ pub fn resolve_tray_display_title(
 
 fn is_user_visible_tray_label(s: &str) -> bool {
     let s = s.trim();
-    if s.is_empty() {
-        return false;
-    }
-    if is_internal_tray_label(s) {
-        return false;
-    }
-    true
+    !s.is_empty() && !is_internal_tray_label(s)
 }
 
 fn is_internal_tray_label(s: &str) -> bool {
