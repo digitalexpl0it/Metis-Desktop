@@ -49,6 +49,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   overlay (`files_search` keybind; remappable in Settings → Keyboard →
   Shortcuts).
 
+### Security
+
+- **`cargo deny` supply-chain refresh** — bump `notify` 8 / `inotify` 0.11
+  (drop `bitflags` 1), `rusqlite` 0.41 / bundled SQLite 3.54 (`RUSTSEC-2026-0459`),
+  and `rustix` 1.1.6 (`RUSTSEC-2026-0486`); skip/ignore remaining tantivy and
+  wasmtime 36.0.19 lockstep advisories until upstream bumps.
+
 ## [2026-10-31]
 
 ### Fixed
