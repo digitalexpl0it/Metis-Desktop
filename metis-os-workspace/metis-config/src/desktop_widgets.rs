@@ -885,12 +885,8 @@ fn sanitize(mut cfg: DesktopWidgetsConfig) -> DesktopWidgetsConfig {
     }
     cfg.chrome = cfg.chrome.sanitize();
     let mut seen = std::collections::HashSet::new();
-    cfg.instances.retain(|inst| {
-        if inst.id.is_empty() || !seen.insert(inst.id.clone()) {
-            return false;
-        }
-        true
-    });
+    cfg.instances
+        .retain(|inst| !inst.id.is_empty() && seen.insert(inst.id.clone()));
     for inst in &mut cfg.instances {
         inst.w = inst.w.clamp(160, 2400);
         inst.h = inst.h.clamp(120, 1800);
