@@ -3321,7 +3321,6 @@ dependencies = [
  "metis-config",
  "metis-grid",
  "metis-i18n",
- "metis-protocol",
  "png",
  "tracing",
  "tracing-subscriber",

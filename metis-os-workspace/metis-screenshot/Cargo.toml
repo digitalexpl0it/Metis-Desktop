@@ -19,7 +19,6 @@ gtk4-layer-shell = "0.8"
 metis-config = { workspace = true }
 metis-i18n = { workspace = true }
 metis-capture = { workspace = true }
-metis-protocol = { workspace = true }
 metis-grid = { workspace = true }
 png = "0.18"
 image = { version = "0.25", default-features = false, features = ["png"] }

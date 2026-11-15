@@ -80,7 +80,7 @@ jobs:
           pkg-config --atleast-version=1.0 gtk4-layer-shell-0
           echo "GTK $(pkg-config --modversion gtk4), layer-shell $(pkg-config --modversion gtk4-layer-shell-0)"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.100.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: metis-os-workspace -> target

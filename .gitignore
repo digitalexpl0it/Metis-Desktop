@@ -2,6 +2,12 @@
 target/
 metis-os-workspace/.cargo-target/
 metis-os-workspace/.tmp/
+metis-os-workspace/.toolchain-*/
+metis-os-workspace/.rustup-home/
+metis-os-workspace/.cargo-home*/
+metis-os-workspace/vendor/
+metis-os-workspace/*.crate
+metis-os-workspace/channel-rust-stable.toml
 **/dist/
 **/*.rs.bk
 *.pdb
