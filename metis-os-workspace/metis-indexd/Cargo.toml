@@ -1,0 +1,30 @@
+[package]
+name = "metis-indexd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Metis desktop search indexer (Tantivy + user tags)"
+
+[[bin]]
+name = "metis-indexd"
+path = "src/main.rs"
+
+[dependencies]
+directories = "6"
+libc = "0.2"
+metis-config = { workspace = true }
+metis-protocol = { workspace = true }
+notify = "7"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tantivy = "0.22"
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "net", "io-util"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"

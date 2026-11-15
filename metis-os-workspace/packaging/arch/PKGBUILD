@@ -66,6 +66,9 @@ optdepends=(
   'fcitx5-chinese-addons: Chinese input engines for Fcitx5'
   'fcitx5-mozc: Japanese Mozc engine for Fcitx5'
   'fcitx5-anthy: Japanese Anthy engine for Fcitx5'
+  'poppler: pdftotext / pdftoppm for File search PDF index + first-page preview'
+  'libreoffice-still: Office text preview in File search (or libreoffice-fresh)'
+  'libreoffice-fresh: Office text preview in File search (or libreoffice-still)'
 )
 makedepends=(
   'rust>=1.95'
@@ -110,7 +113,8 @@ build() {
     -p metis-gaming \
     -p metis-encode \
     -p metis-rudp-host \
-    -p metis-secretsd
+    -p metis-secretsd \
+    -p metis-indexd
 }
 
 package() {

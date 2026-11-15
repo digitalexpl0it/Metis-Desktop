@@ -72,6 +72,7 @@ pub(crate) fn watch_compositor_dismiss() {
                     rearm_auto_hide_after_ui_dismiss();
                 }
                 "toggle-menu" => widgets::toggle_menu(),
+                "toggle-files-search" => widgets::files_search::toggle(),
                 // Multimedia / hardware keys forwarded by the compositor
                 // (`hw <action>`): volume, brightness, media transport, and the
                 // display mirror/extend confirmation overlay.

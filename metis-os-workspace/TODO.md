@@ -26,6 +26,10 @@ presets for gaming, CAD, Blender, movies, and everyday desktop) **engineering
 closed 2026-10-23** (workload validation still open) — see Phase 24 below.
 **Phase 25** (Metis Remote mic uplink + Viewer audio UX) **landed 2026-10-23**
 — see Phase 25 below.
+**Phase 26** (Desktop search + taskbar peeks — `metis-indexd` **Tantivy**
+content index + tags/categories, edge-bar Files search, live window peeks)
+**closed 2026-11-15** (extractors + tag polish) — see Phase 26 below. Metis
+file manager deferred.
 **Phase 16** (Engineering hardening) closed 2026-08-02 — PR CI quality gate,
 trust-boundary tests, compositor panic triage, portal coverage, `cargo-deny`,
 command-file allowlist, PERF_AUDIT refresh, shell poll D-Bus path, packaging CI
@@ -110,9 +114,11 @@ is tracked under **Product backlog — Desktop maturity** below.
 **Suggested order:** S1–S3 + MultiRenderer **1** + HDR float scene **2** landed
 → colour protocol default-on (**3b** / **M2**, blocked) or engineering backlog;
 Gamescope **4** and native remote **3** landed.
-**Next product stream:** Phase 24/25 **live validation** (Gaming / CAD /
-Blender / Movie / Everyday + mic allow/deny/lock / Sound mute) — CI unblocked
-2026-10-23 (`libavfilter-dev` + smoke mic arms). Webcam / AEC deferred.
+**Phase 26 landed 2026-11-14** (Tantivy desktop search + tags + taskbar peeks).
+Phase 24/25 **live validation** still human/two-machine (Gaming / CAD / Blender /
+Movie / Everyday + mic allow/deny/lock / Sound mute); agent prep 2026-11-14
+installed session + audio/protocol smoke. Webcam / AEC deferred. Colour **M2**
+still blocked on wayland-rs#996. Metis file manager **on hold**.
 
 ### Product backlog — Themes, icons, default apps (2026-10-18)
 
@@ -2646,6 +2652,8 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
 ### Workloads to validate
 
 *(Human / two-machine pass — agent cannot drive GPU sessions. Tick when run.)*
+**2026-11-14:** session install + audio/protocol smoke ready; boxes stay open
+until a human runs the matrix (not agent-deferred forever — still required).
 
 - [ ] **Gaming** — fullscreen Proton/native; relative mouse + pointer lock;
       motion without multi-second trail.
@@ -2667,7 +2675,7 @@ Safe default remains `metis-encode-probe` (driver crash ≠ session death).
 `metis-encode` isolated + in-process open paths; Settings Metis Remote page.
 
 **Engineering closed 2026-10-23** aside from workload validation checkboxes
-above. Product stream continues in **Phase 25**.
+above. Next product phase after Remote validation: **Phase 26** (search + peeks).
 
 ---
 
@@ -2698,6 +2706,8 @@ remain deferred (`pts_us` still reserved).
       `MRUM` header.
 - [ ] **Live validation** — allow + Mic → host hears; allow off / lock deny;
       Sound mute local-only (human; same sprint as Phase 24 workloads).
+      **2026-11-14:** agent prep done (install + mic protocol tests); live
+      matrix still needs two machines.
 
 ### Explicitly out of Phase 25
 
@@ -2706,6 +2716,90 @@ remain deferred (`pts_us` still reserved).
 - AEC / full duplex echo cancellation
 - A/V lip-sync (keep carrying `pts_us`)
 - Changing downlink Opus format
+
+---
+
+## Phase 26 — Desktop search + taskbar peeks
+
+Opened **2026-11-14** while Phase 24/25 live Remote validation remains
+human-gated and colour **M2** waits on wayland-rs#996. Goal: system file +
+**content** search from the edge bar (Metis-owned **Tantivy** indexer with
+**categories + tags**), plus live window previews when hovering running apps
+on the taskbar.
+
+**Product bar**
+- Search files and folders by name **and** extracted text content (fast,
+  lightweight Tantivy index — “mini search engine”, not Elastic/OpenSearch).
+- **Categories** (Documents / Images / Video / Audio / Archives / Code /
+  Downloads / Desktop / Other + XDG user-dir hints) and **tags** (user + auto)
+  for filters, chips, and later content management / FM.
+- Edge-bar **Files** search widget → layer-shell overlay (query, category/tag
+  filters, open / reveal in the configured file manager).
+- Hover a running taskbar app → peek popover with live-ish window thumbnail(s)
+  (reuse compositor `window_thumb`; refresh while hovered).
+
+### A. `metis-indexd` (indexer daemon)
+
+Out-of-process (same idea as `metis-rudp-host` / `metis-secretsd`) so crawling
+and extraction never stall the GTK shell.
+
+- [x] **Crate + session spawn** — workspace `metis-indexd` bin; session /
+      `run-metis.sh` / `metis-session` start it; socket
+      `$XDG_RUNTIME_DIR/metis/indexd.sock`; packaging installs the binary.
+- [x] **Engine = Tantivy** — Tantivy-only v1 under `$XDG_CACHE_HOME/metis/index/v1/`.
+- [x] **Document schema (v1)** — path, basename, extension, MIME, size, mtime,
+      device+inode, content hash, body, lang, category, tags, root_id.
+      ADR: `docs/decisions/desktop-search-index.md`.
+- [x] **Categories** — MIME + XDG path hints + extension map → facet chips.
+- [x] **Tags (first-class)** — auto (`cat:`, `dir:`, `year:`) + user SQLite
+      sidecar; IPC TagAdd/TagRemove/TagsList/SuggestTags.
+- [x] **Incremental crawl** — walk roots + `notify`/inotify; `.nomedia` /
+      hidden / excludes; size caps; batched commits.
+- [x] **Content extractors (pluggable)** — plain/text/code; HTML strip; PDF via
+      optional `pdftotext` (soft-fail); Settings toggles + `ReloadConfig`.
+- [x] **Query IPC** — Query + Status/ReloadConfig/Pause/Resume/Reindex; soft-fail if down.
+- [x] **Settings + docs** — Settings → File search; `search.json`; USER_GUIDE /
+      CHANGELOG / ADR.
+
+### B. Edge-bar Files search UI
+
+- [x] **Bar widget** — `BarWidgetId::FilesSearch` near Tasks (migrate once).
+- [x] **Overlay UX** — layer-shell overlay with entry, category chips, open /
+      reveal / preview tag edit; `tag:` query tokens; **Super+S** toggle.
+- [x] **Theming** — shared bar/dropdown token classes.
+- [x] **i18n** — `metis_i18n::tr` for chrome + empty / error states.
+
+### C. Taskbar live peeks
+
+- [x] **Hover peek** — popover with window card(s) for the app group.
+- [x] **Thumb refresh** — `CaptureWindowThumbs` ~6–7 Hz while mapped; stop on leave.
+- [x] **Interaction** — click focuses; leave dismisses.
+
+### E. Close-out (2026-11-15)
+
+- [x] **HTML + PDF extractors** — real HTML strip; `pdftotext` with timeout;
+      rebuild extractors on `reload_config` / `ReloadConfig`.
+- [x] **Settings extractors + tags** — plain/HTML/PDF toggles; light tag browser
+      (SuggestTags → files → TagRemove).
+- [x] **Preview tag edit** — always show tags; add/remove user tags async; click
+      to filter.
+- [x] **Packaging** — Deb `Recommends: poppler-utils`; Arch optdepends `poppler`;
+      Nix wrap `metis-indexd` PATH with `poppler_utils`.
+
+### D. Explicitly out of Phase 26 / on hold
+
+- **Metis file manager** — on hold (keep using the configured third-party FM
+  for open/reveal). Revisit as its own phase later.
+- Cloud / network FS as first-class roots; full OCR pipeline as default
+- Shipping an Elasticsearch/OpenSearch cluster or remote index service
+- Replacing Task View / Super+Tab (peeks complement, do not replace)
+- Phase 24/25 Remote validation (still human); colour M2 (upstream)
+
+**Phase 26 closed 2026-11-15** (extractors + tag polish).
+
+**Dependencies:** shell bar widgets + layer-shell popovers; compositor
+`window_thumb` / Task View thumb IPC; default file manager resolution; session
+spawn pattern from Phase 23 hosts.
 
 ---
 
@@ -2747,6 +2841,7 @@ recent hosts; no passwords).
 | `power.json` | Power profile, idle blank/suspend timeouts, lid-close action |
 | `outputs.json` | Per-output scale, enabled, layout, saved video mode, night-light prefs (live connector-keyed map; profiles live in `output-profiles.json`) |
 | `rudp.json` | Metis Remote: enable, port, LAN/firewall, allowlist, unlock-on-auth, encoder/codec/bitrate; **Phase 24:** `stream_quality`; **Phase 25:** `allow_mic_uplink` (default false) |
+| `search.json` | Desktop search: index roots, excludes, pause, extractor prefs (Tantivy under `$XDG_CACHE_HOME/metis/index/v1/`; user tags in `$XDG_DATA_HOME/metis/search-tags.sqlite`) |
 
 ### `bar.json` (defaults)
 

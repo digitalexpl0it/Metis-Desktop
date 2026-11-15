@@ -540,6 +540,48 @@ pub fn build_settings_chrome_stylesheet(theme: &ThemeTokens) -> String {
             border: 1px solid {border};
             background-color: {raised};
         }}
+        .metis-search-path-scroll {{
+            margin: 4px 16px 8px;
+            border-radius: {rl}px;
+            border: 1px solid {border};
+            background-color: {raised};
+            padding: 4px 0;
+            min-height: 120px;
+        }}
+        .metis-search-path-list {{
+            background-color: transparent;
+            border: none;
+        }}
+        .metis-search-path-list row {{
+            padding: 8px 10px;
+            min-height: 36px;
+        }}
+        .metis-search-path-label {{
+            color: {text};
+            padding: 2px 0;
+        }}
+        .metis-search-stat-pill {{
+            background-color: rgba({accent_rgb}, 0.16);
+            color: {text};
+            border: 1px solid rgba({accent_rgb}, 0.35);
+            border-radius: 999px;
+            padding: 4px 12px;
+            font-weight: 600;
+            font-feature-settings: "tnum";
+        }}
+        .metis-search-root-pills {{
+            flex-wrap: wrap;
+        }}
+        .metis-search-progress {{
+            margin: 4px 0 8px;
+        }}
+        .metis-search-chart {{
+            background-color: {raised};
+            border: 1px solid {border};
+            border-radius: {rl}px;
+            min-height: 160px;
+            padding: 4px;
+        }}
         .metis-settings-section-body > .metis-settings-list-scroll > .metis-settings-list {{
             margin: 0;
             border: none;

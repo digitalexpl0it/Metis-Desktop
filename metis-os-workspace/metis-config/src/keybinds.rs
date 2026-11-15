@@ -97,6 +97,8 @@ pub enum KeybindAction {
     WindowSwitcherNext,
     WindowSwitcherPrev,
     WorkspaceOverview,
+    /// Toggle the edge-bar File search overlay.
+    FilesSearch,
 }
 
 impl KeybindAction {
@@ -155,12 +157,13 @@ impl KeybindAction {
             Self::WindowSwitcherNext => "Task View (next)",
             Self::WindowSwitcherPrev => "Task View (previous)",
             Self::WorkspaceOverview => "Task View",
+            Self::FilesSearch => "File search",
         }
     }
 
     pub fn group(self) -> KeybindGroup {
         match self {
-            Self::Lock | Self::OpenTerminal => KeybindGroup::Session,
+            Self::Lock | Self::OpenTerminal | Self::FilesSearch => KeybindGroup::Session,
             Self::CloseWindow
             | Self::Maximize
             | Self::Fullscreen
@@ -332,6 +335,7 @@ const ALL_ACTIONS: &[KeybindAction] = &[
     KeybindAction::WindowSwitcherNext,
     KeybindAction::WindowSwitcherPrev,
     KeybindAction::WorkspaceOverview,
+    KeybindAction::FilesSearch,
 ];
 
 /// A keyboard chord: optional modifiers + one key name.
@@ -632,6 +636,7 @@ pub fn default_chord(action: KeybindAction, mod_key: ModKey) -> Chord {
         KeybindAction::WindowSwitcherNext => Chord::new(false, false, false, false, ""),
         KeybindAction::WindowSwitcherPrev => Chord::new(true, false, false, true, "Tab"),
         KeybindAction::WorkspaceOverview => Chord::new(true, false, false, false, "Tab"),
+        KeybindAction::FilesSearch => m(false, "S"),
     }
 }
 

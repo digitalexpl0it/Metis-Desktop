@@ -119,6 +119,8 @@ pub enum BarWidgetId {
     Tray,
     /// Software updates available (PackageKit / Flatpak / fwupd). Hidden when idle.
     Updates,
+    /// Desktop file search (metis-indexd). Required prefix; after Workspaces.
+    FilesSearch,
 }
 
 impl BarWidgetId {
@@ -173,6 +175,7 @@ impl BarWidgetId {
             Self::RemovableVolumes => "Removable volumes",
             Self::Tray => "System tray",
             Self::Updates => "Software updates",
+            Self::FilesSearch => "File search",
         }
     }
 }
@@ -192,17 +195,19 @@ pub fn split_bar_widget_layout(
     }
     let prefix = vec![
         BarWidgetId::Workspaces,
+        BarWidgetId::FilesSearch,
         BarWidgetId::Tasks,
         BarWidgetId::Spacer,
     ];
     (prefix, status, has_clock)
 }
 
-/// Rebuild `widgets` as `[Workspaces, Tasks, Spacer, …status…, Clock]`.
+/// Rebuild `widgets` as `[Workspaces, FilesSearch, Tasks, Spacer, …status…, Clock]`.
 /// Drops unknowns / Notifications; keeps only optional ids from `status`.
 pub fn rebuild_bar_widgets(status: &[BarWidgetId]) -> Vec<BarWidgetId> {
     let mut out = vec![
         BarWidgetId::Workspaces,
+        BarWidgetId::FilesSearch,
         BarWidgetId::Tasks,
         BarWidgetId::Spacer,
     ];
@@ -677,6 +682,7 @@ fn default_true() -> bool {
 fn default_widgets() -> Vec<BarWidgetId> {
     vec![
         BarWidgetId::Workspaces,
+        BarWidgetId::FilesSearch,
         BarWidgetId::Tasks,
         BarWidgetId::Spacer,
         BarWidgetId::RemovableVolumes,
@@ -901,6 +907,22 @@ fn migrate_bar_config(cfg: &mut BarConfig, allow_persist: bool) {
         dirty = true;
     }
 
+    // Phase 26: file search sits immediately after the workspace switcher.
+    {
+        let mut next = cfg.widgets.clone();
+        next.retain(|w| !matches!(w, BarWidgetId::FilesSearch));
+        let slot = next
+            .iter()
+            .position(|w| matches!(w, BarWidgetId::Workspaces))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        next.insert(slot, BarWidgetId::FilesSearch);
+        if next != cfg.widgets {
+            cfg.widgets = next;
+            dirty = true;
+        }
+    }
+
     // Tray / volumes / updates adjacency is no longer force-fixed — users reorder
     // status icons freely (Settings arrows + on-bar drag).
 
@@ -972,6 +994,7 @@ mod tests {
         // Formerly migrate forced vol→tray→updates→weather; free reorder must stick.
         let input = vec![
             Workspaces,
+            FilesSearch,
             Tasks,
             Spacer,
             Weather,
@@ -988,7 +1011,16 @@ mod tests {
     #[test]
     fn migrate_margin_or_height_does_not_wipe_status_order() {
         use BarWidgetId::*;
-        let widgets = vec![Workspaces, Tasks, Spacer, Volume, Network, Bluetooth, Clock];
+        let widgets = vec![
+            Workspaces,
+            FilesSearch,
+            Tasks,
+            Spacer,
+            Volume,
+            Network,
+            Bluetooth,
+            Clock,
+        ];
         let mut cfg = BarConfig {
             widgets: widgets.clone(),
             margin_h: 64,
@@ -1018,6 +1050,7 @@ mod tests {
         let once = migrated(input);
         assert_eq!(migrated(once.clone()), once, "migrate must be idempotent");
         assert!(once.contains(&Tasks));
+        assert!(once.contains(&FilesSearch));
         // Optional status icons are not force-restored.
         assert!(!once.contains(&Weather));
         assert!(!once.contains(&Vpn));
@@ -1035,6 +1068,7 @@ mod tests {
         use BarWidgetId::*;
         let without_weather = vec![
             Workspaces,
+            FilesSearch,
             Tasks,
             Spacer,
             RemovableVolumes,
@@ -1055,6 +1089,30 @@ mod tests {
     }
 
     #[test]
+    fn migrate_moves_files_search_after_workspaces() {
+        use BarWidgetId::*;
+        let input = vec![Workspaces, Tasks, FilesSearch, Spacer, Clock];
+        let once = migrated(input);
+        assert_eq!(
+            once.iter().take(3).copied().collect::<Vec<_>>(),
+            vec![Workspaces, FilesSearch, Tasks]
+        );
+        assert_eq!(migrated(once.clone()), once);
+    }
+
+    #[test]
+    fn migrate_moves_files_search_from_front_after_workspaces() {
+        use BarWidgetId::*;
+        let input = vec![FilesSearch, Workspaces, Tasks, Spacer, Clock];
+        let once = migrated(input);
+        assert_eq!(
+            once.iter().take(3).copied().collect::<Vec<_>>(),
+            vec![Workspaces, FilesSearch, Tasks]
+        );
+        assert_eq!(migrated(once.clone()), once);
+    }
+
+    #[test]
     fn migrate_strips_notifications_when_clock_present() {
         use BarWidgetId::*;
         let input = vec![
@@ -1072,6 +1130,7 @@ mod tests {
         assert_eq!(migrated(once.clone()), once);
         assert!(!once.contains(&Notifications));
         assert!(once.contains(&Clock));
+        assert!(once.contains(&FilesSearch));
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod rudp_ctrl;
 mod rudp_host_ipc;
 mod rudp_mic;
 mod rudp_video;
+pub mod search;
 
 pub use metis_grid::{GridLayout, GridMetrics, LayoutKind, MonitorRect, PixelRect};
 pub use rate_limit::{
@@ -680,6 +681,7 @@ pub const BAR_RUNTIME_VERBS: &[&str] = &[
     "task-view-prev",
     "task-view-activate",
     "dismiss-task-view",
+    "toggle-files-search",
 ];
 
 /// Verbs accepted on `$XDG_RUNTIME_DIR/metis/command-widgets`.

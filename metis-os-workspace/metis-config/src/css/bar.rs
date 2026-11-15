@@ -619,5 +619,46 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         max-width: 220px;
     }}
 
+    /* Taskbar window peeks: app name keeps top inset; thumbs flush L/R/bottom. */
+    .metis-bar-dropdown-panel.metis-bar-tasks-peek {{
+        padding: 10px 0 0 0;
+    }}
+    .metis-bar-tasks-peek-title {{
+        padding: 0 12px 8px 12px;
+    }}
+    .metis-bar-tasks-peek-thumbs {{
+        margin: 0;
+        padding: 0;
+    }}
+    button.metis-bar-tasks-peek-card,
+    button.metis-bar-tasks-peek-card:hover,
+    button.metis-bar-tasks-peek-card:active,
+    button.metis-bar-tasks-peek-card:checked {{
+        background-color: transparent;
+        background-image: none;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 0;
+        margin: 0;
+        min-width: 0;
+        min-height: 0;
+    }}
+    button.metis-bar-tasks-peek-card.focused {{
+        outline: 2px solid {accent};
+        outline-offset: -2px;
+    }}
+    .metis-bar-tasks-peek-frame {{
+        border-radius: 0;
+        margin: 0;
+        padding: 0;
+    }}
+    /* Match popover chrome: square the bottom corners so flush thumbs don't
+       leave a gutter inside the rounded card. */
+    popover.metis-bar-tasks-peek-popover contents {{
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+    }}
+
 "#)
 }

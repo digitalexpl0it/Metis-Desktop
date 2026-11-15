@@ -1,5 +1,6 @@
 mod clipboard;
 pub mod clock;
+pub mod files_search;
 mod launcher;
 mod menu;
 mod notifications;
@@ -26,6 +27,7 @@ use crate::ui::bar::BarShell;
 pub use crate::services::do_not_disturb;
 use clipboard::ClipboardWidget;
 use clock::ClockWidget;
+use files_search::FilesSearchWidget;
 use launcher::LauncherWidget;
 use notifications::NotificationsWidget;
 pub(crate) use notifications::{
@@ -55,6 +57,7 @@ pub struct WidgetRefs {
     tray: RefCell<Option<TrayWidget>>,
     removable_volumes: RefCell<Option<VolumesWidget>>,
     updates: RefCell<Option<UpdatesWidget>>,
+    files_search: RefCell<Option<FilesSearchWidget>>,
 }
 
 impl WidgetRefs {
@@ -167,6 +170,7 @@ pub fn build(
         tray: RefCell::new(None),
         removable_volumes: RefCell::new(None),
         updates: RefCell::new(None),
+        files_search: RefCell::new(None),
     };
 
     let cfg = config.borrow().clone();
@@ -194,6 +198,12 @@ pub fn build(
 
     for widget in &cfg.widgets {
         match widget {
+            BarWidgetId::FilesSearch => {
+                // After Workspaces in bar.json (desktop switcher → search → dock).
+                let w = FilesSearchWidget::new();
+                append_bar_widget(root, w.root(), bar_orientation);
+                *refs.files_search.borrow_mut() = Some(w);
+            }
             BarWidgetId::Spacer => {
                 let spacer = gtk::Box::new(bar_orientation, 0);
                 spacer.set_hexpand(true);

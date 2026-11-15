@@ -24,6 +24,7 @@ pub mod remote;
 pub mod reset;
 pub mod rudp;
 pub mod screenshot;
+pub mod search;
 pub mod shortcuts;
 pub mod sound;
 pub mod startup;

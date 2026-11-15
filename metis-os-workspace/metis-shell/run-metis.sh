@@ -319,7 +319,7 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
             BUILD_ARGS+=("$prof")
         fi
     fi
-    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-rudp-host -p metis-secretsd; then
+    if ! cargo build "${BUILD_ARGS[@]}" -p metis-compositor -p metis-shell -p metis-settings -p metis-portal -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-rudp-host -p metis-secretsd -p metis-indexd; then
         echo "ERROR: release build failed." >&2
         exit 1
     fi
@@ -419,6 +419,11 @@ if [[ "$DO_INSTALL_SESSION" -eq 1 ]]; then
         fi
     else
         echo "WARNING: metis-secretsd missing — rebuild the workspace to get Metis Secret Service." >&2
+    fi
+    if [[ -x "$REL/metis-indexd" ]]; then
+        $SUDO install -Dm755 "$REL/metis-indexd" "$BIN_DST/metis-indexd"
+    else
+        echo "WARNING: metis-indexd missing — rebuild the workspace to get desktop search." >&2
     fi
     $SUDO install -Dm755 "$ASSETS_DIR/metis-session" "$BIN_DST/metis-session"
     if [[ -x "$REL/metis-portal" ]]; then
@@ -745,6 +750,42 @@ metis_secrets_bus_owned() {
     return 1
 }
 
+# Desktop search indexer (Phase 26). Soft-fail if missing — shell search UI degrades.
+# Stale sockets are common after logout/login (runtime dir kept, process gone).
+metis_start_indexd() {
+    local sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metis/indexd.sock"
+    if pgrep -u "$(id -u)" -x metis-indexd >/dev/null 2>&1; then
+        log "Search: metis-indexd already running"
+        return 0
+    fi
+    if [[ -S "$sock" || -e "$sock" ]]; then
+        rm -f "$sock"
+        log "Search: removed stale indexd.sock"
+    fi
+    local indexd=""
+    if command -v metis-indexd >/dev/null 2>&1; then
+        indexd="$(command -v metis-indexd)"
+    else
+        local cand
+        for cand in \
+            "${CARGO_TARGET_DIR:-$WORKSPACE/target}/release/metis-indexd" \
+            "${CARGO_TARGET_DIR:-$WORKSPACE/target}/debug/metis-indexd" \
+            "$WORKSPACE/target/release/metis-indexd" \
+            "$WORKSPACE/target/debug/metis-indexd"; do
+            if [[ -n "$cand" && -x "$cand" ]]; then
+                indexd="$cand"
+                break
+            fi
+        done
+    fi
+    if [[ -n "$indexd" ]]; then
+        "$indexd" >/dev/null 2>&1 &
+        log "Search: started metis-indexd ($indexd)"
+    else
+        log "Search: WARNING metis-indexd not found — file search will soft-fail"
+    fi
+}
+
 # Prefer Metis-owned metis-secretsd; leave third-party owners alone; DE-agnostic
 # fallbacks; gnome-keyring last. See docs/decisions/secret-service-provider.md
 metis_start_secret_service() {
@@ -998,11 +1039,11 @@ export RUST_LOG="${RUST_LOG:-metis_shell=info,metis_compositor=info,warn}"
                 BUILD_ARGS+=("$prof")
             fi
         fi
-        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-rudp-host -p metis-secretsd)
+        BUILD_CMD=(cargo build "${BUILD_ARGS[@]}" -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-rudp-host -p metis-secretsd -p metis-indexd)
     else
         SHELL_BIN="$TARGET_DIR/debug/metis-shell"
         COMP_BIN="$TARGET_DIR/debug/metis-compositor"
-        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-rudp-host -p metis-secretsd)
+        BUILD_CMD=(cargo build -p metis-shell -p metis-compositor -p metis-settings -p metis-remote -p metis-rdp-host -p metis-polkit-agent -p metis-viewer -p metis-screenshot -p metis-gaming -p metis-encode -p metis-rudp-host -p metis-secretsd -p metis-indexd)
     fi
 
     if [[ "$FORCE_BUILD" -eq 1 ]] || binary_needs_rebuild "$SHELL_BIN" || binary_needs_rebuild "$COMP_BIN"; then
@@ -1120,6 +1161,7 @@ export RUST_LOG="${RUST_LOG:-metis_shell=info,metis_compositor=info,warn}"
         # serves org.freedesktop.secrets on the shared user bus.
         if [[ "$DRM" -eq 1 ]] || ! nested_host_session; then
             metis_start_secret_service
+            metis_start_indexd
             metis_ensure_ssh_agent
         fi
 

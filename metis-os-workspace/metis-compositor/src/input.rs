@@ -292,6 +292,10 @@ fn dispatch_keybind(state: &mut MetisState, action: KeybindAction) -> bool {
             state.lock_session();
             true
         }
+        KeybindAction::FilesSearch => {
+            let _ = metis_protocol::write_runtime_command("toggle-files-search");
+            true
+        }
         KeybindAction::OpenTerminal => {
             match metis_config::resolve_terminal() {
                 Some(term) => {

@@ -14,6 +14,7 @@ use std::rc::Rc;
 
 use gio::prelude::*;
 use gtk::gdk;
+use gtk::glib;
 use gtk::prelude::*;
 
 use crate::config::{load_bar_config, save_bar_config};
@@ -34,6 +35,9 @@ thread_local! {
     /// `TASK_POPOVER`). Tracked separately so it can always be torn down before its
     /// parent picker is, otherwise GTK finalizes a row that still owns this popover.
     static ROW_MENU: RefCell<Option<gtk::Popover>> = const { RefCell::new(None) };
+    /// Live window peek (hover preview) with rate-limited thumb refresh.
+    static PEEK_POPOVER: RefCell<Option<gtk::Popover>> = const { RefCell::new(None) };
+    static PEEK_TICK: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
 }
 
 /// Content fingerprint of the (already output/workspace-filtered) dock: everything
@@ -77,7 +81,24 @@ fn dismiss_task_popover() {
     // The nested row menu is a child of the picker; tear it down first so it never
     // outlives the row it is parented to.
     dismiss_row_menu();
+    dismiss_peek();
     TASK_POPOVER.with(|cell| {
+        if let Some(p) = cell.borrow_mut().take() {
+            p.popdown();
+            if p.parent().is_some() {
+                p.unparent();
+            }
+        }
+    });
+}
+
+fn dismiss_peek() {
+    PEEK_TICK.with(|cell| {
+        if let Some(id) = cell.borrow_mut().take() {
+            id.remove();
+        }
+    });
+    PEEK_POPOVER.with(|cell| {
         if let Some(p) = cell.borrow_mut().take() {
             p.popdown();
             if p.parent().is_some() {
@@ -560,7 +581,159 @@ fn task_button(group: &Group, focused: Option<u32>) -> gtk::Button {
     }
 
     attach_context_menu(&btn, group);
+    if running {
+        attach_peek(&btn, &group.windows, &group.name, focused);
+    }
     btn
+}
+
+fn attach_peek(btn: &gtk::Button, windows: &[WindowInfo], name: &str, focused: Option<u32>) {
+    let windows = windows.to_vec();
+    let name = name.to_string();
+    let motion = gtk::EventControllerMotion::new();
+    let btn_weak = btn.downgrade();
+    motion.connect_enter(move |_, _, _| {
+        let Some(btn) = btn_weak.upgrade() else {
+            return;
+        };
+        // Don't stack peeks over an open picker/menu.
+        let picker_open =
+            TASK_POPOVER.with(|c| c.borrow().as_ref().is_some_and(|p| p.is_visible()));
+        if picker_open || windows.is_empty() {
+            return;
+        }
+        show_peek(&btn, &windows, &name, focused);
+    });
+    motion.connect_leave(|_| {
+        dismiss_peek();
+    });
+    btn.add_controller(motion);
+}
+
+fn show_peek(parent: &gtk::Button, windows: &[WindowInfo], name: &str, focused: Option<u32>) {
+    dismiss_peek();
+
+    let panel = super::super::dropdown::build_panel();
+    panel.add_css_class("metis-bar-tasks-peek");
+    // Title keeps top padding via CSS; thumbs sit flush on the other edges.
+    panel.set_spacing(0);
+    panel.set_width_request(220);
+
+    let title = gtk::Label::builder()
+        .label(name)
+        .halign(gtk::Align::Start)
+        .build();
+    title.add_css_class("metis-bar-section-title");
+    title.add_css_class("metis-bar-tasks-peek-title");
+    panel.append(&title);
+
+    let thumbs_box = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    thumbs_box.add_css_class("metis-bar-tasks-peek-thumbs");
+    panel.append(&thumbs_box);
+
+    let popover = gtk::Popover::builder()
+        .autohide(false)
+        .has_arrow(true)
+        .position(super::super::popover_position())
+        .child(&panel)
+        .build();
+    popover.add_css_class("metis-bar-popover");
+    popover.add_css_class("metis-bar-tasks-peek-popover");
+    super::super::dropdown::apply_side_class(&popover);
+    popover.set_parent(parent);
+
+    let mut ordered: Vec<WindowInfo> = windows.to_vec();
+    ordered.sort_by_key(|w| w.id);
+    // Cap cards so a busy browser group stays glanceable.
+    ordered.truncate(4);
+
+    let pictures: Vec<gtk::Picture> = ordered
+        .iter()
+        .map(|w| {
+            let pic = gtk::Picture::new();
+            pic.set_content_fit(gtk::ContentFit::Contain);
+            pic.set_size_request(160, 100);
+            pic.add_css_class("metis-bar-tasks-peek-frame");
+            let card = gtk::Button::builder().has_frame(false).build();
+            card.add_css_class("metis-bar-tasks-peek-card");
+            card.set_child(Some(&pic));
+            let id = w.id;
+            let popover = popover.clone();
+            card.connect_clicked(move |_| {
+                dismiss_peek();
+                popover.popdown();
+                if let Err(err) = crate::compositor::activate_window(id) {
+                    tracing::warn!(%err, id, "peek focus failed");
+                }
+            });
+            if focused == Some(w.id) {
+                card.add_css_class("focused");
+            }
+            thumbs_box.append(&card);
+            pic
+        })
+        .collect();
+
+    PEEK_POPOVER.with(|cell| *cell.borrow_mut() = Some(popover.clone()));
+    popover.popup();
+
+    let win_ids: Vec<u32> = ordered.iter().map(|w| w.id).collect();
+    let pictures = Rc::new(pictures);
+    let refresh = {
+        let pictures = pictures.clone();
+        let win_ids = win_ids.clone();
+        Rc::new(move || {
+            let snap = windows::snapshot();
+            let mut source: Vec<WindowInfo> = win_ids
+                .iter()
+                .filter_map(|id| snap.windows.iter().find(|w| w.id == *id).cloned())
+                .collect();
+            if source.len() != win_ids.len() {
+                // Fall back to id-only stubs so CaptureWindowThumbs still runs.
+                source = win_ids
+                    .iter()
+                    .map(|id| WindowInfo {
+                        id: *id,
+                        title: String::new(),
+                        app_id: None,
+                        rect: metis_protocol::PixelRect {
+                            x: 0,
+                            y: 0,
+                            width: 0,
+                            height: 0,
+                        },
+                        fullscreen: false,
+                        minimized: false,
+                        scratchpad: false,
+                        focused: false,
+                        output: String::new(),
+                        workspace: 0,
+                    })
+                    .collect();
+            }
+            if let Some(set) = crate::ui::window_thumbs::load_window_thumbs(&source) {
+                for (i, id) in win_ids.iter().enumerate() {
+                    if let (Some(pic), Some(tex)) = (pictures.get(i), set.textures.get(id)) {
+                        pic.set_paintable(Some(tex));
+                    }
+                }
+            }
+        })
+    };
+    refresh();
+
+    // ~6–7 Hz while mapped; stop on dismiss / leave.
+    let refresh_tick = refresh.clone();
+    let tick_id = glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
+        let still = PEEK_POPOVER.with(|c| c.borrow().as_ref().is_some_and(|p| p.is_visible()));
+        if !still {
+            dismiss_peek();
+            return glib::ControlFlow::Break;
+        }
+        refresh_tick();
+        glib::ControlFlow::Continue
+    });
+    PEEK_TICK.with(|cell| *cell.borrow_mut() = Some(tick_id));
 }
 
 fn toggle_window(w: &WindowInfo, focused: Option<u32>) {

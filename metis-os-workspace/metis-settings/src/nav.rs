@@ -383,6 +383,14 @@ pub const NAV: &[NavItem] = &[
         category: Some("system"),
     },
     NavItem {
+        page_id: Some("search"),
+        title: "File search",
+        icon: Some("edit-find-symbolic"),
+        hue: Some(NavHue::Teal),
+        subtitle: Some("Desktop search index roots, pause, and reindex"),
+        category: Some("system"),
+    },
+    NavItem {
         page_id: Some("reset"),
         title: "Reset",
         icon: Some("edit-clear-all-symbolic"),

@@ -101,7 +101,8 @@ build_binaries() {
       -p metis-gaming \
       -p metis-encode \
       -p metis-rudp-host \
-      -p metis-secretsd
+      -p metis-secretsd \
+      -p metis-indexd
   )
 }
 
@@ -118,8 +119,8 @@ write_control() {
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, network-manager-openvpn, openssh-client, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
-      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools, ibus, fcitx5-chinese-addons, fcitx5-mozc, fcitx5-anthy"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, network-manager-openvpn, openssh-client, poppler-utils, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
+      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools, ibus, fcitx5-chinese-addons, fcitx5-mozc, fcitx5-anthy, libreoffice-writer | libreoffice"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."
       else
@@ -133,8 +134,8 @@ write_control() {
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" != "1" ]]; then
         depends="${depends}, libgtk4-layer-shell0 (>= 1.0)"
       fi
-      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, network-manager-openvpn, openssh-client, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
-      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools, ibus, fcitx5-chinese-addons, fcitx5-mozc, fcitx5-anthy"
+      recommends="xdg-desktop-portal-gtk, udisks2, gvfs, gvfs-fuse, nftables, upower, bluez, bluetooth, packagekit-tools, network-manager-openvpn, openssh-client, poppler-utils, fcitx5, fcitx5-frontend-gtk4, fcitx5-frontend-gtk3, fcitx5-frontend-qt5 | fcitx5-frontend-qt6, fcitx5-config-qt"
+      suggests="gnome-keyring, gnome-remote-desktop, freerdp3-wayland | freerdp2-x11, gamemode, flatpak, fwupd, cups, system-config-printer, fprintd, libpam-fprintd, libpam-u2f, wireguard-tools, ibus, fcitx5-chinese-addons, fcitx5-mozc, fcitx5-anthy, libreoffice-writer | libreoffice"
       if [[ "$BUNDLE_GTK4_LAYER_SHELL" == "1" ]]; then
         layer_note="Ships bundled libgtk4-layer-shell."
       else
@@ -170,8 +171,9 @@ Description: Metis Wayland desktop environment
  .
  ${layer_note} NetworkManager is a Depends (bar/Settings Wi-Fi, Ethernet,
  VPN). UPower, BlueZ, PackageKit, PipeWire session audio, OpenVPN, and
- Fcitx5 (IME) are Recommends. Language engines / IBus / Flatpak / fwupd /
- GRD / biometrics stay Suggests.
+ Fcitx5 (IME) and poppler-utils (File search PDF index via pdftotext and
+ preview via pdftoppm) are Recommends. LibreOffice (Office text preview) and
+ language engines / IBus / Flatpak / fwupd / GRD / biometrics stay Suggests.
  .
  Named metis-desktop (not metis) to avoid colliding with Ubuntu universe's
  unrelated metis graph-partitioning package.

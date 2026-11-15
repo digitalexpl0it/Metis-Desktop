@@ -5,6 +5,50 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-11-14]
+
+### Added
+
+- **Desktop search (`metis-indexd`)** — Tantivy indexer session-spawned like
+  `metis-secretsd`; edge-bar **File search** overlay (pill category chips,
+  results grouped by type, image/video thumbnails with type icons otherwise,
+  path/size/permissions meta, Open / Copy / Open folder, slide-out preview pane
+  for content); Settings → File search for roots / pause / reindex; `search.json`.
+- **Taskbar peeks** — Hover a running dock app for live-ish window thumbnails
+  (rate-limited `CaptureWindowThumbs`); click a card to focus. Peek chrome keeps
+  top padding for the app name; thumbs sit flush on the left, right, and bottom.
+- **File search bar slot** — magnifying-glass sits immediately after the
+  workspace switcher (before the running-apps dock); no longer pinned next to
+  the Metis menu in the shell.
+- **File search chips** — Documents / Images / Video / Audio / Archives only
+  (code/text under Documents; no Downloads/Desktop chips).
+- **metis-indexd after logout** — session start ignores a stale `indexd.sock`
+  when no indexer process is running (fixes Connection refused after re-login).
+- **File search matching** — basename prefix so `idea` finds `idea_notes.txt`;
+  content search from 3+ characters; preview reads live UTF-8 file text in an
+  opaque pane.
+- **File search responsiveness** — debounced async queries (no UI-thread IPC),
+  radio category chips, icon-first async thumbs, and row clicks that open preview
+  without freezing the edge bar.
+- **File search chip crash** — switching category chips no longer panics the
+  edge bar (`RefCell already borrowed` while closing preview); apply path is
+  panic-isolated.
+- **File search empty chips** — Video/Audio/etc. with no hits filter locally
+  against the last All page and keep a fixed overlay size (no resize-cursor
+  lockup when the result list empties).
+- **File search extractors** — HTML strip and optional PDF via `pdftotext`
+  (poppler-utils Recommends); Settings toggles + `ReloadConfig` live-apply
+  without restarting `metis-indexd` (reindex to refresh old bodies).
+- **File search tags** — preview add/remove user tags with SuggestTags hints;
+  click a tag to filter (`tag:…`); Settings → File search browses tags and can
+  remove a tag from a selected file.
+- **File search document preview** — PDF first-page image via `pdftoppm` when
+  poppler is installed; Office (doc/docx/odt/xls/xlsx/… ) text Contents via
+  LibreOffice when available; missing tools keep today’s icon-only preview.
+- **File search shortcut** — **Super+S** toggles the edge-bar File search
+  overlay (`files_search` keybind; remappable in Settings → Keyboard →
+  Shortcuts).
+
 ## [2026-10-31]
 
 ### Fixed

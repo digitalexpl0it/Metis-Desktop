@@ -36,6 +36,7 @@ pub mod rudp;
 pub mod sanitize;
 pub mod scratchpad;
 pub mod screenshot;
+pub mod search;
 pub mod session;
 pub mod startup;
 pub mod theme;
@@ -581,6 +582,10 @@ pub use sanitize::{is_safe_nm_token, validate_nm_id, validate_ssid, validate_vpn
 pub use screenshot::{
     AfterCaptureAction, ScreenshotConfig, ScreenshotMode, expand_save_dir, load_screenshot_config,
     save_default_screenshot_config, save_screenshot_config, screenshot_config_path,
+};
+pub use search::{
+    SearchConfig, SearchExtractors, load_search_config, resolved_search_roots,
+    sanitize_search_config, save_search_config, search_config_path,
 };
 pub use startup::{
     StartupConfig, StartupEntry, load_startup_config, resolve_desktop_launch_argv,

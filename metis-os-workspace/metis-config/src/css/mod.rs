@@ -9,6 +9,7 @@ mod base;
 mod clocks;
 mod dashboard;
 mod desktop_widgets;
+mod files_search;
 mod menu;
 mod notification_center;
 mod notifications;
@@ -41,6 +42,7 @@ pub fn build_stylesheet(theme: &ThemeTokens) -> String {
     out.push_str(&appearance_preview::stylesheet(&v));
     out.push_str(&menu::stylesheet(&v));
     out.push_str(&dashboard::stylesheet(&v));
+    out.push_str(&files_search::stylesheet(&v));
     out.push_str(&screenshot_overlay::stylesheet(&v));
     out.push_str(&task_view::stylesheet(&v));
     out.push_str(&notification_center::stylesheet(&v));

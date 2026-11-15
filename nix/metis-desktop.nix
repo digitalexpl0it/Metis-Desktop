@@ -29,6 +29,8 @@
   ffmpeg,
   freerdp,
   gettext,
+  poppler_utils,
+  makeWrapper,
   src,
 }:
 
@@ -58,6 +60,7 @@ rustPlatform.buildRustPackage rec {
   nativeBuildInputs = [
     pkg-config
     gettext
+    makeWrapper
     rustPlatform.bindgenHook
   ];
 
@@ -90,6 +93,8 @@ rustPlatform.buildRustPackage rec {
     ffmpeg
     # metis-rdp-host: FreeRDP shadow server (portal ScreenCast capture).
     freerdp
+    # metis-indexd: optional PDF body extract via pdftotext.
+    poppler_utils
   ];
 
   cargoBuildFlags = [
@@ -106,6 +111,7 @@ rustPlatform.buildRustPackage rec {
     # metis-rudp-host: Metis Remote network edge (Quinn/PAM), spawned by the compositor.
     "-p" "metis-rudp-host"
     "-p" "metis-secretsd"
+    "-p" "metis-indexd"
   ];
 
   doCheck = false;
@@ -162,6 +168,17 @@ rustPlatform.buildRustPackage rec {
       [[ -f "$wp" ]] || continue
       install -Dm644 "$wp" "$out/share/metis/wallpapers/$(basename "$wp")"
     done
+
+    if [[ -x "$out/bin/metis-indexd" ]]; then
+      wrapProgram "$out/bin/metis-indexd" \
+        --prefix PATH : ${lib.makeBinPath [ poppler_utils ]}
+    fi
+    # PDF first-page preview in File search (pdftoppm). LibreOffice stays a
+    # system optional — too large to pull into the package by default.
+    if [[ -x "$out/bin/metis-shell" ]]; then
+      wrapProgram "$out/bin/metis-shell" \
+        --prefix PATH : ${lib.makeBinPath [ poppler_utils ]}
+    fi
   '';
 
   meta = with lib; {
