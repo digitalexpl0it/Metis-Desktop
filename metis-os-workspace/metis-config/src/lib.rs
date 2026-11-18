@@ -584,8 +584,9 @@ pub use screenshot::{
     save_default_screenshot_config, save_screenshot_config, screenshot_config_path,
 };
 pub use search::{
-    SearchConfig, SearchExtractors, load_search_config, resolved_search_roots,
-    sanitize_search_config, save_search_config, search_config_path,
+    SearchConfig, SearchExtractors, index_effort_delay_ms, index_effort_workers,
+    load_search_config, resolved_search_roots, sanitize_search_config, save_search_config,
+    search_config_path,
 };
 pub use startup::{
     StartupConfig, StartupEntry, load_startup_config, resolve_desktop_launch_argv,

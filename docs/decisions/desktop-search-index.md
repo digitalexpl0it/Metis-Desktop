@@ -30,13 +30,17 @@ soft-fail when the indexer is absent.
    user tags; Settings → File search browses tags and can remove them from
    a path.
 5. **Config:** `~/.config/metis/search.json` (roots, excludes, pause, size caps,
-   extractor toggles). Defaults index `$HOME` with common excludes
-   (`.git`, `node_modules`, `target`, caches, Trash).
+   `index_effort` 0–100, extractor toggles). Defaults index `$HOME` with
+   common excludes (`.git`, `node_modules`, `target`, caches, Trash).
 6. **Extractors:** UTF-8 / text / common source (default on). HTML strip
    (tags/scripts/styles → visible text) and PDF via optional `pdftotext`
    (poppler-utils; soft-fail if missing) are off by default until enabled
-   in Settings. `ReloadConfig` rebuilds the extractor set without a full
-   crawl; reindex to refresh already-indexed bodies.
+   in Settings. Crawl is two-phase (metadata then content workers); unchanged
+   files (matching size+mtime) are skipped. A session-long inotify watch on
+   configured roots applies creates/updates/deletes incrementally (new
+   folders get a one-shot child walk; directory deletes drop the path
+   prefix). `ReloadConfig` rebuilds extractors, refreshes effort, and
+   resyncs watched roots; **Reindex** forces a full pass to refresh bodies.
 7. **UI:** Edge-bar Files search overlay opens/reveals via
    `resolve_file_manager()`; Metis FM remains deferred. Filter chips are
    Documents / Images / Video / Audio / Archives (source/text under Documents).

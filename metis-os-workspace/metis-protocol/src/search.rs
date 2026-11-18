@@ -149,6 +149,9 @@ pub struct SearchStatus {
     /// Documents that have extracted text body.
     #[serde(default)]
     pub with_content: u64,
+    /// Files waiting for (or in) the content-extract queue.
+    #[serde(default)]
+    pub content_pending: u64,
     /// Per indexed root path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roots: Vec<SearchRootStat>,

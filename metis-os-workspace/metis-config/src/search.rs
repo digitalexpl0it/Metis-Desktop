@@ -49,6 +49,9 @@ pub struct SearchConfig {
     /// Max characters stored in the Tantivy body field per file.
     #[serde(default = "default_max_body_chars")]
     pub max_body_chars: usize,
+    /// Content-extract effort (0 = low CPU, 100 = max workers / no delay).
+    #[serde(default = "default_index_effort")]
+    pub index_effort: u8,
     #[serde(default)]
     pub extractors: SearchExtractors,
 }
@@ -65,6 +68,10 @@ fn default_max_body_chars() -> usize {
     64 * 1024
 }
 
+fn default_index_effort() -> u8 {
+    35
+}
+
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
@@ -74,9 +81,32 @@ impl Default for SearchConfig {
             excludes: default_excludes(),
             max_file_bytes: default_max_file_bytes(),
             max_body_chars: default_max_body_chars(),
+            index_effort: default_index_effort(),
             extractors: SearchExtractors::default(),
         }
     }
+}
+
+/// Content worker count from `index_effort` (1–4, also capped by CPU).
+pub fn index_effort_workers(effort: u8) -> usize {
+    let capped = match effort.min(100) {
+        0..=25 => 1,
+        26..=60 => 2,
+        61..=85 => 3,
+        _ => 4,
+    };
+    let cpu_cap = std::thread::available_parallelism()
+        .map(|n| (n.get() / 2).max(1))
+        .unwrap_or(2)
+        .min(4);
+    capped.min(cpu_cap).max(1)
+}
+
+/// Inter-file delay after each content extract (ms).
+pub fn index_effort_delay_ms(effort: u8) -> u64 {
+    let e = u64::from(effort.min(100));
+    // 0 → 40 ms, 35 → ~26 ms, 100 → 0
+    (40u64.saturating_mul(100 - e)) / 100
 }
 
 fn default_excludes() -> Vec<String> {
@@ -93,6 +123,7 @@ fn default_excludes() -> Vec<String> {
 pub fn sanitize_search_config(cfg: &mut SearchConfig) {
     cfg.max_file_bytes = cfg.max_file_bytes.clamp(4 * 1024, 64 * 1024 * 1024);
     cfg.max_body_chars = cfg.max_body_chars.clamp(1024, 512 * 1024);
+    cfg.index_effort = cfg.index_effort.min(100);
     cfg.roots.retain(|r| !r.trim().is_empty());
     cfg.excludes.retain(|e| !e.trim().is_empty());
     for root in &mut cfg.roots {
@@ -165,5 +196,24 @@ mod tests {
         let once = cfg.clone();
         sanitize_search_config(&mut cfg);
         assert_eq!(cfg, once);
+    }
+
+    #[test]
+    fn sanitize_clamps_effort() {
+        let mut cfg = SearchConfig {
+            index_effort: 200,
+            ..Default::default()
+        };
+        sanitize_search_config(&mut cfg);
+        assert_eq!(cfg.index_effort, 100);
+    }
+
+    #[test]
+    fn effort_maps_workers_and_delay() {
+        assert_eq!(index_effort_workers(0), 1);
+        assert!(index_effort_workers(100) >= 1);
+        assert_eq!(index_effort_delay_ms(0), 40);
+        assert_eq!(index_effort_delay_ms(100), 0);
+        assert!(index_effort_delay_ms(35) < index_effort_delay_ms(0));
     }
 }

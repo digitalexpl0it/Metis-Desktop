@@ -33,6 +33,28 @@ pub fn build() -> gtk::Widget {
     let (paused_row, paused) = ui::switch_row(&tr("Pause indexing"));
     paused.set_active(cfg.paused);
     gen_body.append(&paused_row);
+    gen_body.append(&ui::hint(&tr(
+        "Enable and Pause apply immediately (no Save needed). Pause holds content \
+         extraction; Disable stops indexing and drops the extract queue. Search of \
+         already-indexed files still works while paused.",
+    )));
+
+    let effort = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
+    effort.set_value(f64::from(cfg.index_effort));
+    effort.set_size_request(200, -1);
+    effort.set_draw_value(true);
+    effort.set_digits(0);
+    ui::forward_wheel_to_page_scroller(&effort);
+    gen_body.append(&ui::row_with_icon(
+        "preferences-system-symbolic",
+        &tr("Index effort"),
+        &effort,
+    ));
+    gen_body.append(&ui::hint(&tr(
+        "Low keeps content extraction light (fewer workers, short pauses). High finishes text \
+         indexing faster. File names stay searchable either way. Login crawls only refresh \
+         files that changed.",
+    )));
     content.append(&gen_card);
 
     // ---- Roots (list UI, seeded with home) ----
@@ -382,27 +404,40 @@ pub fn build() -> gtk::Widget {
     progress_wrap.append(&progress);
     stat_body.append(&progress_wrap);
 
-    let roots_pills = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    roots_pills.add_css_class("metis-settings-inset");
-    roots_pills.set_margin_top(4);
-    roots_pills.set_margin_bottom(4);
-    roots_pills.add_css_class("metis-search-root-pills");
-    stat_body.append(&roots_pills);
-
     let chart_data: Rc<RefCell<Vec<(String, u64)>>> = Rc::new(RefCell::new(Vec::new()));
+    let chart_hit: Rc<RefCell<PieHitMap>> = Rc::new(RefCell::new(PieHitMap::default()));
     let chart = gtk::DrawingArea::builder()
-        .content_height(160)
+        .content_width(440)
+        .content_height(240)
         .hexpand(true)
+        .halign(gtk::Align::Fill)
         .build();
     chart.add_css_class("metis-search-chart");
+    chart.set_tooltip_text(Some(&tr("Hover a slice for details")));
     {
         let chart_data = chart_data.clone();
+        let chart_hit = chart_hit.clone();
         chart.set_draw_func(move |_area, cr, w, h| {
-            draw_category_chart(cr, w, h, &chart_data.borrow());
+            let hit = draw_category_pie(cr, w, h, &chart_data.borrow());
+            *chart_hit.borrow_mut() = hit;
         });
+    }
+    {
+        let chart_hit = chart_hit.clone();
+        let chart_for_tip = chart.clone();
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_motion(move |_, x, y| {
+            if let Some(tip) = chart_hit.borrow().tooltip_at(x, y) {
+                chart_for_tip.set_tooltip_text(Some(&tip));
+            } else {
+                chart_for_tip.set_tooltip_text(Some(&tr("Hover a slice for details")));
+            }
+        });
+        chart.add_controller(motion);
     }
     let chart_wrap = gtk::Box::new(gtk::Orientation::Vertical, 0);
     chart_wrap.add_css_class("metis-settings-inset");
+    chart_wrap.set_halign(gtk::Align::Fill);
     chart_wrap.append(&chart);
     stat_body.append(&chart_wrap);
 
@@ -413,6 +448,8 @@ pub fn build() -> gtk::Widget {
     stat_body.append(&status_hint);
 
     content.append(&stat_card);
+    // Sit directly under Indexing (before folders / extractors / tags).
+    content.reorder_child_after(&stat_card, Some(&gen_card));
 
     // ---- Actions ----
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -421,12 +458,8 @@ pub fn build() -> gtk::Widget {
     let save_btn = gtk::Button::with_label(&tr("Save"));
     save_btn.add_css_class("suggested-action");
     let reindex_btn = gtk::Button::with_label(&tr("Reindex now"));
-    let pause_btn = gtk::Button::with_label(&tr("Pause"));
-    let resume_btn = gtk::Button::with_label(&tr("Resume"));
     actions.append(&save_btn);
     actions.append(&reindex_btn);
-    actions.append(&pause_btn);
-    actions.append(&resume_btn);
     content.append(&actions);
 
     let ui_refs = StatusUi {
@@ -435,13 +468,70 @@ pub fn build() -> gtk::Widget {
         content_pill: content_pill.clone(),
         state_pill: state_pill.clone(),
         progress: progress.clone(),
-        roots_pills: roots_pills.clone(),
         chart: chart.clone(),
         chart_data: chart_data.clone(),
         status_hint: status_hint.clone(),
+        enabled: enabled.clone(),
         paused: paused.clone(),
+        syncing_switches: Rc::new(Cell::new(false)),
     };
     refresh_status_ui(&ui_refs);
+
+    // Enable / Pause apply live — do not wait for Save.
+    {
+        let ui_refs = ui_refs.clone();
+        enabled.connect_active_notify(move |sw| {
+            if ui_refs.syncing_switches.get() {
+                return;
+            }
+            let mut cfg = load_search_config();
+            cfg.enabled = sw.is_active();
+            if let Err(err) = save_search_config(&cfg) {
+                ui_refs
+                    .status_hint
+                    .set_text(&format!("{}: {err}", tr("Save failed")));
+                return;
+            }
+            let _ = search_request(&SearchRequest::ReloadConfig);
+            let msg = if sw.is_active() {
+                tr("Desktop search enabled")
+            } else {
+                tr("Desktop search disabled — indexing stopped")
+            };
+            ui_refs.status_hint.set_text(&msg);
+            refresh_status_ui(&ui_refs);
+        });
+    }
+    {
+        let ui_refs = ui_refs.clone();
+        paused.connect_active_notify(move |sw| {
+            if ui_refs.syncing_switches.get() {
+                return;
+            }
+            let resp = if sw.is_active() {
+                search_request(&SearchRequest::Pause)
+            } else {
+                search_request(&SearchRequest::Resume)
+            };
+            match resp {
+                SearchResponse::Ok => {
+                    let msg = if sw.is_active() {
+                        tr("Indexing paused")
+                    } else {
+                        tr("Indexing resumed")
+                    };
+                    ui_refs.status_hint.set_text(&msg);
+                }
+                SearchResponse::Error { message } => {
+                    ui_refs
+                        .status_hint
+                        .set_text(&format!("{}: {message}", tr("Indexer unavailable")));
+                }
+                _ => {}
+            }
+            refresh_status_ui(&ui_refs);
+        });
+    }
 
     // Poll while the page is mapped so reindex progress updates live.
     let poll_alive = Rc::new(Cell::new(true));
@@ -468,6 +558,7 @@ pub fn build() -> gtk::Widget {
         let plain_sw = plain_sw.clone();
         let html_sw = html_sw.clone();
         let pdf_sw = pdf_sw.clone();
+        let effort = effort.clone();
         let ui_refs = ui_refs.clone();
         save_btn.connect_clicked(move |_| {
             let roots = roots_state.borrow().clone();
@@ -486,6 +577,7 @@ pub fn build() -> gtk::Widget {
                 excludes: excludes_state.borrow().clone(),
                 max_file_bytes: prev.max_file_bytes,
                 max_body_chars: prev.max_body_chars,
+                index_effort: effort.value().round().clamp(0.0, 100.0) as u8,
                 extractors: SearchExtractors {
                     plain_text: plain_sw.is_active(),
                     html: html_sw.is_active(),
@@ -525,22 +617,6 @@ pub fn build() -> gtk::Widget {
             refresh_status_ui(&ui_refs);
         });
     }
-    {
-        let ui_refs = ui_refs.clone();
-        pause_btn.connect_clicked(move |_| {
-            let _ = search_request(&SearchRequest::Pause);
-            ui_refs.paused.set_active(true);
-            refresh_status_ui(&ui_refs);
-        });
-    }
-    {
-        let ui_refs = ui_refs.clone();
-        resume_btn.connect_clicked(move |_| {
-            let _ = search_request(&SearchRequest::Resume);
-            ui_refs.paused.set_active(false);
-            refresh_status_ui(&ui_refs);
-        });
-    }
 
     scroller.upcast()
 }
@@ -552,11 +628,47 @@ struct StatusUi {
     content_pill: gtk::Label,
     state_pill: gtk::Label,
     progress: gtk::ProgressBar,
-    roots_pills: gtk::Box,
     chart: gtk::DrawingArea,
     chart_data: Rc<RefCell<Vec<(String, u64)>>>,
     status_hint: gtk::Label,
+    enabled: gtk::Switch,
     paused: gtk::Switch,
+    /// Suppress switch notify while syncing from Status IPC.
+    syncing_switches: Rc<Cell<bool>>,
+}
+
+#[derive(Clone, Default)]
+struct PieHitMap {
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    /// (start_angle, end_angle, label)
+    slices: Vec<(f64, f64, String)>,
+}
+
+impl PieHitMap {
+    fn tooltip_at(&self, x: f64, y: f64) -> Option<String> {
+        if self.radius <= 0.0 || self.slices.is_empty() {
+            return None;
+        }
+        let dx = x - self.cx;
+        let dy = y - self.cy;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > self.radius || dist < 1.0 {
+            return None;
+        }
+        // Match Cairo: 0 = east, + = clockwise with y-down. Pie spans [-PI/2, 3PI/2).
+        let mut ang = dy.atan2(dx);
+        if ang < -std::f64::consts::FRAC_PI_2 {
+            ang += std::f64::consts::TAU;
+        }
+        for (a0, a1, label) in &self.slices {
+            if ang >= *a0 && ang < *a1 {
+                return Some(label.clone());
+            }
+        }
+        self.slices.last().map(|(_, _, l)| l.clone())
+    }
 }
 
 fn make_pill(text: &str) -> gtk::Label {
@@ -704,19 +816,54 @@ fn apply_status(ui: &StatusUi, s: &SearchStatus) {
         tr("with text")
     ));
 
-    if s.crawling {
+    ui.syncing_switches.set(true);
+    if ui.enabled.is_active() != s.enabled {
+        ui.enabled.set_active(s.enabled);
+    }
+    if ui.paused.is_active() != s.paused {
+        ui.paused.set_active(s.paused);
+    }
+    ui.syncing_switches.set(false);
+
+    // Disabled / paused win over an in-flight crawl for the state pill.
+    if !s.enabled {
+        ui.spinner.stop();
+        ui.spinner.set_visible(false);
+        ui.progress.set_visible(false);
+        ui.state_pill.set_text(&tr("Disabled"));
+    } else if s.paused {
+        ui.spinner.stop();
+        ui.spinner.set_visible(false);
+        ui.progress.set_visible(false);
+        ui.state_pill.set_text(&tr("Paused"));
+    } else if s.crawling {
         ui.spinner.set_visible(true);
         ui.spinner.start();
-        ui.state_pill.set_text(&tr("Indexing…"));
+        if s.content_pending > 0 && s.crawl_done > 0 && s.crawl_done >= s.crawl_total {
+            ui.state_pill.set_text(&tr("Extracting text…"));
+        } else {
+            ui.state_pill.set_text(&tr("Indexing…"));
+        }
         ui.progress.set_visible(true);
         if s.crawl_total > 0 {
             let frac = (s.crawl_done as f64 / s.crawl_total as f64).clamp(0.0, 1.0);
             ui.progress.set_fraction(frac);
-            ui.progress.set_text(Some(&format!(
-                "{} / {}",
-                format_count(s.crawl_done),
-                format_count(s.crawl_total)
-            )));
+            let text = if s.content_pending > 0 {
+                format!(
+                    "{} / {} · {} {}",
+                    format_count(s.crawl_done),
+                    format_count(s.crawl_total),
+                    format_count(s.content_pending),
+                    tr("text pending")
+                )
+            } else {
+                format!(
+                    "{} / {}",
+                    format_count(s.crawl_done),
+                    format_count(s.crawl_total)
+                )
+            };
+            ui.progress.set_text(Some(&text));
         } else {
             ui.progress.set_fraction(0.0);
             ui.progress.pulse();
@@ -730,37 +877,13 @@ fn apply_status(ui: &StatusUi, s: &SearchStatus) {
         ui.spinner.stop();
         ui.spinner.set_visible(false);
         ui.progress.set_visible(false);
-        if s.paused {
-            ui.state_pill.set_text(&tr("Paused"));
-        } else if s.enabled {
-            ui.state_pill.set_text(&tr("Ready"));
-        } else {
-            ui.state_pill.set_text(&tr("Disabled"));
-        }
-    }
-
-    while let Some(child) = ui.roots_pills.first_child() {
-        ui.roots_pills.remove(&child);
-    }
-    if s.roots.is_empty() {
-        let lab = gtk::Label::new(Some(&tr(
-            "Per-folder counts appear after the next reindex.",
-        )));
-        lab.add_css_class("metis-settings-hint");
-        lab.set_xalign(0.0);
-        ui.roots_pills.append(&lab);
-    } else {
-        for root in &s.roots {
-            let short = shorten_path(&root.path);
-            let pill = make_pill(&format!("{short} · {}", format_count(root.docs)));
-            ui.roots_pills.append(&pill);
-        }
+        ui.state_pill.set_text(&tr("Ready"));
     }
 
     let cats: Vec<(String, u64)> = s
         .categories
         .iter()
-        .map(|c| (c.category.clone(), c.docs))
+        .map(|c| (category_label(&c.category), c.docs))
         .collect();
     *ui.chart_data.borrow_mut() = cats;
     ui.chart.queue_draw();
@@ -794,18 +917,24 @@ fn format_count(n: u64) -> String {
     }
 }
 
-fn shorten_path(path: &str) -> String {
-    let home = default_home_path();
-    if let Some(rest) = path.strip_prefix(&home) {
-        if rest.is_empty() {
-            return "~".into();
-        }
-        return format!("~{rest}");
+fn category_label(raw: &str) -> String {
+    match raw {
+        "documents" | "code" => tr("Documents"),
+        "images" => tr("Images"),
+        "video" => tr("Video"),
+        "audio" => tr("Audio"),
+        "archives" => tr("Archives"),
+        "other" | "downloads" | "desktop" => tr("Other"),
+        _ => raw.to_string(),
     }
-    path.to_string()
 }
 
-fn draw_category_chart(cr: &cairo::Context, width: i32, height: i32, data: &[(String, u64)]) {
+fn draw_category_pie(
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+    data: &[(String, u64)],
+) -> PieHitMap {
     let w = width as f64;
     let h = height as f64;
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
@@ -815,35 +944,114 @@ fn draw_category_chart(cr: &cairo::Context, width: i32, height: i32, data: &[(St
         cr.set_source_rgba(0.7, 0.7, 0.7, 0.85);
         cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
         cr.set_font_size(13.0);
-        cr.move_to(12.0, h / 2.0);
+        cr.move_to(24.0, h / 2.0);
         let _ = cr.show_text(&tr("Category breakdown appears after reindex"));
-        return;
+        return PieHitMap::default();
     }
 
-    let max = data.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1) as f64;
-    let rows = data.len().min(8) as f64;
-    let row_h = ((h - 16.0) / rows).clamp(18.0, 28.0);
-    let label_w = 110.0;
-    let bar_x = label_w + 12.0;
-    let bar_max = (w - bar_x - 56.0).max(40.0);
+    // Merge same display labels, then top slices + Other.
+    let mut merged: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for (name, count) in data {
+        *merged.entry(name.clone()).or_insert(0) += *count;
+    }
+    let mut slices: Vec<(String, u64)> = merged.into_iter().collect();
+    slices.sort_by_key(|a| std::cmp::Reverse(a.1));
+    const MAX_SLICES: usize = 6;
+    let head = if slices.len() > MAX_SLICES {
+        let rest_sum: u64 = slices[MAX_SLICES - 1..].iter().map(|(_, n)| *n).sum();
+        let mut head = slices[..MAX_SLICES - 1].to_vec();
+        if rest_sum > 0 {
+            if let Some(existing) = head.iter_mut().find(|(n, _)| n == &tr("Other")) {
+                existing.1 += rest_sum;
+            } else {
+                head.push((tr("Other"), rest_sum));
+            }
+        }
+        head
+    } else {
+        slices
+    };
+    let total: u64 = head.iter().map(|(_, n)| *n).sum::<u64>().max(1);
 
-    // Accent-ish cyan bars (token-independent so the DrawingArea stays readable).
-    for (i, (name, count)) in data.iter().take(8).enumerate() {
-        let y = 10.0 + i as f64 * row_h;
-        cr.set_source_rgba(0.85, 0.9, 0.95, 0.95);
-        cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
-        cr.set_font_size(12.0);
-        cr.move_to(8.0, y + row_h * 0.65);
-        let _ = cr.show_text(name);
+    // Layout: large pie on the left-center, legend vertically centered on the right.
+    let pie_r = (h * 0.42).clamp(64.0, 96.0);
+    let cx = (w * 0.32).clamp(pie_r + 16.0, w * 0.45);
+    let cy = h / 2.0;
+    let colors: [(f64, f64, f64); 6] = [
+        (0.00, 0.78, 0.95), // cyan
+        (0.45, 0.55, 0.98), // indigo
+        (0.20, 0.75, 0.55), // green
+        (0.95, 0.65, 0.25), // amber
+        (0.75, 0.45, 0.95), // violet
+        (0.55, 0.60, 0.68), // grey
+    ];
 
-        let frac = (*count as f64 / max).clamp(0.05, 1.0);
-        let bw = bar_max * frac;
-        cr.set_source_rgba(0.0, 0.78, 0.95, 0.85);
-        cr.rectangle(bar_x, y + 4.0, bw, row_h - 8.0);
+    // Minimum visible sweep so tiny categories still show; renormalize to TAU.
+    const MIN_SWEEP: f64 = 0.045;
+    let mut sweeps: Vec<f64> = head
+        .iter()
+        .map(|(_, c)| {
+            let raw = (*c as f64 / total as f64) * std::f64::consts::TAU;
+            if *c > 0 { raw.max(MIN_SWEEP) } else { 0.0 }
+        })
+        .collect();
+    let sweep_sum: f64 = sweeps.iter().sum::<f64>().max(f64::EPSILON);
+    for s in &mut sweeps {
+        *s = *s / sweep_sum * std::f64::consts::TAU;
+    }
+
+    let mut hit = PieHitMap {
+        cx,
+        cy,
+        radius: pie_r,
+        slices: Vec::with_capacity(head.len()),
+    };
+
+    let mut angle = -std::f64::consts::FRAC_PI_2;
+    for (i, ((name, count), sweep)) in head.iter().zip(sweeps.iter()).enumerate() {
+        let (r, g, b) = colors[i % colors.len()];
+        cr.set_source_rgba(r, g, b, 0.92);
+        cr.move_to(cx, cy);
+        cr.arc(cx, cy, pie_r, angle, angle + sweep);
+        cr.close_path();
         let _ = cr.fill();
+        // Separators so adjacent slices stay distinct.
+        cr.set_source_rgba(0.12, 0.14, 0.18, 0.55);
+        cr.set_line_width(1.5);
+        cr.move_to(cx, cy);
+        cr.line_to(cx + pie_r * angle.cos(), cy + pie_r * angle.sin());
+        let _ = cr.stroke();
 
-        cr.set_source_rgba(0.85, 0.9, 0.95, 0.9);
-        cr.move_to(bar_x + bw + 8.0, y + row_h * 0.65);
-        let _ = cr.show_text(&format_count(*count));
+        let tip = format!(
+            "{} — {} ( {:.1}% )",
+            name,
+            format_count(*count),
+            (*count as f64 / total as f64) * 100.0
+        );
+        hit.slices.push((angle, angle + sweep, tip));
+        angle += sweep;
     }
+    cr.set_source_rgba(0.2, 0.25, 0.3, 0.4);
+    cr.set_line_width(1.25);
+    cr.arc(cx, cy, pie_r, 0.0, std::f64::consts::TAU);
+    let _ = cr.stroke();
+
+    let legend_x = (cx + pie_r + 28.0).min(w - 160.0);
+    let row_h = 22.0;
+    let legend_h = head.len() as f64 * row_h;
+    let mut ly = ((h - legend_h) / 2.0 + 14.0).max(18.0);
+    cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
+    cr.set_font_size(12.5);
+    for (i, (name, count)) in head.iter().enumerate() {
+        let (r, g, b) = colors[i % colors.len()];
+        cr.set_source_rgba(r, g, b, 0.95);
+        cr.rectangle(legend_x, ly - 9.0, 12.0, 12.0);
+        let _ = cr.fill();
+        cr.set_source_rgba(0.88, 0.92, 0.96, 0.98);
+        cr.move_to(legend_x + 18.0, ly);
+        let label = format!("{name}  {}", format_count(*count));
+        let _ = cr.show_text(&label);
+        ly += row_h;
+    }
+    hit
 }

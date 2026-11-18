@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
 use metis_config::SearchConfig;
@@ -25,6 +26,9 @@ use crate::extract::{Extractor, build_extractors, extract_body};
 use crate::schema::{IndexFields, build_schema};
 use crate::tags::TagStore;
 
+/// Marker written during the metadata phase until content extract finishes.
+pub const CONTENT_PENDING_HASH: &str = "pending";
+
 pub struct SearchIndex {
     pub index: Index,
     pub fields: IndexFields,
@@ -42,6 +46,11 @@ pub struct SearchIndex {
     pub crawl_done: AtomicU64,
     pub crawl_total: AtomicU64,
     pub with_content: AtomicU64,
+    pub content_pending: AtomicU64,
+    index_effort: AtomicU8,
+    /// Bumped on every `reload_config` so the session watcher can resync roots.
+    pub config_epoch: AtomicU64,
+    content_tx: Mutex<Option<SyncSender<(PathBuf, String)>>>,
     root_counts: Mutex<HashMap<String, u64>>,
     category_counts: Mutex<HashMap<String, u64>>,
 }
@@ -60,6 +69,7 @@ impl SearchIndex {
         let extractors = build_extractors(&cfg.extractors);
         let enabled = cfg.enabled;
         let paused = cfg.paused;
+        let effort = cfg.index_effort.min(100);
         Ok(Self {
             index,
             fields,
@@ -77,9 +87,63 @@ impl SearchIndex {
             crawl_done: AtomicU64::new(0),
             crawl_total: AtomicU64::new(0),
             with_content: AtomicU64::new(0),
+            content_pending: AtomicU64::new(0),
+            index_effort: AtomicU8::new(effort),
+            config_epoch: AtomicU64::new(0),
+            content_tx: Mutex::new(None),
             root_counts: Mutex::new(HashMap::new()),
             category_counts: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn set_content_sender(&self, tx: SyncSender<(PathBuf, String)>) {
+        if let Ok(mut g) = self.content_tx.lock() {
+            *g = Some(tx);
+        }
+    }
+
+    pub fn index_effort(&self) -> u8 {
+        self.index_effort.load(Ordering::SeqCst)
+    }
+
+    pub fn enqueue_content(&self, path: PathBuf, root_id: String) {
+        let tx = match self.content_tx.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => None,
+        };
+        let Some(tx) = tx else {
+            // No workers yet — extract inline.
+            let _ = self.index_content(&path, &root_id);
+            return;
+        };
+        self.content_pending.fetch_add(1, Ordering::SeqCst);
+        if tx.send((path, root_id)).is_err() {
+            self.content_pending.fetch_sub(1, Ordering::SeqCst);
+            tracing::debug!("content queue closed");
+        }
+    }
+
+    /// Put a job back on the queue without changing `content_pending` (pause path).
+    pub fn requeue_content(&self, path: PathBuf, root_id: String) {
+        let tx = match self.content_tx.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => None,
+        };
+        if let Some(tx) = tx {
+            let _ = tx.send((path, root_id));
+        }
+    }
+
+    pub fn dec_content_pending(&self) {
+        let prev = self
+            .content_pending
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                Some(v.saturating_sub(1))
+            });
+        if matches!(prev, Ok(1)) {
+            let _ = self.commit_now();
+            self.rebuild_facet_counts();
+        }
     }
 
     pub fn begin_crawl(&self, total_estimate: u64) {
@@ -100,10 +164,14 @@ impl SearchIndex {
         self.crawl_total
             .store(self.crawl_done.load(Ordering::SeqCst), Ordering::SeqCst);
         self.refresh_doc_count();
+        self.rebuild_facet_counts();
+    }
+
+    pub fn note_visited(&self) {
+        self.crawl_done.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn note_indexed(&self, root_id: &str, category: &str, has_body: bool) {
-        self.crawl_done.fetch_add(1, Ordering::SeqCst);
         if has_body {
             self.with_content.fetch_add(1, Ordering::SeqCst);
         }
@@ -148,16 +216,26 @@ impl SearchIndex {
                 .then_with(|| a.category.cmp(&b.category))
         });
 
+        let paused = self.paused.load(Ordering::SeqCst);
+        let enabled = self.enabled.load(Ordering::SeqCst);
+        // Pause/disable must win over a non-empty content queue so Settings
+        // does not keep showing "Indexing…" while work is held.
+        let crawling = enabled
+            && !paused
+            && (self.crawling.load(Ordering::SeqCst)
+                || self.content_pending.load(Ordering::SeqCst) > 0);
+
         SearchStatus {
             version: SEARCH_PROTOCOL_VERSION,
-            enabled: self.enabled.load(Ordering::SeqCst),
-            paused: self.paused.load(Ordering::SeqCst),
+            enabled,
+            paused,
             indexed_docs: self.indexed_docs.load(Ordering::SeqCst),
             last_error: self.last_error.lock().ok().and_then(|g| g.clone()),
-            crawling: self.crawling.load(Ordering::SeqCst),
+            crawling,
             crawl_done: self.crawl_done.load(Ordering::SeqCst),
             crawl_total: self.crawl_total.load(Ordering::SeqCst),
             with_content: self.with_content.load(Ordering::SeqCst),
+            content_pending: self.content_pending.load(Ordering::SeqCst),
             roots,
             categories,
         }
@@ -166,6 +244,8 @@ impl SearchIndex {
     pub fn reload_config(&self, cfg: SearchConfig) {
         self.enabled.store(cfg.enabled, Ordering::SeqCst);
         self.paused.store(cfg.paused, Ordering::SeqCst);
+        self.index_effort
+            .store(cfg.index_effort.min(100), Ordering::SeqCst);
         let extractors = build_extractors(&cfg.extractors);
         if let Ok(mut g) = self.extractors.lock() {
             *g = extractors;
@@ -173,6 +253,7 @@ impl SearchIndex {
         if let Ok(mut g) = self.cfg.lock() {
             *g = cfg;
         }
+        self.config_epoch.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn set_error(&self, msg: impl Into<String>) {
@@ -191,15 +272,111 @@ impl SearchIndex {
         self.cfg.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
+    /// True when stored size+mtime match and content phase already finished.
+    pub fn is_unchanged(&self, path: &Path) -> bool {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return false;
+        };
+        if !meta.is_file() {
+            return false;
+        }
+        let mtime = meta_mtime_secs(&meta);
+        let path_str = path.to_string_lossy();
+        matches!(
+            self.lookup_stored(path_str.as_ref()),
+            Some((size, stored_mtime, hash))
+                if size == meta.len()
+                    && stored_mtime == mtime
+                    && hash != CONTENT_PENDING_HASH
+                    && !hash.is_empty()
+        )
+    }
+
+    /// Metadata-only write (empty body, `pending` hash). Returns `false` if skipped.
+    pub fn index_metadata(&self, path: &Path, root_id: &str) -> tantivy::Result<bool> {
+        self.index_metadata_force(path, root_id, false)
+    }
+
+    /// Like [`index_metadata`], but `force` bypasses the size+mtime skip gate.
+    pub fn index_metadata_force(
+        &self,
+        path: &Path,
+        root_id: &str,
+        force: bool,
+    ) -> tantivy::Result<bool> {
+        if !self.enabled.load(Ordering::SeqCst) || self.paused.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        if !force && self.is_unchanged(path) {
+            return Ok(false);
+        }
+        self.write_document(path, root_id, None, true)?;
+        Ok(true)
+    }
+
+    /// Content extract + rewrite (no size/mtime skip — caller already decided).
+    pub fn index_content(&self, path: &Path, root_id: &str) -> tantivy::Result<()> {
+        if !self.enabled.load(Ordering::SeqCst) || self.paused.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let cfg = self.config_snapshot();
+        let body = {
+            let extractors = self.extractors.lock().unwrap_or_else(|e| e.into_inner());
+            extract_body(path, cfg.max_file_bytes, cfg.max_body_chars, &extractors)
+                .unwrap_or_default()
+        };
+        self.write_document(path, root_id, Some(body), false)
+    }
+
+    /// Full index (metadata + extract). Skips when unchanged.
+    #[cfg(test)]
     pub fn index_file(&self, path: &Path, root_id: &str) -> tantivy::Result<()> {
         if !self.enabled.load(Ordering::SeqCst) || self.paused.load(Ordering::SeqCst) {
             return Ok(());
         }
+        if self.is_unchanged(path) {
+            return Ok(());
+        }
+        let cfg = self.config_snapshot();
+        let body = {
+            let extractors = self.extractors.lock().unwrap_or_else(|e| e.into_inner());
+            extract_body(path, cfg.max_file_bytes, cfg.max_body_chars, &extractors)
+                .unwrap_or_default()
+        };
+        self.write_document(path, root_id, Some(body), true)
+    }
+
+    /// Force rewrite for tag updates (never skip; keep prior body when present).
+    pub fn reindex_tags_for_path(&self, path: &str) -> tantivy::Result<()> {
+        let p = PathBuf::from(path);
+        if !p.exists() {
+            return Ok(());
+        }
+        let prior_body = self.lookup_body(path).unwrap_or_default();
+        let body = if prior_body.is_empty() {
+            let cfg = self.config_snapshot();
+            let extractors = self.extractors.lock().unwrap_or_else(|e| e.into_inner());
+            extract_body(&p, cfg.max_file_bytes, cfg.max_body_chars, &extractors)
+                .unwrap_or_default()
+        } else {
+            prior_body
+        };
+        self.write_document(&p, "refresh", Some(body), true)?;
+        self.commit_now()?;
+        Ok(())
+    }
+
+    fn write_document(
+        &self,
+        path: &Path,
+        root_id: &str,
+        body: Option<String>,
+        count_as_index: bool,
+    ) -> tantivy::Result<()> {
         let meta = match std::fs::metadata(path) {
             Ok(m) if m.is_file() => m,
             _ => return Ok(()),
         };
-        let cfg = self.config_snapshot();
         let path_str = path.to_string_lossy().to_string();
         let basename = path
             .file_name()
@@ -209,23 +386,20 @@ impl SearchIndex {
         let ext = extension_of(path);
         let mime = guess_mime(path);
         let category = categorize(path, &mime);
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let mtime = meta_mtime_secs(&meta);
         let (dev, ino) = file_ids(path);
         let user = self.tags.user_tags_for(&path_str, dev, ino);
         let auto = auto_tags(path, category, mtime);
         let tags = merge_tags(&auto, &user);
-        let body = {
-            let extractors = self.extractors.lock().unwrap_or_else(|e| e.into_inner());
-            extract_body(path, cfg.max_file_bytes, cfg.max_body_chars, &extractors)
-                .unwrap_or_default()
+
+        let (body, hash, has_body) = match body {
+            Some(b) => {
+                let has = !b.trim().is_empty();
+                let hash = content_hash(&path_str, meta.len(), mtime, &b);
+                (b, hash, has)
+            }
+            None => (String::new(), CONTENT_PENDING_HASH.to_string(), false),
         };
-        let has_body = !body.trim().is_empty();
-        let hash = content_hash(&path_str, meta.len(), mtime, &body);
 
         let fields = &self.fields;
         let mut document = doc!(
@@ -251,7 +425,6 @@ impl SearchIndex {
             .writer
             .lock()
             .map_err(|_| tantivy::TantivyError::SystemError("writer lock poisoned".into()))?;
-        // Delete previous path entry then add.
         writer.delete_term(Term::from_field_text(fields.path, &path_str));
         writer.add_document(document)?;
         let mut pending = self
@@ -267,10 +440,96 @@ impl SearchIndex {
         }
         drop(pending);
         drop(writer);
-        if self.crawling.load(Ordering::SeqCst) {
+        if count_as_index && self.crawling.load(Ordering::SeqCst) {
             self.note_indexed(root_id, category.as_str(), has_body);
         }
         Ok(())
+    }
+
+    fn lookup_stored(&self, path: &str) -> Option<(u64, i64, String)> {
+        let searcher = self.searcher().ok()?;
+        let term = Term::from_field_text(self.fields.path, path);
+        let query = TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
+        let top = searcher.search(&query, &TopDocs::with_limit(1)).ok()?;
+        let (_score, addr) = top.into_iter().next()?;
+        let retrieved: TantivyDocument = searcher.doc(addr).ok()?;
+        let size = retrieved
+            .get_first(self.fields.size_u64)
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let mtime = retrieved
+            .get_first(self.fields.mtime_i64)
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let hash = retrieved
+            .get_first(self.fields.content_hash)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        Some((size, mtime, hash))
+    }
+
+    fn lookup_body(&self, path: &str) -> Option<String> {
+        let searcher = self.searcher().ok()?;
+        let term = Term::from_field_text(self.fields.path, path);
+        let query = TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
+        let top = searcher.search(&query, &TopDocs::with_limit(1)).ok()?;
+        let (_score, addr) = top.into_iter().next()?;
+        let retrieved: TantivyDocument = searcher.doc(addr).ok()?;
+        retrieved
+            .get_first(self.fields.body)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    }
+
+    /// Rebuild root/category/with_content tallies from the live index.
+    pub fn rebuild_facet_counts(&self) {
+        let Ok(searcher) = self.searcher() else {
+            return;
+        };
+        let mut roots: HashMap<String, u64> = HashMap::new();
+        let mut categories: HashMap<String, u64> = HashMap::new();
+        let mut with_content = 0u64;
+        let fields = &self.fields;
+        for (seg_ord, segment) in searcher.segment_readers().iter().enumerate() {
+            let seg_ord = seg_ord as u32;
+            for doc_id in 0..segment.max_doc() {
+                if segment.is_deleted(doc_id) {
+                    continue;
+                }
+                let addr = tantivy::DocAddress::new(seg_ord, doc_id);
+                let Ok(retrieved): Result<TantivyDocument, _> = searcher.doc(addr) else {
+                    continue;
+                };
+                if let Some(root) = retrieved
+                    .get_first(fields.root_id)
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty() && *s != "refresh")
+                {
+                    *roots.entry(root.to_string()).or_insert(0) += 1;
+                }
+                if let Some(cat) = retrieved
+                    .get_first(fields.category)
+                    .and_then(|v| v.as_str())
+                {
+                    *categories.entry(cat.to_string()).or_insert(0) += 1;
+                }
+                let body = retrieved
+                    .get_first(fields.body)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !body.trim().is_empty() {
+                    with_content += 1;
+                }
+            }
+        }
+        if let Ok(mut g) = self.root_counts.lock() {
+            *g = roots;
+        }
+        if let Ok(mut g) = self.category_counts.lock() {
+            *g = categories;
+        }
+        self.with_content.store(with_content, Ordering::SeqCst);
     }
 
     pub fn remove_path(&self, path: &str) -> tantivy::Result<()> {
@@ -282,6 +541,53 @@ impl SearchIndex {
         writer.commit()?;
         self.reader.reload()?;
         self.refresh_doc_count();
+        Ok(())
+    }
+
+    /// Remove `path` and every indexed doc under `path/` (directory delete / move-out).
+    pub fn remove_under_prefix(&self, path: &str) -> tantivy::Result<()> {
+        let path = path.trim_end_matches('/');
+        if path.is_empty() {
+            return Ok(());
+        }
+        let prefix = format!("{path}/");
+        let searcher = self.searcher()?;
+        let mut doomed: Vec<String> = Vec::new();
+        for (seg_ord, segment) in searcher.segment_readers().iter().enumerate() {
+            let seg_ord = seg_ord as u32;
+            for doc_id in 0..segment.max_doc() {
+                if segment.is_deleted(doc_id) {
+                    continue;
+                }
+                let addr = tantivy::DocAddress::new(seg_ord, doc_id);
+                let Ok(retrieved): Result<TantivyDocument, _> = searcher.doc(addr) else {
+                    continue;
+                };
+                let Some(p) = retrieved
+                    .get_first(self.fields.path)
+                    .and_then(|v| v.as_str())
+                else {
+                    continue;
+                };
+                if p == path || p.starts_with(&prefix) {
+                    doomed.push(p.to_string());
+                }
+            }
+        }
+        if doomed.is_empty() {
+            return self.remove_path(path);
+        }
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| tantivy::TantivyError::SystemError("writer lock poisoned".into()))?;
+        for p in &doomed {
+            writer.delete_term(Term::from_field_text(self.fields.path, p));
+        }
+        writer.commit()?;
+        self.reader.reload()?;
+        self.refresh_doc_count();
+        self.rebuild_facet_counts();
         Ok(())
     }
 
@@ -421,16 +727,6 @@ impl SearchIndex {
         Ok(hits)
     }
 
-    pub fn reindex_tags_for_path(&self, path: &str) -> tantivy::Result<()> {
-        // Re-run index_file to refresh tag facets without requiring body change.
-        let p = PathBuf::from(path);
-        if p.exists() {
-            self.index_file(&p, "refresh")?;
-            self.commit_now()?;
-        }
-        Ok(())
-    }
-
     pub fn tags(&self) -> Arc<TagStore> {
         Arc::clone(&self.tags)
     }
@@ -537,6 +833,14 @@ fn content_hash(path: &str, size: u64, mtime: i64, body: &str) -> String {
     format!("{:016x}", h.finish())
 }
 
+fn meta_mtime_secs(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 fn file_ids(path: &Path) -> (u64, u64) {
     use std::os::unix::fs::MetadataExt;
     match std::fs::metadata(path) {
@@ -603,5 +907,24 @@ mod tests {
                 hits.iter().map(|h| &h.basename).collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn skip_unchanged_after_index() {
+        let dir = tempdir().unwrap();
+        let tags = Arc::new(TagStore::open(&dir.path().join("tags.sqlite")).unwrap());
+        let idx =
+            SearchIndex::open(&dir.path().join("idx"), tags, SearchConfig::default()).unwrap();
+        let path = dir.path().join("stable.txt");
+        std::fs::write(&path, "hello world\n").unwrap();
+        idx.index_file(&path, "test").unwrap();
+        idx.commit_now().unwrap();
+        assert!(idx.is_unchanged(&path));
+        assert!(!idx.index_metadata(&path, "test").unwrap());
+
+        // Touch mtime by rewriting.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&path, "hello world changed\n").unwrap();
+        assert!(!idx.is_unchanged(&path));
     }
 }

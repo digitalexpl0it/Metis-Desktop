@@ -5,6 +5,7 @@ mod crawl;
 mod extract;
 mod index;
 mod ipc;
+mod pipeline;
 mod schema;
 mod tags;
 
@@ -16,6 +17,7 @@ use tracing_subscriber::EnvFilter;
 use crate::crawl::{crawl_roots, watch_loop};
 use crate::index::SearchIndex;
 use crate::ipc::{ControlCmd, serve};
+use crate::pipeline::spawn_content_workers;
 use crate::schema::default_index_dir;
 use crate::tags::{TagStore, default_tags_db_path};
 
@@ -45,6 +47,10 @@ async fn main() {
         }
     };
     index.refresh_doc_count();
+    index.rebuild_facet_counts();
+
+    let content_tx = spawn_content_workers(Arc::clone(&index));
+    index.set_content_sender(content_tx);
 
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel::<ControlCmd>();
     let _ = control_tx; // reserved for future internal triggers
@@ -54,7 +60,7 @@ async fn main() {
     tokio::task::spawn_blocking(move || {
         if crawl_cfg.enabled && !crawl_cfg.paused {
             tracing::info!("initial crawl starting");
-            crawl_roots(&crawl_index, &crawl_cfg);
+            crawl_roots(&crawl_index, &crawl_cfg, false);
             tracing::info!(
                 docs = crawl_index
                     .indexed_docs

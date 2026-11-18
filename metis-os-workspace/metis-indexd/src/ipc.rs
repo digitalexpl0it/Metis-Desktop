@@ -57,7 +57,7 @@ pub async fn serve(index: Arc<SearchIndex>, mut control_rx: mpsc::UnboundedRecei
                         tokio::task::spawn_blocking(move || {
                             let cfg = load_search_config();
                             index.reload_config(cfg.clone());
-                            crawl_roots(&index, &cfg);
+                            crawl_roots(&index, &cfg, true);
                         });
                     }
                 }
@@ -164,7 +164,7 @@ fn dispatch(index: Arc<SearchIndex>, req: SearchRequest) -> SearchResponse {
                 .spawn(move || {
                     let cfg = load_search_config();
                     idx.reload_config(cfg.clone());
-                    crawl_roots(&idx, &cfg);
+                    crawl_roots(&idx, &cfg, true);
                 });
             SearchResponse::Ok
         }

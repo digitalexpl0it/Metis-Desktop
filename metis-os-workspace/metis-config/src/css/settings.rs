@@ -569,9 +569,6 @@ pub fn build_settings_chrome_stylesheet(theme: &ThemeTokens) -> String {
             font-weight: 600;
             font-feature-settings: "tnum";
         }}
-        .metis-search-root-pills {{
-            flex-wrap: wrap;
-        }}
         .metis-search-progress {{
             margin: 4px 0 8px;
         }}
@@ -579,8 +576,8 @@ pub fn build_settings_chrome_stylesheet(theme: &ThemeTokens) -> String {
             background-color: {raised};
             border: 1px solid {border};
             border-radius: {rl}px;
-            min-height: 160px;
-            padding: 4px;
+            min-height: 240px;
+            padding: 8px;
         }}
         .metis-settings-section-body > .metis-settings-list-scroll > .metis-settings-list {{
             margin: 0;

@@ -5,6 +5,28 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-11-17]
+
+### Changed
+
+- **File search Index status** — sits under Indexing; larger category pie with
+  a right-side legend, hover tooltips, and visible thin slices. Dropped the
+  unclear per-path root pills (folder list already covers configured roots).
+- **metis-indexd incremental crawl** — login/watch skips files whose size and
+  mtime still match the index; only new or changed paths are reindexed.
+  **Reindex now** still forces a full pass (so extractor changes refresh bodies).
+- **metis-indexd two-phase + Index effort** — metadata indexes first (names
+  searchable quickly); content extract runs on an effort-scaled worker pool
+  with inter-file delay. Settings → File search **Index effort** slider
+  (`search.json` `index_effort`, default 35) applies live via ReloadConfig.
+- **File search Enable / Pause** — switches apply immediately (no Save); Pause
+  holds the content queue and shows Paused; Disable drops pending extracts and
+  stops the crawl. Redundant Pause/Resume action buttons removed.
+- **File search session watcher** — inotify watches configured roots for the
+  whole session: new/updated files index incrementally, deletes remove the path
+  (and children for folders), new folders get a one-shot child walk, pause keeps
+  pending events, and Save/ReloadConfig resyncs watched roots.
+
 ## [2026-11-14]
 
 ### Added

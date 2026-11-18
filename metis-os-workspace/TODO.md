@@ -2754,7 +2754,9 @@ and extraction never stall the GTK shell.
 - [x] **Tags (first-class)** — auto (`cat:`, `dir:`, `year:`) + user SQLite
       sidecar; IPC TagAdd/TagRemove/TagsList/SuggestTags.
 - [x] **Incremental crawl** — walk roots + `notify`/inotify; `.nomedia` /
-      hidden / excludes; size caps; batched commits.
+      hidden / excludes; size caps; batched commits; size+mtime skip so login
+      does not re-extract unchanged files; two-phase metadata then content with
+      `index_effort` workers/delay; Settings pie chart + capped root pills.
 - [x] **Content extractors (pluggable)** — plain/text/code; HTML strip; PDF via
       optional `pdftotext` (soft-fail); Settings toggles + `ReloadConfig`.
 - [x] **Query IPC** — Query + Status/ReloadConfig/Pause/Resume/Reindex; soft-fail if down.
@@ -2794,6 +2796,22 @@ and extraction never stall the GTK shell.
 - Shipping an Elasticsearch/OpenSearch cluster or remote index service
 - Replacing Task View / Super+Tab (peeks complement, do not replace)
 - Phase 24/25 Remote validation (still human); colour M2 (upstream)
+
+### F. Search follow-ups (not a new phase unless demanded)
+
+Do **not** promote these to a phase by default — only pull in when a real
+need shows up:
+
+- **Tantivy schema / reindex-on-upgrade** — implementation chore when we add
+  fields; not user-facing. No phase until a schema break is required.
+- **OCR / extra extractors** — keep under “on hold” with cloud FS; optional
+  later if users ask for scanned-PDF / image text. Plain/HTML/PDF is enough
+  for v1.
+- **Settings chrome rewrite** — never; File search page only needs targeted
+  fixes (pie / effort / live pause already landed).
+- **Force rebuild** — covered by **Reindex now** (bypasses size+mtime skip so
+  extractor changes refresh bodies). Login crawl stays incremental. No
+  separate “Rebuild index” button unless Reindex UX proves confusing.
 
 **Phase 26 closed 2026-11-15** (extractors + tag polish).
 
