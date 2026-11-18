@@ -1,6 +1,6 @@
 pkgbase = metis-desktop
 	pkgdesc = Metis Wayland desktop environment (compositor, shell, settings)
-	pkgver = 0.1.0.31
+	pkgver = 0.1.0.32
 	pkgrel = 1
 	url = https://github.com/digitalexpl0it/Metis
 	arch = x86_64
