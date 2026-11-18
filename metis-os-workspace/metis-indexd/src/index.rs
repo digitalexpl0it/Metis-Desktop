@@ -137,7 +137,7 @@ impl SearchIndex {
     pub fn dec_content_pending(&self) {
         let prev = self
             .content_pending
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
                 Some(v.saturating_sub(1))
             });
         if matches!(prev, Ok(1)) {
