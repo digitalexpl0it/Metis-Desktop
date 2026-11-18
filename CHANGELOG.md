@@ -9,6 +9,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **cargo-deny** — ignore new RustSec unmaintained advisories for `chrono` /
+  `chrono-tz` (RUSTSEC-2026-0543 / 0555) until a coordinated jiff migration;
+  `rrule` still requires chrono.
 - **File search Index status** — sits under Indexing; larger category pie with
   a right-side legend, hover tooltips, and visible thin slices. Dropped the
   unclear per-path root pills (folder list already covers configured roots).

@@ -31,6 +31,11 @@ ignore = [
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via zbus 5/oo7; migrate with zbus 6 when ready" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant via zbus 5/oo7; migrate with zbus 6 when ready" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names via zbus 5/oo7; migrate with zbus 6 when ready" },
+    # chronotope announced chrono/chrono-tz unmaintained (2026); used widely for
+    # briefing, calendars (rrule), i18n, compositor. Migrate to jiff in a dedicated
+    # change — not a drop-in while rrule still depends on chrono.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; migrate to jiff when rrule/calendar stack allows" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained; migrate with chrono→jiff" },
 ]
 
 [licenses]
