@@ -1565,7 +1565,7 @@ impl MetisState {
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
-            self.spawn_client_argv_with_env(&launch.argv, &extra);
+            let _ = self.spawn_client_argv_with_env(&launch.argv, &extra);
         }
     }
 

@@ -214,7 +214,7 @@ struct Group {
     pin_id: Option<String>,
     name: String,
     icon: gio::Icon,
-    exec: Option<String>,
+    exec: Option<Vec<String>>,
     windows: Vec<WindowInfo>,
     pinned: bool,
     /// True when `name`/`icon` came from a real `.desktop` entry. When false the
@@ -564,7 +564,7 @@ fn task_button(group: &Group, focused: Option<u32>) -> gtk::Button {
                 if let Some(id) = &pin_id {
                     applications::launch_id(id);
                 } else if let Some(exec) = &exec {
-                    if let Err(err) = crate::compositor::launch_program(exec) {
+                    if let Err(err) = crate::compositor::launch_argv(exec.clone()) {
                         tracing::warn!(%err, "failed to launch pinned app");
                     }
                 } else {
@@ -926,7 +926,7 @@ fn attach_context_menu(btn: &gtk::Button, group: &Group) {
                 if let Some(id) = &pin_id {
                     applications::launch_id_new_window(id);
                 } else if let Some(exec) = &exec
-                    && let Err(err) = crate::compositor::launch_program(exec)
+                    && let Err(err) = crate::compositor::launch_argv(exec.clone())
                 {
                     tracing::warn!(%err, "failed to launch new app window");
                 }

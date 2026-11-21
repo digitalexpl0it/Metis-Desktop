@@ -31,6 +31,9 @@ pub fn should_skip(path: &Path, excludes: &[String]) -> bool {
     {
         return true;
     }
+    if is_build_noise_file(path) {
+        return true;
+    }
     for ex in excludes {
         if s.contains(ex) {
             return true;
@@ -42,6 +45,53 @@ pub fn should_skip(path: &Path, excludes: &[String]) -> bool {
         }
     }
     false
+}
+
+/// Object files / compiler leftovers that thrash the watcher during builds and
+/// are useless in desktop search even when `/target/` somehow misses them.
+fn is_build_noise_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let lower = name.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "core" | "vgcore" | "core.dmp" | "thumbs.db" | "desktop.ini"
+    ) {
+        return true;
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "o" | "a"
+            | "so"
+            | "dylib"
+            | "dll"
+            | "exe"
+            | "rlib"
+            | "rmeta"
+            | "rlib.metadata"
+            | "d"
+            | "pyc"
+            | "pyo"
+            | "class"
+            | "jar"
+            | "war"
+            | "ear"
+            | "obj"
+            | "pdb"
+            | "ilk"
+            | "exp"
+            | "lib"
+            | "gcda"
+            | "gcno"
+            | "profraw"
+            | "profdata"
+    )
 }
 
 /// Map a path to the configured search root that contains it (longest match).
@@ -146,7 +196,10 @@ pub async fn watch_loop(index: Arc<SearchIndex>) {
     sync_watches(&index, &mut watcher, &mut watched, &mut last_epoch);
 
     let mut batch: Vec<(PathBuf, FsChange)> = Vec::new();
-    let mut flush = tokio::time::interval(Duration::from_millis(750));
+    // Base cadence; stretches under compile/edit storms so we coalesce instead
+    // of committing every few hundred ms into a multi-GB Tantivy tree.
+    let mut flush_ms: u64 = 750;
+    let mut flush = tokio::time::interval(Duration::from_millis(flush_ms));
     flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     tracing::info!(roots = watched.len(), "session file watcher started");
@@ -155,14 +208,38 @@ pub async fn watch_loop(index: Arc<SearchIndex>) {
         tokio::select! {
             Some(evt) = rx.recv() => {
                 batch.push(evt);
-                if batch.len() >= 128 {
+                // Soft cap: under cargo/npm storms drop oldest after coalescing
+                // so memory stays bounded (flush still dedups by path).
+                if batch.len() >= 2048 {
+                    let keep = batch.split_off(batch.len() - 1024);
+                    batch = keep;
+                }
+                if batch.len() >= 256 {
                     flush_batch(&index, &mut batch);
+                    // Next quiet window should be longer after a burst.
+                    if flush_ms < 2500 {
+                        flush_ms = (flush_ms + 500).min(2500);
+                        flush = tokio::time::interval(Duration::from_millis(flush_ms));
+                        flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    }
                 }
             }
             _ = flush.tick() => {
                 sync_watches(&index, &mut watcher, &mut watched, &mut last_epoch);
                 if !batch.is_empty() {
+                    let n = batch.len();
                     flush_batch(&index, &mut batch);
+                    // Ease back toward the base interval when quiet.
+                    let target = if n >= 64 { 2000 } else if n >= 16 { 1200 } else { 750 };
+                    if target != flush_ms {
+                        flush_ms = target;
+                        flush = tokio::time::interval(Duration::from_millis(flush_ms));
+                        flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    }
+                } else if flush_ms != 750 {
+                    flush_ms = 750;
+                    flush = tokio::time::interval(Duration::from_millis(flush_ms));
+                    flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 }
             }
         }
@@ -231,6 +308,7 @@ fn flush_batch(index: &SearchIndex, batch: &mut Vec<(PathBuf, FsChange)>) {
     });
     batch.dedup_by(|a, b| a.0 == b.0);
 
+    let mut wrote = false;
     for (path, change) in batch.drain(..) {
         if should_skip(&path, excludes) && change != FsChange::Remove {
             continue;
@@ -241,6 +319,8 @@ fn flush_batch(index: &SearchIndex, batch: &mut Vec<(PathBuf, FsChange)>) {
                 let key = path.to_string_lossy();
                 if let Err(err) = index.remove_under_prefix(key.as_ref()) {
                     tracing::debug!(?path, %err, "watch remove failed");
+                } else {
+                    wrote = true;
                 }
             }
             FsChange::DirCreate => {
@@ -248,6 +328,7 @@ fn flush_batch(index: &SearchIndex, batch: &mut Vec<(PathBuf, FsChange)>) {
                     continue;
                 }
                 index_dir_tree(index, &path, &roots, excludes);
+                wrote = true;
             }
             FsChange::Upsert => {
                 if !in_root {
@@ -259,7 +340,10 @@ fn flush_batch(index: &SearchIndex, batch: &mut Vec<(PathBuf, FsChange)>) {
                     }
                     let root_id = resolve_root_id(&path, &roots);
                     match index.index_metadata(&path, &root_id) {
-                        Ok(true) => index.enqueue_content(path, root_id),
+                        Ok(true) => {
+                            index.enqueue_content(path, root_id);
+                            wrote = true;
+                        }
                         Ok(false) => {}
                         Err(err) => {
                             tracing::debug!(?path, %err, "watch metadata index failed");
@@ -270,7 +354,9 @@ fn flush_batch(index: &SearchIndex, batch: &mut Vec<(PathBuf, FsChange)>) {
             }
         }
     }
-    let _ = index.commit_now();
+    if wrote {
+        let _ = index.commit_now();
+    }
 }
 
 fn index_dir_tree(index: &SearchIndex, dir: &Path, roots: &[PathBuf], excludes: &[String]) {
@@ -318,5 +404,14 @@ mod tests {
             resolve_root_id(Path::new("/home/me/x.txt"), &roots),
             "/home/me"
         );
+    }
+
+    #[test]
+    fn build_noise_skips_objects_not_sources() {
+        assert!(is_build_noise_file(Path::new("/tmp/foo.o")));
+        assert!(is_build_noise_file(Path::new("/tmp/libfoo.rlib")));
+        assert!(is_build_noise_file(Path::new("/tmp/bar.pyc")));
+        assert!(!is_build_noise_file(Path::new("/tmp/main.rs")));
+        assert!(!is_build_noise_file(Path::new("/tmp/README.md")));
     }
 }

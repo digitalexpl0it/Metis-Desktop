@@ -165,6 +165,11 @@ fn select_backend() -> Backend {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Before any EGL/GLES: NVIDIA proprietary drivers leak host RAM on every
+    // glFenceSync (Smithay TextureSync). Session wrapper sets this too; set it
+    // here so `run-metis.sh` / direct launches get the same mitigation.
+    maybe_apply_nvidia_fence_workaround();
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
@@ -859,5 +864,29 @@ fn parse_client_command() -> Option<String> {
     match (args.next().as_deref(), args.next()) {
         (Some("-c" | "--command"), Some(command)) => Some(command),
         _ => None,
+    }
+}
+
+/// NVIDIA proprietary: `__GL_4718a5=0` avoids a host-memory leak on
+/// glFenceSync/glDeleteSync (see NVIDIA forum + niri#4729). No-op when the
+/// user already set the var or opted out via `METIS_NVIDIA_FENCE_WORKAROUND=0`.
+fn maybe_apply_nvidia_fence_workaround() {
+    match std::env::var("METIS_NVIDIA_FENCE_WORKAROUND") {
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off") => {
+            return;
+        }
+        _ => {}
+    }
+    if std::env::var_os("__GL_4718a5").is_some() {
+        return;
+    }
+    let nvidia_present = std::path::Path::new("/dev/nvidia0").exists()
+        || std::path::Path::new("/proc/driver/nvidia/version").exists();
+    if !nvidia_present {
+        return;
+    }
+    // FIXME: Audit that the environment access only happens in single-threaded code.
+    unsafe {
+        std::env::set_var("__GL_4718a5", "0");
     }
 }

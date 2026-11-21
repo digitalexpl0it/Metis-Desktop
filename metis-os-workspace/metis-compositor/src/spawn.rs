@@ -505,7 +505,7 @@ impl MetisState {
         let token = Self::new_widgets_ipc_token();
         self.widgets_ipc_token = Some(token.clone());
         let argv = metis_protocol::split_command_line(program);
-        self.spawn_client_argv_with_env(
+        let _ = self.spawn_client_argv_with_env(
             &argv,
             &[
                 ("METIS_IPC_TOKEN", token.as_str()),
@@ -598,18 +598,28 @@ impl MetisState {
 
     /// Spawn a client from argv — never via `sh -c`.
     pub fn spawn_client_argv(&mut self, argv: &[String]) {
-        self.spawn_client_argv_with_env(argv, &[]);
+        let _ = self.spawn_client_argv_with_env(argv, &[]);
     }
 
-    pub fn spawn_client_argv_with_env(&mut self, argv: &[String], extra_env: &[(&str, &str)]) {
+    /// Spawn a client from argv. Returns `Err` when the process cannot be started
+    /// (empty argv, missing binary, permission denied, etc.).
+    pub fn spawn_client_argv_with_env(
+        &mut self,
+        argv: &[String],
+        extra_env: &[(&str, &str)],
+    ) -> Result<(), String> {
         if argv.is_empty() {
             tracing::warn!("spawn_client_argv: empty argv");
-            return;
+            return Err("empty launch command".into());
         }
         // Metis binaries (shell, settings) live alongside the compositor in the
         // cargo target dir, which is usually not on PATH. Resolve a bare program
         // name to its sibling-of-current-exe absolute path so `Launch` works.
         let mut argv = argv.to_vec();
+        // Some .desktop Exec lines ship with literal quotes around an absolute
+        // path (`Exec="/usr/lib/..."`). Gio may leave those quote chars in the
+        // commandline string; strip them so `Command::new` finds the binary.
+        strip_wrapping_quotes(&mut argv[0]);
         if !argv[0].contains('/')
             && let Ok(exe) = std::env::current_exe()
             && let Some(dir) = exe.parent()
@@ -664,7 +674,7 @@ impl MetisState {
                 extra_env: queued_env,
             });
             self.ensure_gaming_xwayland();
-            return;
+            return Ok(());
         }
 
         let mut cmd = std::process::Command::new(&argv[0]);
@@ -725,10 +735,25 @@ impl MetisState {
                         });
                 }
                 self.child_processes.push(child);
+                Ok(())
             }
             Err(err) => {
-                tracing::warn!(program = %program_joined, %err, "failed to spawn client")
+                tracing::warn!(program = %program_joined, %err, "failed to spawn client");
+                Err(format!("failed to launch {program_joined}: {err}"))
             }
+        }
+    }
+}
+
+/// Strip a single pair of matching wrapping quotes from a token (`.desktop`
+/// Exec paths like `"/usr/lib/app"` that Gio left quoted).
+fn strip_wrapping_quotes(token: &mut String) {
+    let bytes = token.as_bytes();
+    if bytes.len() >= 2 {
+        let (first, last) = (bytes[0], bytes[bytes.len() - 1]);
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            token.pop();
+            token.remove(0);
         }
     }
 }

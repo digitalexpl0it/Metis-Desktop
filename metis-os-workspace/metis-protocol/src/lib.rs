@@ -961,6 +961,11 @@ mod tests {
         assert_eq!(split_command_line(r#"echo "a\"b""#), vec!["echo", r#"a"b"#]);
         // No shell expansion — `$HOME` stays literal.
         assert_eq!(split_command_line("echo $HOME"), vec!["echo", "$HOME"]);
+        // Gio can leave `.desktop` Exec quotes in the commandline string.
+        assert_eq!(
+            split_command_line(r#""/usr/lib/metis-mesh-hq/metis-mesh-hq""#),
+            vec!["/usr/lib/metis-mesh-hq/metis-mesh-hq"]
+        );
     }
 
     #[test]

@@ -3022,7 +3022,7 @@ dependencies = [
 
 [[package]]
 name = "metis-capture"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "drm-fourcc",
  "gbm",
@@ -3035,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "metis-compositor"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -3070,7 +3070,7 @@ dependencies = [
 
 [[package]]
 name = "metis-config"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "chrono",
  "directories",
@@ -3085,7 +3085,7 @@ dependencies = [
 
 [[package]]
 name = "metis-decode"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "ffmpeg-next",
  "metis-encode",
@@ -3096,7 +3096,7 @@ dependencies = [
 
 [[package]]
 name = "metis-encode"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "ffmpeg-next",
  "libc",
@@ -3109,7 +3109,7 @@ dependencies = [
 
 [[package]]
 name = "metis-gaming"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "metis-config",
  "metis-protocol",
@@ -3121,7 +3121,7 @@ dependencies = [
 
 [[package]]
 name = "metis-grid"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "serde",
  "serde_json",
@@ -3130,7 +3130,7 @@ dependencies = [
 
 [[package]]
 name = "metis-i18n"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "chrono",
  "fluent",
@@ -3145,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "metis-indexd"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "directories",
  "libc",
@@ -3166,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "metis-polkit-agent"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-channel",
  "futures-util",
@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "metis-portal"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "ashpd",
  "async-trait",
@@ -3215,7 +3215,7 @@ dependencies = [
 
 [[package]]
 name = "metis-protocol"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "libc",
  "metis-grid",
@@ -3226,7 +3226,7 @@ dependencies = [
 
 [[package]]
 name = "metis-rdp-host"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -3248,7 +3248,7 @@ dependencies = [
 
 [[package]]
 name = "metis-remote"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "image",
  "libc",
@@ -3264,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "metis-rudp-client"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "bytes",
  "metis-config",
@@ -3278,7 +3278,7 @@ dependencies = [
 
 [[package]]
 name = "metis-rudp-host"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "bytes",
  "libc",
@@ -3296,7 +3296,7 @@ dependencies = [
 
 [[package]]
 name = "metis-rudp-smoke"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "libc",
  "metis-protocol",
@@ -3309,7 +3309,7 @@ dependencies = [
 
 [[package]]
 name = "metis-screenshot"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "gdk-pixbuf",
  "gio",
@@ -3328,14 +3328,14 @@ dependencies = [
 
 [[package]]
 name = "metis-secrets"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "oo7",
 ]
 
 [[package]]
 name = "metis-secretsd"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -3356,7 +3356,7 @@ dependencies = [
 
 [[package]]
 name = "metis-settings"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "chrono",
  "gio",
@@ -3382,7 +3382,7 @@ dependencies = [
 
 [[package]]
 name = "metis-shell"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3427,7 +3427,7 @@ dependencies = [
 
 [[package]]
 name = "metis-viewer"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "bytes",
  "cpal",
@@ -3449,7 +3449,7 @@ dependencies = [
 
 [[package]]
 name = "metis-widget-wasm"
-version = "0.1.31"
+version = "0.1.32"
 dependencies = [
  "metis-config",
  "serde_json",

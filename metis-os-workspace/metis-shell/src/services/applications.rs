@@ -17,8 +17,9 @@ pub struct AppEntry {
     /// Desktop file id, e.g. `firefox.desktop`. Stable key for pinning/frequency.
     pub id: String,
     pub name: String,
-    /// Command line with `.desktop` field codes stripped, ready for `launch_program`.
-    pub exec: String,
+    /// Argv with `.desktop` field codes stripped, ready for compositor `Launch`.
+    /// Kept as a vector so paths/args with spaces survive (join→re-split would not).
+    pub exec: Vec<String>,
     pub icon: Option<gio::Icon>,
     pub keywords: Vec<String>,
     /// `StartupWMClass` from the desktop entry, used to map a running window's
@@ -115,8 +116,8 @@ fn entry_from_info(info: gio::AppInfo) -> Option<AppEntry> {
     }
     let exec = info
         .commandline()
-        .map(|cmd| clean_exec(&cmd.to_string_lossy()))
-        .filter(|s| !s.is_empty())?;
+        .map(|cmd| clean_exec_argv(&cmd.to_string_lossy()))
+        .filter(|argv| !argv.is_empty())?;
     if is_stub_exec(&exec) {
         return None;
     }
@@ -162,20 +163,19 @@ fn entry_from_info(info: gio::AppInfo) -> Option<AppEntry> {
 }
 
 /// Strip freedesktop Exec field codes (`%U`, `%f`, `%i`, ...) so the residual
-/// command line can be spawned directly by the compositor.
-fn clean_exec(exec: &str) -> String {
+/// argv can be spawned directly by the compositor.
+fn clean_exec_argv(exec: &str) -> Vec<String> {
     metis_protocol::split_command_line(exec)
         .into_iter()
         .filter(|tok| !(tok.len() == 2 && tok.starts_with('%')))
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect()
 }
 
 /// Snap ships placeholder `.desktop` stubs (`Exec=/usr/bin/false`) alongside the
 /// real launcher — drop them so the menu does not list non-startable entries.
-fn is_stub_exec(exec: &str) -> bool {
+fn is_stub_exec(argv: &[String]) -> bool {
     matches!(
-        exec.split_whitespace().next(),
+        argv.first().map(String::as_str),
         Some("false" | "/usr/bin/false" | "/bin/false")
     )
 }
@@ -657,9 +657,16 @@ fn spawn_tracked(entry: &AppEntry) {
     if let Err(err) = save_menu_config(&cfg) {
         tracing::warn!(%err, "failed to persist menu.json after launch");
     }
-    if let Err(err) = crate::compositor::launch_program(&entry.exec) {
-        tracing::warn!(%err, exec = %entry.exec, "failed to launch application");
+    if let Err(err) = crate::compositor::launch_argv(entry.exec.clone()) {
+        tracing::warn!(%err, ?entry.exec, "failed to launch application");
         crate::services::launch_pending::clear_id(&entry.id);
+        let mut note = crate::services::BarNotification::internal(
+            crate::services::NotificationKind::Error,
+            format!("Could not open {}", entry.name),
+            err.to_string(),
+        );
+        note.expire_ms = 5000;
+        crate::ui::toast::show(&note);
     }
 }
 

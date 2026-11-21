@@ -236,7 +236,7 @@ mod tests {
         AppEntry {
             id: id.into(),
             name: name.into(),
-            exec: "true".into(),
+            exec: vec!["true".into()],
             icon: None,
             keywords: Vec::new(),
             wm_class: wm.map(str::to_string),

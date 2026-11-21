@@ -2812,6 +2812,10 @@ need shows up:
 - **Force rebuild** — covered by **Reindex now** (bypasses size+mtime skip so
   extractor changes refresh bodies). Login crawl stays incremental. No
   separate “Rebuild index” button unless Reindex UX proves confusing.
+- [x] **Live-session RAM under edit/compile churn** (2026-11-21) — smaller
+      writer heap, capped/deduped content queue, adaptive watch debounce,
+      object-file skips, extra toolchain excludes; NVIDIA `__GL_4718a5=0`
+      fence workaround in session/compositor (see PERF_AUDIT).
 
 **Phase 26 closed 2026-11-15** (extractors + tag polish).
 

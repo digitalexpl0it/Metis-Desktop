@@ -257,6 +257,21 @@ Empty-desktop / no-Electron idle was **not** re-measured this pass; expect
 lower compositor % when nothing damages. Continuous ScreenCast + `perf top`
 deferred until `perf_event_paranoid` allows and OBS/GRD is available.
 
+### Long-session growth (2026-11-21)
+
+Hybrid Intel + NVIDIA sessions can feel slower after hours. Two mitigations:
+
+1. **NVIDIA `glFenceSync` host leak** — proprietary drivers leave ~16–18 B per
+   sync even after `glDeleteSync` (Smithay GLES TextureSync). Metis sets
+   `__GL_4718a5=0` from `metis-session` / compositor when `/dev/nvidia*` is
+   present (`METIS_NVIDIA_FENCE_WORKAROUND=0` to opt out).
+2. **`metis-indexd` under edit/compile churn** — 16 MiB writer heap, 512-deep
+   deduped content queue (drops overflow extracts), adaptive watch debounce,
+   object-file skips, and extra toolchain excludes. Name search stays warm;
+   body extract yields under cargo/npm storms. Pause File search to A/B test.
+
+Soak check: `ps -o etime,rss,pcpu,cmd -C metis-compositor,metis-indexd,metis-shell`
+
 ---
 
 ## Measurement checklist

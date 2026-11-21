@@ -320,7 +320,8 @@ impl MetisState {
     /// Topmost mapped window that should receive pointer events at `pos`. Unlike
     /// [`Space::element_under`](smithay::desktop::Space::element_under), accounts
     /// for compositor-drawn SSD chrome (overlay titlebars and border strips) that
-    /// sits outside the client's committed surface tree.
+    /// sits outside the client's committed surface tree, and for xdg_popup trees
+    /// that extend past the parent window (file-manager context menus, etc.).
     pub(crate) fn topmost_window_at_pointer(
         &self,
         pos: Point<f64, Logical>,
@@ -328,6 +329,8 @@ impl MetisState {
         use crate::decoration::overlay_chrome_rect;
 
         let (x, y) = (pos.x as i32, pos.y as i32);
+        const POPUP_TREE: WindowSurfaceType =
+            WindowSurfaceType::POPUP.union(WindowSurfaceType::SUBSURFACE);
 
         for window in self.space.elements().rev() {
             let Some(id) = self.windows.id_for_window(window) else {
@@ -347,6 +350,14 @@ impl MetisState {
             let size = window.geometry().size;
             if size.w <= 0 || size.h <= 0 {
                 continue;
+            }
+
+            // Context menus / dropdowns that hang outside the parent window must
+            // still attribute the pointer to that window (not a neighbour tile).
+            if let Some((rel, _)) = self.window_pointer_local(pos, window)
+                && window.surface_under(rel, POPUP_TREE).is_some()
+            {
+                return Some((window.clone(), loc));
             }
 
             if record.fullscreen {
@@ -427,6 +438,16 @@ impl MetisState {
                 return self.window_surface_for(pos, &window);
             }
         }
+
+        // xdg_popup trees (GTK/Nautilus context menus, combo dropdowns) routinely
+        // extend past the parent window into empty desk or a neighbour tile.
+        // `topmost_window_at_pointer` only tests window geometry, so those clicks
+        // would land on whatever toplevel sits under the overflow. Scan popups in
+        // stacking order first — same idea as the bar's `metis_bar_popup_tree_*`.
+        if let Some(hit) = self.window_popup_surface_at(pos) {
+            return Some(hit);
+        }
+
         let (window, _location) = self.topmost_window_at_pointer(pos).or_else(|| {
             let (window, location) = self.space.element_under(pos)?;
             let id = self.windows.id_for_window(window)?;
@@ -438,25 +459,60 @@ impl MetisState {
         self.window_surface_for(pos, &window)
     }
 
-    /// Pointer target while a capture overlay session is active.
-    pub(crate) fn window_surface_for(
+    /// Topmost xdg_popup (or popup subsurface) under `pos`, including popups that
+    /// extend outside their parent window's mapped geometry.
+    fn window_popup_surface_at(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        // POPUP|SUBSURFACE: hit the popup chrome and its internal subsurfaces, but
+        // never the parent toplevel — that would defeat the stacking walk below.
+        const POPUP_TREE: WindowSurfaceType =
+            WindowSurfaceType::POPUP.union(WindowSurfaceType::SUBSURFACE);
+
+        for window in self.space.elements().rev() {
+            let Some(id) = self.windows.id_for_window(window) else {
+                continue;
+            };
+            if self.pointer_ignores_window(id) {
+                continue;
+            }
+            let Some((rel, surface_origin)) = self.window_pointer_local(pos, window) else {
+                continue;
+            };
+            if let Some((surface, loc)) = window.surface_under(rel, POPUP_TREE) {
+                return Some((surface, (loc.to_f64() + surface_origin).to_f64()));
+            }
+        }
+        None
+    }
+
+    /// Pointer position relative to a window's smithay surface origin, plus that
+    /// origin in global logical coords (mapped loc − CSD geometry offset + slide).
+    fn window_pointer_local(
         &self,
         pos: Point<f64, Logical>,
         window: &smithay::desktop::Window,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+    ) -> Option<(Point<f64, Logical>, Point<f64, Logical>)> {
         let map_loc = self.space.element_location(window)?;
         let slide_dx = self
             .windows
             .id_for_window(window)
             .map(|id| self.workspace_slide_dx(id))
             .unwrap_or(0);
-        // Match smithay's render origin: mapped location minus the client's
-        // geometry offset (CSD shadow margins Firefox keeps while unmaximized),
-        // plus any in-flight workspace-slide visual offset.
         let geo = window.geometry();
         let surface_origin =
             map_loc.to_f64() - geo.loc.to_f64() + Point::from((slide_dx as f64, 0.0));
-        let rel = pos - surface_origin;
+        Some((pos - surface_origin, surface_origin))
+    }
+
+    /// Pointer target while a capture overlay session is active.
+    pub(crate) fn window_surface_for(
+        &self,
+        pos: Point<f64, Logical>,
+        window: &smithay::desktop::Window,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let (rel, surface_origin) = self.window_pointer_local(pos, window)?;
         if let Some((surface, loc)) = window
             .surface_under(rel, WindowSurfaceType::ALL)
             .map(|(surface, loc)| (surface, (loc.to_f64() + surface_origin).to_f64()))

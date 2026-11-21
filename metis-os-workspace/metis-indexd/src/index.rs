@@ -1,7 +1,7 @@
 //! Tantivy open / index / query.
 
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
@@ -51,9 +51,16 @@ pub struct SearchIndex {
     /// Bumped on every `reload_config` so the session watcher can resync roots.
     pub config_epoch: AtomicU64,
     content_tx: Mutex<Option<SyncSender<(PathBuf, String)>>>,
+    /// Paths already sitting on the content queue (dedupe under edit storms).
+    content_queued: Mutex<HashSet<PathBuf>>,
     root_counts: Mutex<HashMap<String, u64>>,
     category_counts: Mutex<HashMap<String, u64>>,
 }
+
+/// Tantivy IndexWriter heap. Smaller than the old 50 MiB default so live
+/// sessions under heavy watch churn keep a tighter RSS floor; commits are
+/// slightly more frequent, which is fine for incremental updates.
+const WRITER_HEAP_BYTES: usize = 16_000_000;
 
 impl SearchIndex {
     pub fn open(dir: &Path, tags: Arc<TagStore>, cfg: SearchConfig) -> tantivy::Result<Self> {
@@ -61,7 +68,7 @@ impl SearchIndex {
             .map_err(|e| tantivy::TantivyError::SystemError(format!("create index dir: {e}")))?;
         let (schema, fields) = build_schema();
         let index = Index::open_or_create(tantivy::directory::MmapDirectory::open(dir)?, schema)?;
-        let writer = index.writer(50_000_000)?;
+        let writer = index.writer(WRITER_HEAP_BYTES)?;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
@@ -91,6 +98,7 @@ impl SearchIndex {
             index_effort: AtomicU8::new(effort),
             config_epoch: AtomicU64::new(0),
             content_tx: Mutex::new(None),
+            content_queued: Mutex::new(HashSet::new()),
             root_counts: Mutex::new(HashMap::new()),
             category_counts: Mutex::new(HashMap::new()),
         })
@@ -116,25 +124,37 @@ impl SearchIndex {
             let _ = self.index_content(&path, &root_id);
             return;
         };
-        self.content_pending.fetch_add(1, Ordering::SeqCst);
-        if tx.send((path, root_id)).is_err() {
-            self.content_pending.fetch_sub(1, Ordering::SeqCst);
-            tracing::debug!("content queue closed");
+        // Dedupe: same path already waiting for extract — skip.
+        if let Ok(mut queued) = self.content_queued.lock()
+            && !queued.insert(path.clone())
+        {
+            return;
         }
-    }
-
-    /// Put a job back on the queue without changing `content_pending` (pause path).
-    pub fn requeue_content(&self, path: PathBuf, root_id: String) {
-        let tx = match self.content_tx.lock() {
-            Ok(g) => g.clone(),
-            Err(_) => None,
-        };
-        if let Some(tx) = tx {
-            let _ = tx.send((path, root_id));
+        self.content_pending.fetch_add(1, Ordering::SeqCst);
+        // Non-blocking: under compile storms prefer dropping content extract
+        // (name metadata already indexed) over growing RSS unboundedly.
+        match tx.try_send((path.clone(), root_id)) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                self.content_pending.fetch_sub(1, Ordering::SeqCst);
+                if let Ok(mut queued) = self.content_queued.lock() {
+                    queued.remove(&path);
+                }
+                tracing::debug!(?path, "content queue full — dropped extract");
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                self.content_pending.fetch_sub(1, Ordering::SeqCst);
+                if let Ok(mut queued) = self.content_queued.lock() {
+                    queued.remove(&path);
+                }
+                tracing::debug!("content queue closed");
+            }
         }
     }
 
     pub fn dec_content_pending(&self) {
+        // Caller passes the finished path via `finish_content` when known;
+        // this keeps the atomic counter for Status.
         let prev = self
             .content_pending
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
@@ -144,6 +164,14 @@ impl SearchIndex {
             let _ = self.commit_now();
             self.rebuild_facet_counts();
         }
+    }
+
+    /// Mark a content job finished (counter + dedupe set).
+    pub fn finish_content(&self, path: &Path) {
+        if let Ok(mut queued) = self.content_queued.lock() {
+            queued.remove(path);
+        }
+        self.dec_content_pending();
     }
 
     pub fn begin_crawl(&self, total_estimate: u64) {

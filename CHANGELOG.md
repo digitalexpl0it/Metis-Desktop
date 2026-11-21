@@ -5,6 +5,30 @@ All notable changes to Metis are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **File manager / app context menus** — xdg_popup trees that extend past the
+  parent window (into a neighbour tile or empty desk) now receive pointer
+  events; previously the overflow landed on whatever toplevel was underneath,
+  so the last menu rows looked visible but were not clickable.
+- **App menu launch failures** — compositor `Launch` now returns an error when
+  the process cannot be spawned, and the shell shows a toast instead of failing
+  silently. Also strips leftover quotes around absolute `Exec=` paths that Gio
+  can leave in the commandline (e.g. older Metis Mesh HQ `.desktop` entries).
+  Menu/dock launches keep Exec as argv (no join→re-split), so arguments and
+  paths with spaces survive.
+- **Long-session slowdown (NVIDIA)** — session + compositor set `__GL_4718a5=0`
+  when an NVIDIA device is present (opt out with `METIS_NVIDIA_FENCE_WORKAROUND=0`)
+  to work around the proprietary-driver `glFenceSync` host-memory leak that
+  grows compositor RSS over hours.
+- **File search under heavy edit/compile load** — `metis-indexd` uses a smaller
+  writer heap, a capped/deduped content queue (drops overflow extracts; names
+  still index), adaptive watch debounce, skips object/build-noise extensions,
+  and merges extra toolchain excludes (`/.cargo/registry/`, `/.rustup/`, …)
+  in-memory so programming sessions do not keep ballooning indexer RAM.
+
 ## [0.1.0.32] - 2026-11-17
 
 ### Changed

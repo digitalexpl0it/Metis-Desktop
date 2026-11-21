@@ -294,8 +294,10 @@ impl MetisState {
             CompositorCommand::SubscribeEvents => CompositorEvent::Pong,
             CompositorCommand::Launch { argv, program } => {
                 let argv = metis_protocol::launch_argv(&argv, &program);
-                self.spawn_client_argv(&argv);
-                CompositorEvent::Pong
+                match self.spawn_client_argv_with_env(&argv, &[]) {
+                    Ok(()) => CompositorEvent::Pong,
+                    Err(message) => CompositorEvent::Error { message },
+                }
             }
             CompositorCommand::EndSession => {
                 tracing::info!("EndSession requested");

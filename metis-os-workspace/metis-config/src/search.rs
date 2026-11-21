@@ -117,6 +117,21 @@ fn default_excludes() -> Vec<String> {
         "/.cache/".into(),
         "/Cache/".into(),
         "/.local/share/Trash/".into(),
+        // Toolchain / package caches — huge and churny while developing.
+        "/.cargo/registry/".into(),
+        "/.cargo/git/".into(),
+        "/.rustup/".into(),
+        "/__pycache__/".into(),
+        "/.venv/".into(),
+        "/venv/".into(),
+        "/.npm/".into(),
+        "/.pnpm-store/".into(),
+        "/.gradle/".into(),
+        "/CMakeFiles/".into(),
+        "/.next/".into(),
+        "/.turbo/".into(),
+        "/zig-cache/".into(),
+        "/.ccache/".into(),
     ]
 }
 
@@ -128,6 +143,13 @@ pub fn sanitize_search_config(cfg: &mut SearchConfig) {
     cfg.excludes.retain(|e| !e.trim().is_empty());
     for root in &mut cfg.roots {
         *root = root.trim().to_string();
+    }
+    // Merge built-in excludes in-memory (no rewrite) so older search.json files
+    // pick up new toolchain skips without a migration rewrite loop.
+    for ex in default_excludes() {
+        if !cfg.excludes.iter().any(|e| e == &ex) {
+            cfg.excludes.push(ex);
+        }
     }
 }
 
@@ -215,5 +237,22 @@ mod tests {
         assert_eq!(index_effort_delay_ms(0), 40);
         assert_eq!(index_effort_delay_ms(100), 0);
         assert!(index_effort_delay_ms(35) < index_effort_delay_ms(0));
+    }
+
+    #[test]
+    fn sanitize_merges_builtin_excludes() {
+        let mut cfg = SearchConfig {
+            excludes: vec!["/custom/".into()],
+            ..Default::default()
+        };
+        // Wipe the defaults Default inserted, then sanitize must re-merge.
+        cfg.excludes = vec!["/custom/".into()];
+        sanitize_search_config(&mut cfg);
+        assert!(cfg.excludes.iter().any(|e| e == "/custom/"));
+        assert!(cfg.excludes.iter().any(|e| e == "/target/"));
+        assert!(cfg.excludes.iter().any(|e| e == "/.cargo/registry/"));
+        let once = cfg.clone();
+        sanitize_search_config(&mut cfg);
+        assert_eq!(cfg, once);
     }
 }

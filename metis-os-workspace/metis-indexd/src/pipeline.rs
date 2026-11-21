@@ -11,7 +11,9 @@ use metis_config::{index_effort_delay_ms, index_effort_workers};
 use crate::index::SearchIndex;
 
 const MAX_CONTENT_WORKERS: usize = 4;
-const CONTENT_QUEUE_CAP: usize = 8192;
+/// Bound extract backlog during cargo/npm storms. Metadata still indexes;
+/// overflowing content jobs are dropped (see `enqueue_content`).
+const CONTENT_QUEUE_CAP: usize = 512;
 
 /// Spawn content workers and return a sender used by crawl/watch.
 pub fn spawn_content_workers(index: Arc<SearchIndex>) -> SyncSender<(PathBuf, String)> {
@@ -48,18 +50,31 @@ fn content_worker(id: usize, index: Arc<SearchIndex>, rx: Arc<Mutex<Receiver<(Pa
             Ok((path, root_id)) => {
                 if !index.enabled.load(Ordering::SeqCst) {
                     // Drop queued work when search is disabled.
-                    index.dec_content_pending();
+                    index.finish_content(&path);
                     continue;
                 }
-                if index.paused.load(Ordering::SeqCst) {
-                    index.requeue_content(path, root_id);
+                // Hold the job in this worker until unpaused (avoids requeue
+                // deadlocks on a full bounded channel).
+                let mut dropped = false;
+                while index.paused.load(Ordering::SeqCst) {
+                    if !index.enabled.load(Ordering::SeqCst) {
+                        index.finish_content(&path);
+                        dropped = true;
+                        break;
+                    }
                     std::thread::sleep(Duration::from_millis(500));
+                }
+                if dropped {
+                    continue;
+                }
+                if !index.enabled.load(Ordering::SeqCst) {
+                    index.finish_content(&path);
                     continue;
                 }
                 if let Err(err) = index.index_content(&path, &root_id) {
                     tracing::debug!(?path, %err, "content index failed");
                 }
-                index.dec_content_pending();
+                index.finish_content(&path);
                 let delay = index_effort_delay_ms(index.index_effort());
                 if delay > 0 {
                     std::thread::sleep(Duration::from_millis(delay));

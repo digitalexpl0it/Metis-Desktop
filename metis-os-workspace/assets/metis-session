@@ -77,6 +77,19 @@ export GDK_BACKEND="${GDK_BACKEND:-wayland}"
 export METIS_SHELL_GSK_RENDERER="${METIS_SHELL_GSK_RENDERER:-${GSK_RENDERER:-cairo}}"
 export GSK_RENDERER="${GSK_RENDERER:-$METIS_SHELL_GSK_RENDERER}"
 
+# --- NVIDIA host-memory workaround -----------------------------------------
+# Proprietary NVIDIA drivers have leaked ~16–18 bytes of host RAM per
+# glFenceSync/glDeleteSync (Smithay's GlesRenderer TextureSync does one per
+# textured draw). Over a long session that becomes hundreds of MB → hitching.
+# NVIDIA's documented workaround flag; harmless when the NVIDIA userspace is
+# absent. Opt out with METIS_NVIDIA_FENCE_WORKAROUND=0.
+if [[ "${METIS_NVIDIA_FENCE_WORKAROUND:-1}" != "0" ]]; then
+    if [[ -e /dev/nvidia0 || -e /proc/driver/nvidia/version ]] \
+        || lspci 2>/dev/null | grep -qi 'NVIDIA'; then
+        export __GL_4718a5="${__GL_4718a5:-0}"
+    fi
+fi
+
 # --- Electron / Chromium: prefer native Wayland ----------------------------
 # Metis is a Wayland compositor; its XWayland path is a fallback. Electron/Ozone
 # apps default to XWayland unless hinted otherwise, and their XWayland map/unmap

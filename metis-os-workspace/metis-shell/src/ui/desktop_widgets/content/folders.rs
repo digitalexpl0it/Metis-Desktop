@@ -369,13 +369,13 @@ fn launch_desktop_file(path: &Path) {
         open_with_default(path);
         return;
     };
-    let exec = info
+    let argv = info
         .commandline()
-        .map(|c| clean_exec(&c.to_string_lossy()))
-        .filter(|s| !s.is_empty());
-    if let Some(exec) = exec {
-        if let Err(err) = crate::compositor::launch_program(&exec) {
-            tracing::warn!(%err, exec = %exec, "failed to launch .desktop");
+        .map(|c| clean_exec_argv(&c.to_string_lossy()))
+        .filter(|argv| !argv.is_empty());
+    if let Some(argv) = argv {
+        if let Err(err) = crate::compositor::launch_argv(argv) {
+            tracing::warn!(%err, "failed to launch .desktop");
         }
         return;
     }
@@ -385,12 +385,11 @@ fn launch_desktop_file(path: &Path) {
     }
 }
 
-fn clean_exec(exec: &str) -> String {
+fn clean_exec_argv(exec: &str) -> Vec<String> {
     metis_protocol::split_command_line(exec)
         .into_iter()
         .filter(|tok| !(tok.len() == 2 && tok.starts_with('%')))
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect()
 }
 
 fn open_with_default(path: &Path) {

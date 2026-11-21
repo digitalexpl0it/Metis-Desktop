@@ -127,11 +127,16 @@ pub fn launch_argv(argv: impl IntoIterator<Item = impl Into<String>>) -> std::io
             "empty launch argv",
         ));
     }
-    let _ = send_command(CompositorCommand::Launch {
+    match send_command(CompositorCommand::Launch {
         argv,
         program: String::new(),
-    })?;
-    Ok(())
+    })? {
+        CompositorEvent::Pong => Ok(()),
+        CompositorEvent::Error { message } => Err(std::io::Error::other(message)),
+        _ => Err(std::io::Error::other(
+            "unexpected compositor response for Launch",
+        )),
+    }
 }
 
 /// Ask the compositor to lock the session (enter the compositor-rendered lock
