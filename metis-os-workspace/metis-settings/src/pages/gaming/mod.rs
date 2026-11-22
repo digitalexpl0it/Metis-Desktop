@@ -217,7 +217,7 @@ pub fn build() -> gtk::Widget {
     let setup_btn = gtk::Button::with_label(&tr("Run gaming setup"));
     setup_btn.set_halign(gtk::Align::Start);
     setup_btn.set_tooltip_text(Some(&tr(
-        "Guided setup: Steam, Vulkan, controllers, GameMode, GPU mode, drivers, Flatpak",
+        "Live checklist: Steam, Vulkan, controllers, GameMode, GPU mode, drivers, Flatpak — fix or reconfigure anytime",
     )));
     actions.append(&setup_btn);
     mode_body.append(&actions);

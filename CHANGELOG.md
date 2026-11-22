@@ -22,6 +22,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   Wi-Fi list/refresh stay hidden until airplane is turned off. Same click-arm
   guard as the Wi-Fi radio switch (HDMI/modeset cannot trip it).
 
+### Changed
+
+- **Gaming setup dialog** — Settings → Gaming → Run gaming setup is a live
+  checklist dashboard (not Back/Skip/Next): auto-detects Steam, Vulkan,
+  controllers, GameMode, GPU mode, NVIDIA, and Flatpak overrides; colored Ready /
+  Needs attention cards with Fix / Install / Recheck; GPU mode DropDown to
+  reconfigure anytime; Refresh, Fix all, and Done.
+
 ### Fixed
 
 - **Cyberpunk / Proton flash-exit + bar-inset fullscreen** — X11 Steam/`steam_app_*`

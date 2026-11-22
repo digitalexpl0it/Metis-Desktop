@@ -489,6 +489,13 @@ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia %command%   # NVIDI
 Set `METIS_NO_CLIENT_GPU=1` in the session environment to disable the automatic
 forwarding entirely.
 
+**Gaming setup (Settings → Gaming → Run gaming setup).** A live checklist
+dashboard for Steam, Vulkan, controllers, GameMode, GPU mode, NVIDIA drivers
+(when needed), and Flatpak overrides. Metis auto-detects on open and after each
+Fix; cards show **Ready** or **Needs attention**. Fix individual items, change
+GPU mode anytime, or use **Fix all**. Leave Steam Launch Options empty for GPU —
+Metis session offload handles hybrid routing.
+
 **Gaming Platform 2.0 (Settings → Gaming).** Metis productizes GPU routing and
 Flatpak setup in `~/.config/metis/gaming.json` instead of env-var recipes:
 
@@ -513,8 +520,9 @@ Flatpak setup in `~/.config/metis/gaming.json` instead of env-var recipes:
   `steam -applaunch <id>` / `steam://rungameid/<id>` with `gamescope [flags] --`.
   These never write Steam Properties or Launch Options.
 - **Optimize for gaming** — Flatpak overrides + input-group Fix.
-- **Run gaming setup** — stepped wizard: Steam → Vulkan → controllers →
-  GameMode → GPU mode Auto → NVIDIA consent (when needed) → Flatpak finish.
+- **Run gaming setup** — live checklist dashboard (Steam, Vulkan, controllers,
+  GameMode, GPU mode, NVIDIA when needed, Flatpak). Ready / Needs attention
+  cards with Fix / Install / Recheck; GPU DropDown to reconfigure; Fix all / Done.
 - **First-run wizard** — optional Gaming step in onboarding; same messaging;
   use Settings → Gaming Fix / setup for missing pieces (no silent driver install).
 

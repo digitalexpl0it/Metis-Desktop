@@ -663,6 +663,10 @@ pub fn build_settings_chrome_stylesheet(theme: &ThemeTokens) -> String {
             background-color: color-mix(in srgb, {warning} 12%, {surface});
             border-color: color-mix(in srgb, {warning} 35%, transparent);
         }}
+        .metis-settings-gaming-status.metis-settings-gaming-status-info {{
+            background-color: color-mix(in srgb, {accent} 10%, {surface});
+            border-color: color-mix(in srgb, {accent} 28%, transparent);
+        }}
         .metis-settings-gaming-status-icon {{ -gtk-icon-style: symbolic; }}
         .metis-settings-gaming-status.metis-settings-gaming-status-ok .metis-settings-gaming-status-icon {{
             color: {success};
@@ -670,10 +674,114 @@ pub fn build_settings_chrome_stylesheet(theme: &ThemeTokens) -> String {
         .metis-settings-gaming-status.metis-settings-gaming-status-warn .metis-settings-gaming-status-icon {{
             color: {warning};
         }}
+        .metis-settings-gaming-status.metis-settings-gaming-status-info .metis-settings-gaming-status-icon {{
+            color: {accent};
+        }}
         .metis-settings-gaming-status-text {{
             color: {text};
             font-size: 13px;
             font-weight: 600;
+        }}
+
+        /* Gaming setup live checklist dashboard */
+        .metis-settings-gaming-wizard .metis-settings-wizard-hero-icon {{
+            padding: 12px;
+            border-radius: 14px;
+            background-color: color-mix(in srgb, {accent} 18%, {raised});
+            color: {accent};
+            border: 1px solid color-mix(in srgb, {accent} 28%, transparent);
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-close {{
+            min-width: 34px;
+            min-height: 34px;
+            padding: 0;
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-summary-chip {{
+            padding: 6px 12px;
+            border-radius: 99px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            background-color: color-mix(in srgb, {accent} 14%, {raised});
+            color: {accent};
+            border: 1px solid color-mix(in srgb, {accent} 30%, transparent);
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-summary-chip.metis-settings-wizard-summary-ok {{
+            background-color: color-mix(in srgb, {success} 14%, {raised});
+            color: {success};
+            border-color: color-mix(in srgb, {success} 35%, transparent);
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-summary-chip.metis-settings-wizard-summary-warn {{
+            background-color: color-mix(in srgb, {warning} 14%, {raised});
+            color: {warning};
+            border-color: color-mix(in srgb, {warning} 35%, transparent);
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-checklist {{
+            padding: 2px 2px 4px;
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-dash-card {{
+            padding: 12px 14px;
+            border-radius: 12px;
+            background-color: color-mix(in srgb, {raised} 90%, transparent);
+            border: 1px solid color-mix(in srgb, {border} 70%, transparent);
+            border-left: 3px solid color-mix(in srgb, {border} 80%, transparent);
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-dash-card.metis-settings-wizard-dash-ready {{
+            border-left-color: {success};
+            background-color: color-mix(in srgb, {success} 6%, {raised});
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-dash-card.metis-settings-wizard-dash-attention {{
+            border-left-color: {warning};
+            background-color: color-mix(in srgb, {warning} 8%, {raised});
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-dash-card.metis-settings-wizard-dash-optional {{
+            border-left-color: {accent};
+            background-color: color-mix(in srgb, {accent} 6%, {raised});
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-dash-card.metis-settings-wizard-dash-working {{
+            opacity: 0.75;
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-dash-icon {{
+            padding: 8px;
+            border-radius: 10px;
+            background-color: color-mix(in srgb, {accent} 12%, {surface});
+            color: {accent};
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-dash-ready .metis-settings-wizard-dash-icon {{
+            background-color: color-mix(in srgb, {success} 14%, {surface});
+            color: {success};
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-dash-attention .metis-settings-wizard-dash-icon {{
+            background-color: color-mix(in srgb, {warning} 14%, {surface});
+            color: {warning};
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-dash-title {{
+            color: {text};
+            font-size: 14px;
+            font-weight: 700;
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-pill {{
+            padding: 2px 8px;
+            border-radius: 99px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-pill-ready {{
+            background-color: color-mix(in srgb, {success} 18%, transparent);
+            color: {success};
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-pill-attention {{
+            background-color: color-mix(in srgb, {warning} 18%, transparent);
+            color: {warning};
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-pill-optional {{
+            background-color: color-mix(in srgb, {accent} 16%, transparent);
+            color: {accent};
+        }}
+        .metis-settings-gaming-wizard .metis-settings-wizard-pill-working {{
+            background-color: color-mix(in srgb, {muted} 20%, transparent);
+            color: {muted};
         }}
         .metis-settings-health-grid {{
             padding: 4px 8px 8px;
