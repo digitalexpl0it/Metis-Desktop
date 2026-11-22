@@ -22,6 +22,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
   Wi-Fi list/refresh stay hidden until airplane is turned off. Same click-arm
   guard as the Wi-Fi radio switch (HDMI/modeset cannot trip it).
 
+### Security
+
+- **cargo-deny** — bump `wasmtime` to 36.0.23 (RUSTSEC-2026-0566 / 0569 / 0571),
+  `url` to 2.5.9 (RUSTSEC-2026-0592), and `lcms2` to 6.3.0 (yanked 6.2.0).
+
 ### Changed
 
 - **Gaming setup dialog** — Settings → Gaming → Run gaming setup is a live

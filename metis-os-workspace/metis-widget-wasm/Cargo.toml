@@ -11,7 +11,8 @@ metis-config = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-wasmtime = { version = "36", default-features = false, features = [
+# >=36.0.21: RUSTSEC-2026-0566 / 0569 / 0571 (GHSA wasmtime-wasi / get_module_export / wasi-http)
+wasmtime = { version = ">=36.0.21, <37", default-features = false, features = [
     "cranelift",
     "runtime",
     "gc-null",
