@@ -104,6 +104,8 @@ pub enum BarWidgetId {
     Spacer,
     Clock,
     Battery,
+    /// Accessibility quick toggles (screen reader, magnifier, contrast, …).
+    Accessibility,
     Network,
     /// NetworkManager VPN / WireGuard profiles (connect / disconnect popover).
     Vpn,
@@ -130,6 +132,7 @@ impl BarWidgetId {
         matches!(
             self,
             Self::Battery
+                | Self::Accessibility
                 | Self::Network
                 | Self::Vpn
                 | Self::Bluetooth
@@ -150,6 +153,7 @@ impl BarWidgetId {
             Self::Updates,
             Self::Weather,
             Self::Battery,
+            Self::Accessibility,
             Self::Network,
             Self::Vpn,
             Self::Bluetooth,
@@ -165,6 +169,7 @@ impl BarWidgetId {
             Self::Spacer => "Spacer",
             Self::Clock => "Clock",
             Self::Battery => "Battery",
+            Self::Accessibility => "Accessibility",
             Self::Network => "Network",
             Self::Vpn => "VPN",
             Self::Bluetooth => "Bluetooth",
@@ -602,6 +607,10 @@ pub struct BarConfig {
     pub tray_icon_mode: TrayIconMode,
     #[serde(default = "default_widgets")]
     pub widgets: Vec<BarWidgetId>,
+    /// One-shot: Accessibility icon inserted for upgrades that predate it.
+    /// Once true, Settings hide/show of the icon is left alone.
+    #[serde(default)]
+    pub accessibility_icon_seeded: bool,
     #[serde(default)]
     pub clock: ClockConfig,
     /// Number of workspace indicator dots (1–12).
@@ -690,6 +699,7 @@ fn default_widgets() -> Vec<BarWidgetId> {
         BarWidgetId::Updates,
         BarWidgetId::Weather,
         BarWidgetId::Battery,
+        BarWidgetId::Accessibility,
         BarWidgetId::Network,
         BarWidgetId::Vpn,
         BarWidgetId::Bluetooth,
@@ -727,6 +737,7 @@ impl Default for BarConfig {
             window_gap_px: default_window_gap_px(),
             tray_icon_mode: TrayIconMode::default(),
             widgets: default_widgets(),
+            accessibility_icon_seeded: true,
             clock: ClockConfig::default(),
             workspace_count: default_workspace_count(),
             workspace_mode: WorkspaceMode::default(),
@@ -921,6 +932,25 @@ fn migrate_bar_config(cfg: &mut BarConfig, allow_persist: bool) {
             cfg.widgets = next;
             dirty = true;
         }
+    }
+
+    // Accessibility quick toggles: one-shot seed before Battery/Network for
+    // upgrades that predate the icon. `accessibility_icon_seeded` keeps a later
+    // Settings hide from being undone on every migrate.
+    if !cfg.accessibility_icon_seeded {
+        if !cfg.widgets.contains(&BarWidgetId::Accessibility)
+            && (cfg.widgets.contains(&BarWidgetId::Battery)
+                || cfg.widgets.contains(&BarWidgetId::Network))
+        {
+            let pos = cfg
+                .widgets
+                .iter()
+                .position(|w| matches!(w, BarWidgetId::Battery | BarWidgetId::Network))
+                .unwrap_or(cfg.widgets.len().saturating_sub(1));
+            cfg.widgets.insert(pos, BarWidgetId::Accessibility);
+        }
+        cfg.accessibility_icon_seeded = true;
+        dirty = true;
     }
 
     // Tray / volumes / updates adjacency is no longer force-fixed — users reorder

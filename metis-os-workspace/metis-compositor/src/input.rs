@@ -678,15 +678,23 @@ impl MetisState {
 
                 // Raw, unclamped delta always goes out as relative motion — this is
                 // the signal games use for camera "look".
+                let delta = event.delta();
                 pointer.relative_motion(
                     self,
                     under.clone(),
                     &RelativeMotionEvent {
-                        delta: event.delta(),
+                        delta,
                         delta_unaccel: event.delta_unaccel(),
                         time: event.time(),
                     },
                 );
+
+                // Shake-to-find (before lock early-return so locked games don't
+                // arm the FX, but unlocked desktop motion does).
+                if !pointer_locked && self.a11y.on_pointer_delta(delta.x, delta.y) {
+                    self.damaged = true;
+                    self.schedule_redraw();
+                }
 
                 if pointer_locked {
                     // Spec: locked pointer emits relative motion only (Mutter/KWin).

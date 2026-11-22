@@ -1,3 +1,4 @@
+pub mod accessibility;
 pub mod applications;
 pub mod audio_viz;
 mod bluez_dbus;
@@ -9,6 +10,7 @@ pub mod launch_pending;
 mod notifications;
 mod notify_dbus;
 mod poll;
+mod power_bar;
 mod pulse_audio;
 pub mod secrets;
 mod tray;
@@ -21,6 +23,7 @@ pub mod weather;
 pub mod windows;
 mod workspaces;
 
+pub use accessibility::{set_high_contrast, set_invert_colors, set_magnifier, set_screen_reader};
 pub use applications::{AppEntry, watch_app_index};
 pub use audio_viz::{audio_viz_frame, ensure_audio_viz, release_audio_viz};
 pub use calendar::{
@@ -37,6 +40,7 @@ pub use dashboard::{
     format_rate, format_uptime, kill_process, kill_process_tree, set_polling_active,
     short_kernel_version, spawn_dashboard_pollers,
 };
+pub use hardware::{brightness_available, brightness_percent, set_brightness_percent};
 pub use notifications::{
     BarNotification, NotificationEntry, NotificationKind, clear_notifications, close_notification,
     dismiss_notification, dismiss_notification_by_dbus_id, do_not_disturb, invoke_action,
@@ -46,11 +50,15 @@ pub use notifications::{
 pub use notify_dbus::{NotifyChannels, NotifyIncoming, spawn_notification_service};
 pub use poll::{
     BarSnapshot, BluetoothDevice, BluetoothStatus, EthernetStatus, VpnFeedback, VpnStatus,
-    WifiNetwork, arm_user_wifi_radio_toggle, bluetooth_set_powered, network_snapshot_for_ui,
-    set_mic_mute, set_mic_volume_absolute, set_mute, set_volume_absolute, set_volume_relative,
-    spawn_bar_pollers, suppress_wifi_radio_writes, vpn_clear_password_prompt, vpn_down, vpn_up,
-    vpn_up_with_password, wifi_connect, wifi_ensure_radio_on, wifi_hotplug_suppressed, wifi_scan,
-    wifi_set_radio,
+    WifiNetwork, airplane_set, arm_user_airplane_toggle, arm_user_wifi_radio_toggle,
+    bluetooth_set_powered, network_snapshot_for_ui, set_mic_mute, set_mic_volume_absolute,
+    set_mute, set_volume_absolute, set_volume_relative, spawn_bar_pollers,
+    suppress_wifi_radio_writes, vpn_clear_password_prompt, vpn_down, vpn_up, vpn_up_with_password,
+    wifi_connect, wifi_ensure_radio_on, wifi_hotplug_suppressed, wifi_scan, wifi_set_radio,
+};
+pub use power_bar::{
+    apply_power_profile, power_profiles_available, profile_display_order, profile_subtitle,
+    profile_title, read_power_profile,
 };
 pub use tray::{
     IconPixmap, TrayCommand, TrayEvent, TrayItem, TraySnapshot, apply_event,

@@ -1,4 +1,5 @@
 pub mod about;
+pub mod accessibility;
 pub mod appearance;
 pub mod appearance_common;
 pub mod background;

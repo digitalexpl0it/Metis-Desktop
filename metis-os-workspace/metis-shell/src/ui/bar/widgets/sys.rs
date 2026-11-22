@@ -10,13 +10,12 @@ use crate::ui::icons::{self, names};
 use crate::services::{
     BluetoothDevice, BluetoothStatus, EthernetStatus, VpnFeedback, VpnStatus, WifiNetwork,
 };
-
 pub struct BatteryWidget {
     root: gtk::Button,
     icon: gtk::Image,
     label: gtk::Label,
-    last_percent: std::cell::Cell<Option<u8>>,
-    last_charging: std::cell::Cell<bool>,
+    last_percent: Rc<Cell<Option<u8>>>,
+    last_charging: Cell<bool>,
 }
 
 impl BatteryWidget {
@@ -25,7 +24,8 @@ impl BatteryWidget {
         root.add_css_class("metis-bar-widget");
         root.add_css_class("metis-bar-battery");
         root.add_css_class("metis-bar-sys-icon");
-        // Hidden until UPower reports a battery (desktops stay clean).
+        // Shown when a battery exists, or when brightness / power profiles do
+        // (desktop power affordance without a BAT* device).
         root.set_visible(false);
 
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -37,11 +37,44 @@ impl BatteryWidget {
         root.set_child(Some(&row));
 
         let panel = super::super::dropdown::build_panel();
-        panel.set_spacing(8);
-        let status = gtk::Label::new(Some(&metis_i18n::tr("Battery")));
-        status.set_xalign(0.0);
-        status.add_css_class("metis-bar-section-title");
-        panel.append(&status);
+        panel.set_spacing(10);
+        panel.set_width_request(280);
+
+        let status_label = gtk::Label::new(Some(&metis_i18n::tr("Power")));
+        status_label.set_xalign(0.0);
+        status_label.add_css_class("metis-bar-section-title");
+        panel.append(&status_label);
+
+        // ---- Brightness (hidden when no backlight) ----
+        let brightness_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        brightness_row.add_css_class("metis-power-brightness-row");
+        let bright_icon = icons::image("display-brightness-symbolic");
+        brightness_row.append(&bright_icon);
+        let updating_brightness = Rc::new(Cell::new(false));
+        let brightness_scale =
+            gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
+        brightness_scale.set_draw_value(false);
+        brightness_scale.set_hexpand(true);
+        brightness_scale.add_css_class("metis-bar-volume-scale");
+        {
+            let updating = updating_brightness.clone();
+            brightness_scale.connect_value_changed(move |scale| {
+                if updating.get() {
+                    return;
+                }
+                let pct = scale.value().round().clamp(0.0, 100.0) as u8;
+                crate::services::set_brightness_percent(pct);
+            });
+        }
+        brightness_row.append(&brightness_scale);
+        brightness_row.set_visible(false);
+        panel.append(&brightness_row);
+
+        // ---- Power profiles ----
+        let profile_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        profile_list.add_css_class("metis-power-profile-list");
+        panel.append(&profile_list);
+
         let settings_btn = gtk::Button::with_label(&metis_i18n::tr("Power settings…"));
         settings_btn.connect_clicked(|_| {
             if let Err(err) = crate::compositor::launch_program("metis-settings --page power") {
@@ -50,15 +83,27 @@ impl BatteryWidget {
             super::super::dropdown::request_close_all();
         });
         panel.append(&settings_btn);
-        super::super::dropdown::wire_toggle_prepare(&root, &panel, || {});
 
-        Self {
-            root,
+        let last_percent = Rc::new(Cell::new(None));
+        let widget = Self {
+            root: root.clone(),
             icon,
             label,
-            last_percent: std::cell::Cell::new(None),
-            last_charging: std::cell::Cell::new(false),
-        }
+            last_percent: last_percent.clone(),
+            last_charging: Cell::new(false),
+        };
+        super::super::dropdown::wire_toggle_prepare(&root, &panel, move || {
+            refresh_power_panel(
+                &profile_list,
+                &brightness_row,
+                &brightness_scale,
+                &updating_brightness,
+                &status_label,
+                last_percent.get(),
+            );
+        });
+
+        widget
     }
 
     pub fn root(&self) -> &gtk::Button {
@@ -66,21 +111,108 @@ impl BatteryWidget {
     }
 
     pub fn update(&self, percent: Option<u8>, charging: bool) {
-        self.root.set_visible(percent.is_some());
+        let show = percent.is_some()
+            || crate::services::brightness_available()
+            || crate::services::power_profiles_available();
+        self.root.set_visible(show);
+        if !show {
+            return;
+        }
         if self.last_percent.get() == percent && self.last_charging.get() == charging {
             return;
         }
         self.last_percent.set(percent);
         self.last_charging.set(charging);
-        let Some(pct) = percent else {
-            return;
-        };
-        self.label.set_text(&format!("{pct}%"));
-        self.label.set_visible(true);
-        self.root.set_tooltip_text(Some(
-            &metis_i18n::tr("Battery %1%").replace("%1", &pct.to_string()),
-        ));
-        icons::set_icon(&self.icon, names::battery(pct, charging));
+        if let Some(pct) = percent {
+            self.label.set_text(&format!("{pct}%"));
+            self.label.set_visible(true);
+            self.root.set_tooltip_text(Some(
+                &metis_i18n::tr("Battery %1%").replace("%1", &pct.to_string()),
+            ));
+            icons::set_icon(&self.icon, names::battery(pct, charging));
+        } else {
+            self.label.set_visible(false);
+            self.root.set_tooltip_text(Some(&metis_i18n::tr("Power")));
+            icons::set_icon(&self.icon, "power-profile-balanced-symbolic");
+        }
+    }
+}
+
+fn refresh_power_panel(
+    profile_list: &gtk::Box,
+    brightness_row: &gtk::Box,
+    brightness_scale: &gtk::Scale,
+    updating_brightness: &Rc<Cell<bool>>,
+    status_label: &gtk::Label,
+    battery_percent: Option<u8>,
+) {
+    if let Some(pct) = battery_percent {
+        status_label.set_text(&metis_i18n::tr("Battery %1%").replace("%1", &pct.to_string()));
+    } else {
+        status_label.set_text(&metis_i18n::tr("Power"));
+    }
+
+    let bright_ok = crate::services::brightness_available();
+    brightness_row.set_visible(bright_ok);
+    if bright_ok {
+        updating_brightness.set(true);
+        let pct = crate::services::brightness_percent().unwrap_or(0);
+        brightness_scale.set_value(f64::from(pct));
+        updating_brightness.set(false);
+    }
+
+    while let Some(child) = profile_list.first_child() {
+        profile_list.remove(&child);
+    }
+
+    if !crate::services::power_profiles_available() {
+        return;
+    }
+    let (current, available) = crate::services::read_power_profile();
+    let order = crate::services::profile_display_order(&available);
+    for profile in order {
+        let btn = gtk::Button::new();
+        btn.add_css_class("metis-power-profile-row");
+        btn.set_hexpand(true);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let texts = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        texts.set_hexpand(true);
+        let title = gtk::Label::new(Some(&crate::services::profile_title(profile)));
+        title.set_xalign(0.0);
+        title.add_css_class("metis-power-profile-title");
+        let sub = gtk::Label::new(Some(&crate::services::profile_subtitle(profile)));
+        sub.set_xalign(0.0);
+        sub.add_css_class("metis-power-profile-sub");
+        sub.set_wrap(true);
+        texts.append(&title);
+        texts.append(&sub);
+        row.append(&texts);
+        let check = icons::image("object-select-symbolic");
+        check.set_visible(profile == current);
+        if profile == current {
+            btn.add_css_class("metis-power-profile-active");
+        }
+        row.append(&check);
+        btn.set_child(Some(&row));
+        {
+            let profile_list = profile_list.clone();
+            let brightness_row = brightness_row.clone();
+            let brightness_scale = brightness_scale.clone();
+            let updating_brightness = updating_brightness.clone();
+            let status_label = status_label.clone();
+            btn.connect_clicked(move |_| {
+                crate::services::apply_power_profile(profile);
+                refresh_power_panel(
+                    &profile_list,
+                    &brightness_row,
+                    &brightness_scale,
+                    &updating_brightness,
+                    &status_label,
+                    battery_percent,
+                );
+            });
+        }
+        profile_list.append(&btn);
     }
 }
 
@@ -400,6 +532,9 @@ impl NetInner {
 pub struct NetworkWidget {
     root: gtk::Button,
     icon: gtk::Image,
+    airplane_switch: gtk::Switch,
+    updating_airplane: Rc<Cell<bool>>,
+    suppress_airplane_until: Rc<Cell<Instant>>,
     eth_row: gtk::Box,
     eth_icon: gtk::Image,
     eth_label: gtk::Label,
@@ -433,6 +568,54 @@ impl NetworkWidget {
         panel.set_spacing(10);
         panel.set_width_request(300);
 
+        // ---- Airplane mode (Wi-Fi + WWAN + Bluetooth soft-off) ----
+        let airplane_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        airplane_row.add_css_class("metis-net-airplane-row");
+        let airplane_icon = icons::image("airplane-mode-symbolic");
+        airplane_row.append(&airplane_icon);
+        let airplane_label = gtk::Label::new(Some(&metis_i18n::tr("Airplane mode")));
+        airplane_label.set_halign(gtk::Align::Start);
+        airplane_label.set_hexpand(true);
+        airplane_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        airplane_row.append(&airplane_label);
+        let updating_airplane = Rc::new(Cell::new(false));
+        let suppress_airplane_until = Rc::new(Cell::new(Instant::now()));
+        let airplane_switch = gtk::Switch::new();
+        airplane_switch.set_valign(gtk::Align::Center);
+        airplane_switch.add_css_class("metis-net-switch");
+        airplane_switch.set_tooltip_text(Some(&metis_i18n::tr(
+            "Turn off Wi-Fi, mobile broadband, and Bluetooth",
+        )));
+        {
+            let updating_airplane = updating_airplane.clone();
+            let suppress_airplane_until = suppress_airplane_until.clone();
+            // Only a real press may enable airplane mode — same HDMI/modeset
+            // guard as the Wi-Fi radio switch.
+            let arm = gtk::GestureClick::new();
+            arm.set_button(1);
+            arm.set_propagation_phase(gtk::PropagationPhase::Capture);
+            arm.connect_pressed(move |_, _, _, _| {
+                crate::services::arm_user_airplane_toggle();
+            });
+            airplane_switch.add_controller(arm);
+
+            airplane_switch.connect_state_set(move |_, state| {
+                if updating_airplane.get() {
+                    return glib::Propagation::Proceed;
+                }
+                if state && crate::services::wifi_hotplug_suppressed() {
+                    return glib::Propagation::Stop;
+                }
+                if !crate::services::airplane_set(state) {
+                    return glib::Propagation::Stop;
+                }
+                bump_suppress(&suppress_airplane_until);
+                glib::Propagation::Proceed
+            });
+        }
+        airplane_row.append(&airplane_switch);
+        panel.append(&airplane_row);
+
         // ---- Header: title, Wi-Fi radio toggle, refresh ----
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let title = gtk::Label::builder()
@@ -448,6 +631,7 @@ impl NetworkWidget {
         let wifi_switch = gtk::Switch::new();
         wifi_switch.set_valign(gtk::Align::Center);
         wifi_switch.add_css_class("metis-net-switch");
+        wifi_switch.set_tooltip_text(Some(&metis_i18n::tr("Wi-Fi")));
         {
             let updating_switch = updating_switch.clone();
             let suppress_until = suppress_until.clone();
@@ -600,6 +784,9 @@ impl NetworkWidget {
         Self {
             root,
             icon,
+            airplane_switch,
+            updating_airplane,
+            suppress_airplane_until,
             eth_row,
             eth_icon,
             eth_label,
@@ -624,13 +811,17 @@ impl NetworkWidget {
         wifi: &[WifiNetwork],
         wifi_present: bool,
         wifi_enabled: bool,
+        airplane_mode: bool,
     ) {
         self.wifi_present.set(wifi_present);
         self.root.set_visible(wifi_present || eth.present);
 
         let hotplug = crate::services::wifi_hotplug_suppressed();
         let mut wifi_enabled = wifi_enabled;
-        if wifi_present {
+        if airplane_mode {
+            wifi_enabled = false;
+            self.wifi_off_streak.set(0);
+        } else if wifi_present {
             if wifi_enabled {
                 self.wifi_off_streak.set(0);
             } else {
@@ -649,13 +840,30 @@ impl NetworkWidget {
             self.wifi_off_streak.set(0);
         }
 
-        icons::set_icon(&self.icon, bar_icon(eth, wifi, wifi_present, wifi_enabled));
+        icons::set_icon(
+            &self.icon,
+            bar_icon(eth, wifi, wifi_present, wifi_enabled, airplane_mode),
+        );
         self.root.set_tooltip_text(Some(&network_tooltip(
             eth,
             wifi,
             wifi_present,
             wifi_enabled,
+            airplane_mode,
         )));
+
+        // Airplane switch sync (suppress briefly after a user click).
+        let airplane_suppressed = Instant::now() < self.suppress_airplane_until.get() || hotplug;
+        if !airplane_suppressed {
+            self.updating_airplane.set(true);
+            if self.airplane_switch.is_active() != airplane_mode {
+                self.airplane_switch.set_active(airplane_mode);
+            }
+            let updating = self.updating_airplane.clone();
+            glib::timeout_add_local_once(Duration::from_millis(400), move || {
+                updating.set(false);
+            });
+        }
 
         self.eth_row.set_visible(eth.present);
         if eth.present {
@@ -670,12 +878,17 @@ impl NetworkWidget {
             self.eth_label.set_text(&eth.label);
         }
 
-        // Hide Wi-Fi chrome when no adapter (wired-only machines).
+        // Hide Wi-Fi chrome when no adapter (wired-only machines). Keep airplane
+        // available whenever the Network affordance is shown (also covers BT).
         self.wifi_switch.set_visible(wifi_present);
-        self.wifi_refresh.set_visible(wifi_present);
-        self.wifi_scroll.set_visible(wifi_present);
+        self.wifi_refresh
+            .set_visible(wifi_present && !airplane_mode);
+        self.wifi_scroll.set_visible(wifi_present && !airplane_mode);
         self.inner.status_label.set_visible(wifi_present);
-        if !wifi_present {
+        // While airplane is on, Wi-Fi is controlled by that switch alone.
+        self.wifi_switch
+            .set_sensitive(wifi_present && !airplane_mode);
+        if !wifi_present || airplane_mode {
             self.inner.connect_box.set_visible(false);
         }
 
@@ -697,6 +910,12 @@ impl NetworkWidget {
             }
         }
 
+        if airplane_mode {
+            self.inner
+                .status_label
+                .set_text(&metis_i18n::tr("Airplane mode is on"));
+        }
+
         // Clear a stale "connecting" spinner once the target is active (or it
         // has been pending too long).
         {
@@ -716,15 +935,21 @@ impl NetworkWidget {
             wifi,
             wifi_present,
             wifi_enabled,
+            airplane_mode,
             &self.inner.pending.borrow(),
         );
         if *self.inner.last_sig.borrow() != sig {
             *self.inner.last_sig.borrow_mut() = sig;
-            if wifi_present {
+            if wifi_present && !airplane_mode {
                 self.inner.rebuild_list();
             } else {
                 while let Some(child) = self.inner.list.first_child() {
                     self.inner.list.remove(&child);
+                }
+                if airplane_mode {
+                    self.inner
+                        .status_label
+                        .set_text(&metis_i18n::tr("Airplane mode is on"));
                 }
             }
         }
@@ -1118,7 +1343,11 @@ fn bar_icon(
     wifi: &[WifiNetwork],
     wifi_present: bool,
     wifi_enabled: bool,
+    airplane_mode: bool,
 ) -> &'static str {
+    if airplane_mode {
+        return "airplane-mode-symbolic";
+    }
     if wifi_present && let Some(active) = wifi.iter().find(|n| n.active) {
         return wifi_signal_icon(active.signal);
     }
@@ -1143,7 +1372,11 @@ fn network_tooltip(
     wifi: &[WifiNetwork],
     wifi_present: bool,
     wifi_enabled: bool,
+    airplane_mode: bool,
 ) -> String {
+    if airplane_mode {
+        return metis_i18n::tr("Airplane mode");
+    }
     if wifi_present && let Some(active) = wifi.iter().find(|n| n.active) {
         return active.ssid.clone();
     }
@@ -1166,9 +1399,13 @@ fn network_signature(
     wifi: &[WifiNetwork],
     wifi_present: bool,
     enabled: bool,
+    airplane_mode: bool,
     pending: &Option<(String, Instant)>,
 ) -> String {
-    let mut s = format!("p{}|e{}|", wifi_present as u8, enabled as u8);
+    let mut s = format!(
+        "p{}|e{}|a{}|",
+        wifi_present as u8, enabled as u8, airplane_mode as u8
+    );
     for n in wifi {
         // Bucket the signal so minor RSSI jitter doesn't trigger a rebuild.
         s.push_str(&format!(

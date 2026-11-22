@@ -113,8 +113,10 @@ fn default_rules() -> Vec<WindowRule> {
             float: true,
             fullscreen: true,
         },
-        // Proton / Wine Steam titles: true-fullscreen on map so borderless-windowed
-        // clients cannot land as a float inset under the edge bar (clipped right/bottom).
+        // Proton / Wine Steam titles: float + fullscreen *intent*. On X11 the
+        // compositor defers the actual fullscreen configure until the client
+        // grows near-monitor (immediate map fullscreen flash-exits RED Engine /
+        // Cyberpunk). Wayland clients still get fullscreen on map.
         WindowRule {
             name: "Proton / Wine games (fullscreen)".to_string(),
             app_id_contains: vec![
@@ -138,6 +140,28 @@ impl Default for GameRulesConfig {
     }
 }
 
+/// Store/bootstrap UIs that still report a game `steam_app_*` / `.exe` class
+/// (REDlauncher, Epic overlay helpers, …). They must float but never receive the
+/// Proton auto-fullscreen rule — that paints a dark grey sheet over the desk.
+pub fn is_embedded_store_launcher(title: Option<&str>) -> bool {
+    let Some(raw) = title.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let t = raw.to_ascii_lowercase();
+    t.contains("redlauncher")
+        || t.contains("red launcher")
+        || t.contains("cd projekt red launcher")
+        || t.contains("epic games launcher")
+        || t.contains("eos overlay")
+        || t.contains("ubisoft connect")
+        || t.contains("uplay")
+        || t.contains("battle.net")
+        || t.contains("battlenet")
+        || t.contains("rockstar games launcher")
+        || t.contains("ea app")
+        || t.contains("origin")
+}
+
 impl GameRulesConfig {
     /// Consult the rules for a window's `app_id`/X11 class and title. Returns the
     /// combined outcome (float / fullscreen) across all matching rules.
@@ -145,6 +169,13 @@ impl GameRulesConfig {
         let mut outcome = WindowRuleOutcome::default();
         if !self.enabled {
             return outcome;
+        }
+        // Embedded launchers share the game's WM_CLASS — float only.
+        if is_embedded_store_launcher(title) {
+            return WindowRuleOutcome {
+                float: true,
+                fullscreen: false,
+            };
         }
         let app_id = app_id.map(|s| s.to_ascii_lowercase());
         let title = title.map(|s| s.to_ascii_lowercase());
@@ -224,6 +255,15 @@ mod tests {
         let steam_app = cfg.evaluate(Some("steam_app_123456"), None);
         assert!(steam_app.float);
         assert!(steam_app.fullscreen);
+    }
+
+    #[test]
+    fn redlauncher_floats_but_never_auto_fullscreens() {
+        let cfg = GameRulesConfig::default();
+        let out = cfg.evaluate(Some("steam_app_1091500"), Some("REDlauncher"));
+        assert!(out.float);
+        assert!(!out.fullscreen);
+        assert!(is_embedded_store_launcher(Some("REDlauncher")));
     }
 
     #[test]

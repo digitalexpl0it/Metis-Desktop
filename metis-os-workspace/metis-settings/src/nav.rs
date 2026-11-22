@@ -319,6 +319,14 @@ pub const NAV: &[NavItem] = &[
         category: Some("system"),
     },
     NavItem {
+        page_id: Some("accessibility"),
+        title: "Accessibility",
+        icon: Some("preferences-desktop-accessibility-symbolic"),
+        hue: Some(NavHue::Blue),
+        subtitle: Some("Vision, hearing, and mobility aids"),
+        category: Some("system"),
+    },
+    NavItem {
         page_id: Some("power"),
         title: "Power",
         icon: Some("battery-level-100-symbolic"),

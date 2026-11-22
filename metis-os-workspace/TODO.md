@@ -423,6 +423,14 @@ Sequenced leftover stretch after Phases 1–15. See plan *Optional stretch backl
       compositor IPC; history persisted to `~/.local/state/metis/clipboard.json`
       (max 50 entries; 10 MB image cap; clear-history button)
 - [x] WiFi / audio popover controls
+- [x] **Airplane mode** — Network overlay switch soft-blocks Wi-Fi / WWAN /
+      Bluetooth (`nmcli radio all` + BlueZ); airplane bar icon; click-armed like
+      the Wi-Fi radio switch (2026-11-21)
+- [x] **Power profiles + brightness** — Battery overlay: Power Saver / Balanced /
+      High Performance (`powerprofilesctl`) + brightness slider when backlight
+      present (2026-11-21)
+- [x] **Accessibility** — edge-bar icon + overlay toggles; Settings → Accessibility
+      (Vision / Hearing / Mobility); `accessibility.json` (2026-11-21)
 - [x] Weather widget — icon + temperature with a forecast popover (see Phase 2);
       cached snapshot re-applied after bar rebuilds (no empty flash)
 - [x] System tray — collapsed popover vs pinned-on-bar modes; readable tooltips
@@ -1103,6 +1111,9 @@ Mode. Track compatibility either way:
       `handlers/compositor.rs`). **Verified on hardware:** Hytale **High** runs
       perfectly under Metis after the fix. Remaining if needed: profile Proton/
       cross-GPU PRIME titles separately (dGPU render → iGPU scanout).
+- [ ] **Settings → Gaming: per-game injection catalog** — see Phase 11 deferred
+      **Per-title Steam launch injection UI** (toggle + preset dropdown per
+      Steam appid; Cyberpunk/RED Engine first).
 
 ---
 
@@ -1620,9 +1631,21 @@ daemon).
 - [x] **Docs** — `USER_GUIDE.md`, `PERF_AUDIT.md`, `CHANGELOG.md`.
 
 **Deferred (later phase):** apt/polkit auto-install of Steam, drivers, i386 Vulkan,
-and GameMode; ProtonDB per-title tuning; session-wide auto-optimize on first login
-without user clicking **Optimize now**; **Settings → Power → Dim on battery**
-compositor hook (preference saved in `power.json` today).
+and GameMode; session-wide auto-optimize on first login without user clicking
+**Optimize now**; **Settings → Power → Dim on battery** compositor hook
+(preference saved in `power.json` today).
+
+- [ ] **Per-title Steam launch injection UI (ProtonDB / Metis fixes)** — Settings →
+      Gaming tab listing known Steam appids with a **toggle to auto-apply** Metis
+      launch injection (env + argv prefixes Metis owns on spawn — not silent Steam
+      VDF writes unless the user opts in). Each row: enable switch + **dropdown**
+      of packaged fix presets (e.g. Cyberpunk 2077 / RED Engine: PRIME +
+      `PROTON_ENABLE_WAYLAND` + `VKD3D_DISABLE_EXTENSIONS` + `--launcher-skip`;
+      Gamescope wrap; MangoHud; shader-override paths). Grow the catalog as we
+      land more title-specific workarounds. Persist under `gaming.json` (extend
+      `gamescope_profiles` / new `steam_launch_presets`). Spawn path already has
+      `apply_steam_launch_tweaks` — wire presets there. Motivated by Cyberpunk
+      2.5 + NVIDIA 20-series flash-exit on Metis (2026-11-21).
 
 **Dependencies:** Phase 6 (done); compositor `DgpuOffload` (done); Phase 9
 onboarding shell (done).
@@ -3005,7 +3028,8 @@ Send runtime commands to a running shell with `scripts/metis-cmd.sh {close-popov
 | Clock | Opens Notification Center (calendar, world clocks, stopwatch, timer, alarms) + unread badge |
 | Battery | `/sys/class/power_supply/BAT*` |
 | Bluetooth | BlueZ D-Bus (ObjectManager / Battery1) + UPower + optional Solaar (Logitech HID++); bar popover lists connected devices |
-| Network | `nmcli` (Wi-Fi + Ethernet) |
+| Network | `nmcli` (Wi-Fi + Ethernet + airplane / radio all) |
+| Accessibility | `accessibility.json` + Orca / Magnus / theme tokens / pactl mono |
 | VPN | `nmcli` (OpenVPN / WireGuard connect/disconnect) |
 | Volume | libpulse (scroll on widget to adjust; equalizer may one-shot `pactl` for monitor source) |
 | Notifications | *(optional)* Same Notification Center as clock; freedesktop D-Bus → runtime store |

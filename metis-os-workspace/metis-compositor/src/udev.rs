@@ -849,9 +849,20 @@ fn render_local_output_frame(
         !cross_gpu,
     );
 
+    // Magnifier: fullscreen 2× digital zoom centred on the pointer.
+    if state.a11y.magnifier
+        && let Some(zoomed) = crate::accessibility::try_build_magnifier_element(
+            state, renderer, output, scale, &elements,
+        )
+    {
+        elements = vec![zoomed];
+    }
+
     let cursor = state.build_cursor_elements(renderer, output, scale);
-    if !cursor.is_empty() {
+    let mut sonar = state.build_shake_sonar_elements(renderer, output, scale);
+    if !cursor.is_empty() || !sonar.is_empty() {
         let mut stacked = cursor;
+        stacked.append(&mut sonar);
         stacked.append(&mut elements);
         elements = stacked;
     }
@@ -1827,7 +1838,7 @@ impl MetisState {
         // were composited onto the primary plane; switching to the resize cursor on
         // the hardware cursor plane left those pixels behind, so the arrow never
         // appeared to change. The nested winit session already ignores client cursors.
-        let image = if !over_bar {
+        let base = if !over_bar {
             if let Some(edge) = self.hover_cursor {
                 udev.cursor.frame_resize(&udev.cursor_theme, edge, millis)
             } else {
@@ -1836,7 +1847,9 @@ impl MetisState {
         } else {
             udev.cursor.frame(millis).clone()
         };
-        let buffer = match udev.pointer_buffers.iter().find(|(i, _)| *i == image) {
+        let shake_scale = self.a11y.shake_cursor_scale();
+        let (cache_key, image) = crate::accessibility::maybe_scale_for_shake(&base, shake_scale);
+        let buffer = match udev.pointer_buffers.iter().find(|(i, _)| *i == cache_key) {
             Some((_, buf)) => buf.clone(),
             None => {
                 let buf = MemoryRenderBuffer::from_slice(
@@ -1847,7 +1860,11 @@ impl MetisState {
                     Transform::Normal,
                     None,
                 );
-                udev.pointer_buffers.push((image.clone(), buf.clone()));
+                udev.pointer_buffers.push((cache_key, buf.clone()));
+                // Bound cache when shake generates many scaled frames.
+                if udev.pointer_buffers.len() > 64 {
+                    udev.pointer_buffers.drain(0..16);
+                }
                 buf
             }
         };

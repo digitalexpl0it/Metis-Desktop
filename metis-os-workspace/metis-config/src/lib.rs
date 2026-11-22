@@ -3,6 +3,7 @@
 //! the settings binary can link it without pulling in the shell.
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+pub mod accessibility;
 pub mod bar;
 pub mod calendars;
 pub mod clocks;
@@ -460,18 +461,27 @@ pub fn save_theme_tokens(name: &str, tokens: &theme::ThemeTokens) -> std::io::Re
 /// default for that name (dark/light) when missing or unparsable.
 pub fn load_theme_tokens(name: &str) -> theme::ThemeTokens {
     let path = theme_file_path_for_name(name);
-    if path.exists()
+    let mut tokens = if path.exists()
         && let Ok(text) = std::fs::read_to_string(&path)
-        && let Ok(tokens) = serde_json::from_str(&text)
+        && let Ok(parsed) = serde_json::from_str(&text)
     {
-        return tokens;
-    }
-    match name {
-        "light" => theme::ThemeTokens::light_default(),
-        _ => theme::ThemeTokens::dark_default(),
-    }
+        parsed
+    } else {
+        match name {
+            "light" => theme::ThemeTokens::light_default(),
+            _ => theme::ThemeTokens::dark_default(),
+        }
+    };
+    // Accessibility overrides (high contrast / invert / colour filters) apply on
+    // top of the saved theme so chrome stays readable without rewriting theme files.
+    tokens.apply_accessibility(&load_accessibility_config());
+    tokens
 }
 
+pub use accessibility::{
+    AccessibilityConfig, ColorFilterType, accessibility_config_path, load_accessibility_config,
+    save_accessibility_config,
+};
 pub use bar::{
     BarBorder, BarConfig, BarDisplays, BarFill, BarFillMode, BarGradientDirection, BarPosition,
     BarWidgetId, BorderMode, ClockConfig, DefaultLayout, TitlebarPillBorder, TrayIconMode,
@@ -512,8 +522,8 @@ pub use desktop_widgets::{
     save_desktop_widgets_config,
 };
 pub use game_rules::{
-    GameRulesConfig, WindowRule, WindowRuleOutcome, game_rules_config_path, load_game_rules_config,
-    save_game_rules_config,
+    GameRulesConfig, WindowRule, WindowRuleOutcome, game_rules_config_path,
+    is_embedded_store_launcher, load_game_rules_config, save_game_rules_config,
 };
 pub use gaming::{
     GameScopeProfile, GamingConfig, GamingFlatpakState, GraphicsMode, command_is_ozone_client,

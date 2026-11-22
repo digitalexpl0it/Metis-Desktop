@@ -70,6 +70,18 @@ pub fn reload_cursors() {
     }
 }
 
+/// Re-read `accessibility.json` (magnifier zoom + shake-pointer sonar).
+pub fn reload_accessibility() {
+    let _ = std::process::Command::new("pkill")
+        .args(["-x", "magnus"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if let Err(err) = send_command(CompositorCommand::ReloadAccessibility) {
+        tracing::warn!(%err, "failed to reload accessibility via compositor IPC");
+    }
+}
+
 pub fn reload_cursors_async() {
     std::thread::spawn(reload_cursors);
 }

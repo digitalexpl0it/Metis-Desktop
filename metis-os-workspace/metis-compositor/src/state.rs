@@ -366,6 +366,8 @@ pub struct MetisState {
     pub(crate) night_light_commit: smithay::backend::renderer::utils::CommitCounter,
     /// Dim-on-battery overlay (`power.json` → `dim_on_battery`).
     pub(crate) battery_dim: crate::battery_dim::BatteryDimRuntime,
+    /// Magnifier + shake-pointer-to-find (`accessibility.json`).
+    pub(crate) a11y: crate::accessibility::AccessibilityRuntime,
     /// Last computed night-light effective state when schedule gating is on.
     pub(crate) night_light_schedule_effective: Option<bool>,
     /// Deferred `outputs.json` apply so IPC replies return before layout/mirror work.
@@ -685,6 +687,7 @@ impl MetisState {
             night_light_id: smithay::backend::renderer::element::Id::new(),
             night_light_commit: smithay::backend::renderer::utils::CommitCounter::default(),
             battery_dim: crate::battery_dim::BatteryDimRuntime::new(power_cfg.dim_on_battery),
+            a11y: crate::accessibility::AccessibilityRuntime::new(),
             night_light_schedule_effective: None,
             pending_apply_outputs: false,
             outputs_reload_due: None,
@@ -786,6 +789,14 @@ impl MetisState {
 
         if self.wallpaper.tick_decode() {
             self.damaged = true;
+        }
+
+        if self.a11y.tick_clear_expired() {
+            self.damaged = true;
+        }
+        if self.a11y.needs_redraw() {
+            self.damaged = true;
+            self.request_redraw();
         }
 
         let (blur_changed, bar_position_changed) = self.blur.maybe_refresh();
@@ -2201,6 +2212,10 @@ impl MetisState {
         let Some(record) = self.windows.get(id) else {
             return false;
         };
+        // REDlauncher / store UIs share steam_app_* but are not the game.
+        if metis_config::is_embedded_store_launcher(Some(record.title.as_str())) {
+            return false;
+        }
         if record.fullscreen {
             return true;
         }

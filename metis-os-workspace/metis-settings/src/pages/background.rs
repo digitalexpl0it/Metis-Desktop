@@ -125,101 +125,27 @@ pub fn build() -> gtk::Widget {
     content.append(&bg_card);
 
     // ---- Per-display background (only with 2+ displays) -------------------
-    // Lets the user override the wallpaper on an individual output. Outputs not
-    // overridden fall back to the global background above; either way each
-    // display is cover-cropped to its own resolution by the compositor.
-    let outputs = runtime::list_outputs();
-    if outputs.len() >= 2 {
-        let (pd_card, pd_body) =
-            ui::section_with_icon(&tr("Per-display background"), "video-display-symbolic");
-        let hint = gtk::Label::new(Some(&tr(
-            "Pick a different picture for a specific display. Leave a display on \
-             “Default” to use the background above.",
-        )));
-        hint.set_wrap(true);
-        hint.set_xalign(0.0);
-        hint.add_css_class("dim-label");
-        pd_body.append(&hint);
-
-        for (i, out) in outputs.iter().enumerate() {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            let label = gtk::Label::new(Some(&format!(
-                "Display {} · {}×{}",
-                i + 1,
-                out.rect.width,
-                out.rect.height
-            )));
-            label.set_xalign(0.0);
-            label.set_hexpand(true);
-
-            let status = gtk::Label::new(None);
-            status.add_css_class("dim-label");
-            status.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-            status.set_max_width_chars(18);
-
-            let update_status: Rc<dyn Fn()> = {
-                let status = status.clone();
-                let bgcfg = bgcfg.clone();
-                let name = out.name.clone();
-                Rc::new(move || {
-                    let text = bgcfg
-                        .borrow()
-                        .per_output
-                        .get(&name)
-                        .map(|p| {
-                            Path::new(p)
-                                .file_name()
-                                .map(|f| f.to_string_lossy().to_string())
-                                .unwrap_or_else(|| p.clone())
-                        })
-                        .unwrap_or_else(|| "Default".to_string());
-                    status.set_text(&text);
-                })
-            };
-            update_status();
-
-            let set_btn = gtk::Button::with_label(&tr("Set…"));
-            set_btn.add_css_class("flat");
-            let clear_btn = gtk::Button::with_label(&tr("Clear"));
-            clear_btn.add_css_class("flat");
-
-            {
-                let bgcfg = bgcfg.clone();
-                let name = out.name.clone();
-                let update_status = update_status.clone();
-                set_btn.connect_clicked(move |btn| {
-                    let bgcfg = bgcfg.clone();
-                    let name = name.clone();
-                    let update_status = update_status.clone();
-                    let root = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-                    pick_picture(root.as_ref(), move |path| {
-                        bgcfg
-                            .borrow_mut()
-                            .per_output
-                            .insert(name.clone(), path.to_string_lossy().to_string());
-                        save_and_apply(&bgcfg.borrow());
-                        update_status();
-                    });
-                });
+    // Slot fills after async `list_outputs` — never block the GTK thread on
+    // compositor IPC while building this page (or the whole Settings stack).
+    let pd_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.append(&pd_slot);
+    {
+        let pd_slot = pd_slot.clone();
+        let bgcfg = bgcfg.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(runtime::list_outputs());
+        });
+        glib::timeout_add_local(Duration::from_millis(50), move || match rx.try_recv() {
+            Ok(outputs) => {
+                if outputs.len() >= 2 {
+                    pd_slot.append(&build_per_display_card(&bgcfg, &outputs));
+                }
+                glib::ControlFlow::Break
             }
-            {
-                let bgcfg = bgcfg.clone();
-                let name = out.name.clone();
-                let update_status = update_status.clone();
-                clear_btn.connect_clicked(move |_| {
-                    bgcfg.borrow_mut().per_output.remove(&name);
-                    save_and_apply(&bgcfg.borrow());
-                    update_status();
-                });
-            }
-
-            row.append(&label);
-            row.append(&status);
-            row.append(&set_btn);
-            row.append(&clear_btn);
-            pd_body.append(&row);
-        }
-        content.append(&pd_card);
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        });
     }
 
     // Show only the controls for the active background kind.
@@ -299,6 +225,103 @@ pub fn build() -> gtk::Widget {
     content.append(&build_lock_card());
 
     scroller.upcast()
+}
+
+/// Per-output wallpaper overrides when two or more displays are connected.
+fn build_per_display_card(
+    bgcfg: &Rc<RefCell<metis_config::WallpaperConfig>>,
+    outputs: &[metis_protocol::OutputInfo],
+) -> gtk::Widget {
+    let (pd_card, pd_body) =
+        ui::section_with_icon(&tr("Per-display background"), "video-display-symbolic");
+    let hint = gtk::Label::new(Some(&tr(
+        "Pick a different picture for a specific display. Leave a display on \
+         “Default” to use the background above.",
+    )));
+    hint.set_wrap(true);
+    hint.set_xalign(0.0);
+    hint.add_css_class("dim-label");
+    pd_body.append(&hint);
+
+    for (i, out) in outputs.iter().enumerate() {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let label = gtk::Label::new(Some(&format!(
+            "Display {} · {}×{}",
+            i + 1,
+            out.rect.width,
+            out.rect.height
+        )));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+
+        let status = gtk::Label::new(None);
+        status.add_css_class("dim-label");
+        status.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        status.set_max_width_chars(18);
+
+        let update_status: Rc<dyn Fn()> = {
+            let status = status.clone();
+            let bgcfg = bgcfg.clone();
+            let name = out.name.clone();
+            Rc::new(move || {
+                let text = bgcfg
+                    .borrow()
+                    .per_output
+                    .get(&name)
+                    .map(|p| {
+                        Path::new(p)
+                            .file_name()
+                            .map(|f| f.to_string_lossy().to_string())
+                            .unwrap_or_else(|| p.clone())
+                    })
+                    .unwrap_or_else(|| "Default".to_string());
+                status.set_text(&text);
+            })
+        };
+        update_status();
+
+        let set_btn = gtk::Button::with_label(&tr("Set…"));
+        set_btn.add_css_class("flat");
+        let clear_btn = gtk::Button::with_label(&tr("Clear"));
+        clear_btn.add_css_class("flat");
+
+        {
+            let bgcfg = bgcfg.clone();
+            let name = out.name.clone();
+            let update_status = update_status.clone();
+            set_btn.connect_clicked(move |btn| {
+                let bgcfg = bgcfg.clone();
+                let name = name.clone();
+                let update_status = update_status.clone();
+                let root = btn.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+                pick_picture(root.as_ref(), move |path| {
+                    bgcfg
+                        .borrow_mut()
+                        .per_output
+                        .insert(name.clone(), path.to_string_lossy().to_string());
+                    save_and_apply(&bgcfg.borrow());
+                    update_status();
+                });
+            });
+        }
+        {
+            let bgcfg = bgcfg.clone();
+            let name = out.name.clone();
+            let update_status = update_status.clone();
+            clear_btn.connect_clicked(move |_| {
+                bgcfg.borrow_mut().per_output.remove(&name);
+                save_and_apply(&bgcfg.borrow());
+                update_status();
+            });
+        }
+
+        row.append(&label);
+        row.append(&status);
+        row.append(&set_btn);
+        row.append(&clear_btn);
+        pd_body.append(&row);
+    }
+    pd_card.upcast()
 }
 
 // ---- Lock screen card ------------------------------------------------------

@@ -80,7 +80,21 @@ pub(crate) fn x11_large_undecorated_float(output: Rectangle<i32, Logical>, w: i3
 
 /// Steam / Lutris / Heroic splash & main windows — must NOT get game borderless
 /// auto-fullscreen or resize-loop re-centering (they animate size while loading).
-pub(crate) fn x11_is_game_launcher(app_id: Option<&str>) -> bool {
+///
+/// Proton / Wine X11 games: do not apply game-rule fullscreen on first map.
+pub(crate) fn x11_defer_game_rule_fullscreen(app_id: Option<&str>) -> bool {
+    let Some(id) = app_id.map(|s| s.to_ascii_lowercase()) else {
+        return false;
+    };
+    id.starts_with("steam_app_") || id.contains("proton") || id.contains(".exe")
+}
+
+/// `title` catches embedded store UIs (REDlauncher, etc.) that still report a
+/// `steam_app_*` WM_CLASS.
+pub(crate) fn x11_is_game_launcher(app_id: Option<&str>, title: Option<&str>) -> bool {
+    if metis_config::game_rules::is_embedded_store_launcher(title) {
+        return true;
+    }
     let Some(raw) = app_id.filter(|s| !s.is_empty()) else {
         return false;
     };
@@ -237,13 +251,31 @@ impl MetisState {
             tracing::info!(id, %title, "x11: splash window — natural size placement");
         }
         // Match Wayland: game-rules can request true-fullscreen once mapped.
+        // X11 Proton/Wine titles are special — forcing an output-sized configure
+        // on the *first* map makes RED Engine (Cyberpunk 2077) flash then exit
+        // cleanly in a few seconds. Defer to the ConfigureNotify / borderless
+        // grow path (`reposition_x11_after_size_change`) instead.
         let rule = self
             .game_rules
             .evaluate(app_id.as_deref(), Some(title.as_str()));
         if rule.fullscreen && !is_splash {
-            self.pending_game_fullscreen.insert(id);
+            if x11_defer_game_rule_fullscreen(app_id.as_deref()) {
+                tracing::info!(
+                    id,
+                    app_id = ?app_id,
+                    "x11: deferring game-rule fullscreen until client grows (Proton)"
+                );
+            } else {
+                self.pending_game_fullscreen.insert(id);
+            }
         }
-        self.place_x11_window(id, window.geometry().size, app_id.as_deref(), is_splash);
+        self.place_x11_window(
+            id,
+            window.geometry().size,
+            app_id.as_deref(),
+            Some(title.as_str()),
+            is_splash,
+        );
         self.apply_window_rect(id);
         self.windows.set_ready(id, true);
         let _ = window.set_activated(true);
@@ -283,6 +315,7 @@ impl MetisState {
         id: u32,
         natural: Size<i32, Logical>,
         app_id: Option<&str>,
+        title: Option<&str>,
         is_splash: bool,
     ) {
         if is_splash {
@@ -319,10 +352,14 @@ impl MetisState {
             .and_then(|r| r.x11())
             .map(|x11| !x11.is_decorated())
             .unwrap_or(false);
-        let is_launcher = x11_is_game_launcher(app_id);
-        // Launchers (Steam splash, etc.) animate size while loading — never force
-        // fullscreen or special output centering or they fight Metis in a loop.
-        if !is_launcher {
+        let is_launcher = x11_is_game_launcher(app_id, title);
+        let is_proton = x11_defer_game_rule_fullscreen(app_id);
+        // Launchers (Steam splash, REDlauncher, etc.) animate size while loading —
+        // never force fullscreen or special output centering or they fight Metis.
+        // Proton games: same hands-off size policy on first map — REDlauncher and
+        // Cyberpunk share `steam_app_*`, so restoring a stale 800×600 (or forcing
+        // a size configure) makes RED Engine flash a black box then exit.
+        if !is_launcher && !is_proton {
             if let Some(rect) = self.borderless_output_rect_for(id, w, h, undecorated) {
                 tracing::info!(
                     id,
@@ -348,7 +385,8 @@ impl MetisState {
                 return;
             }
         }
-        if let Some(app_id) = app_id
+        if !is_proton
+            && let Some(app_id) = app_id
             && let Some(saved) = self.window_state.get(app_id)
         {
             let saved_rect = saved.to_rect();
@@ -371,6 +409,49 @@ impl MetisState {
                 return;
             }
             self.window_state.remove(app_id);
+        }
+        if is_proton {
+            // Client already chose a near-monitor buffer (common for RED Engine
+            // after shader load): pin flush to the output origin and queue true
+            // fullscreen. Deferral only applies when the first map is still small
+            // — otherwise we leave a 1920×1080 float inset under the edge bar
+            // (bottom clipped, scroll/hit-testing feel broken).
+            if let Some(rect) = self.borderless_output_rect_for(id, w, h, undecorated) {
+                tracing::info!(
+                    id,
+                    app_id,
+                    ?rect,
+                    "x11: Proton near-fullscreen map — flush origin + pending fullscreen"
+                );
+                self.windows.set_target_rect(id, rect);
+                self.windows.set_placement_chosen(id, true);
+                self.pending_game_fullscreen.insert(id);
+                return;
+            }
+            if undecorated
+                && let Some(rect) = self.centered_on_output_for(id, w, h).filter(|_| {
+                    self.launch_output_for(id)
+                        .and_then(|o| self.space.output_geometry(&o))
+                        .is_some_and(|g| x11_large_undecorated_float(g, w, h))
+                })
+            {
+                tracing::info!(
+                    id,
+                    app_id,
+                    ?rect,
+                    "x11: Proton large undecorated map — centered on full output"
+                );
+                self.windows.set_target_rect(id, rect);
+                self.windows.set_placement_chosen(id, true);
+                return;
+            }
+            tracing::info!(
+                id,
+                app_id,
+                w,
+                h,
+                "x11: Proton map — natural size only (no saved geometry)"
+            );
         }
         let rect = self.centered_body_for_window(id, w, h);
         self.windows.set_target_rect(id, rect);
@@ -821,8 +902,12 @@ impl MetisState {
         elem: &Window,
         new_size: Size<i32, Logical>,
     ) {
-        let app_id = self.windows.get(id).and_then(|r| r.app_id.clone());
-        if x11_is_game_launcher(app_id.as_deref()) {
+        let (app_id, title) = self
+            .windows
+            .get(id)
+            .map(|r| (r.app_id.clone(), r.title.clone()))
+            .unwrap_or_default();
+        if x11_is_game_launcher(app_id.as_deref(), Some(title.as_str())) {
             self.apply_x11_launcher_configure(id, window, elem, new_size);
             return;
         }
@@ -838,9 +923,12 @@ impl MetisState {
             .map(|r| Size::from((r.width, r.height)))
             .unwrap_or(new_size);
         let size_grew = new_size.w > old.w + 32 || new_size.h > old.h + 32;
+        let already_fullscreen = self.windows.get(id).is_some_and(|r| r.fullscreen);
 
-        // Near-monitor borderless games: true fullscreen (only after a real grow).
-        if size_grew
+        // Near-monitor borderless games: true fullscreen. Do not require
+        // `size_grew` — Proton/RED often maps already at monitor size (or jumps
+        // in one notify). Skipping leaves them bar-inset with the bottom clipped.
+        if !already_fullscreen
             && let Some(rect) =
                 self.borderless_output_rect_for(id, new_size.w, new_size.h, undecorated)
         {
@@ -849,6 +937,7 @@ impl MetisState {
                 x11_window = window.window_id(),
                 ?rect,
                 size = ?new_size,
+                size_grew,
                 "x11: size change → borderless flush + fullscreen"
             );
             self.windows.set_target_rect(id, rect);
@@ -1201,9 +1290,13 @@ impl XwmHandler for MetisState {
                 self.schedule_redraw();
                 return;
             }
-            let app_id = self.windows.get(id).and_then(|r| r.app_id.clone());
-            // Steam splash animates size — never re-place from ConfigureNotify.
-            if x11_is_game_launcher(app_id.as_deref()) {
+            let (app_id, title) = self
+                .windows
+                .get(id)
+                .map(|r| (r.app_id.clone(), r.title.clone()))
+                .unwrap_or_default();
+            // Steam splash / REDlauncher animate size — never re-place from ConfigureNotify.
+            if x11_is_game_launcher(app_id.as_deref(), Some(title.as_str())) {
                 if let Some(t) = self.windows.target_rect(id) {
                     // Keep target size in sync so later grow detection is accurate.
                     self.windows.set_target_rect(
@@ -1222,7 +1315,13 @@ impl XwmHandler for MetisState {
             let target = self.windows.target_rect(id);
             let size_grew = target
                 .is_some_and(|t| geometry.size.w > t.width + 32 || geometry.size.h > t.height + 32);
-            if size_grew {
+            let undecorated = !window.is_decorated();
+            let near_fullscreen = self
+                .borderless_output_rect_for(id, geometry.size.w, geometry.size.h, undecorated)
+                .is_some();
+            // Size grow *or* already monitor-sized but not yet flush/fullscreen
+            // (Proton often maps at 1920×1080 with a bar-inset target).
+            if size_grew || near_fullscreen {
                 self.reposition_x11_after_size_change(id, &window, &elem, geometry.size);
                 return;
             }
@@ -1474,9 +1573,23 @@ mod borderless_intent_tests {
 
     #[test]
     fn steam_is_launcher_but_steam_app_is_not() {
-        assert!(x11_is_game_launcher(Some("steam")));
-        assert!(x11_is_game_launcher(Some("Steam")));
-        assert!(!x11_is_game_launcher(Some("steam_app_12345")));
-        assert!(!x11_is_game_launcher(Some("hl2.exe")));
+        assert!(x11_is_game_launcher(Some("steam"), None));
+        assert!(x11_is_game_launcher(Some("Steam"), None));
+        assert!(!x11_is_game_launcher(Some("steam_app_12345"), None));
+        assert!(!x11_is_game_launcher(Some("hl2.exe"), None));
+        assert!(x11_is_game_launcher(
+            Some("steam_app_1091500"),
+            Some("REDlauncher")
+        ));
+    }
+
+    #[test]
+    fn proton_x11_defers_game_rule_fullscreen() {
+        assert!(x11_defer_game_rule_fullscreen(Some("steam_app_1091500")));
+        assert!(x11_defer_game_rule_fullscreen(Some("hl2.exe")));
+        assert!(x11_defer_game_rule_fullscreen(Some("proton")));
+        assert!(!x11_defer_game_rule_fullscreen(Some("HytaleClient")));
+        assert!(!x11_defer_game_rule_fullscreen(Some("steam")));
+        assert!(!x11_defer_game_rule_fullscreen(None));
     }
 }

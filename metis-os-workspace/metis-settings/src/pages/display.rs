@@ -32,10 +32,10 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
     let (scroller, content) = ui::page_for("display");
 
     let cfg = Rc::new(RefCell::new(load_outputs_config()));
-    let outputs = Rc::new(RefCell::new(runtime::list_outputs()));
-    let selected_name: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(
-        outputs.borrow().first().map(|o| o.name.clone()),
-    ));
+    // Start empty and fill via `refresh_outputs` — a sync `list_outputs` on the
+    // GTK thread freezes Settings whenever compositor IPC is slow (up to ~1.2s).
+    let outputs = Rc::new(RefCell::new(Vec::<OutputInfo>::new()));
+    let selected_name: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let canvas_slot: Rc<RefCell<Option<Rc<ArrangementCanvas>>>> = Rc::new(RefCell::new(None));
     let display_dirty: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
     let rebuild_arrangement_slot: OptFn0Cell = Rc::new(RefCell::new(None));
@@ -407,6 +407,7 @@ pub fn build(parent: &gtk::Window) -> gtk::Widget {
 
     rebuild_arrangement();
     *rebuild_arrangement_slot.borrow_mut() = Some(rebuild_arrangement.clone());
+    refresh_outputs(&outputs, &rebuild_arrangement);
 
     let (profiles_card, profiles_refresh) = display_profiles::build_section(
         parent,

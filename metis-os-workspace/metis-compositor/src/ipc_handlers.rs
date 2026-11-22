@@ -325,6 +325,10 @@ impl MetisState {
                 self.reload_cursors_from_config();
                 CompositorEvent::Pong
             }
+            CompositorCommand::ReloadAccessibility => {
+                self.reload_accessibility_from_config();
+                CompositorEvent::Pong
+            }
             CompositorCommand::ReloadKeybinds => {
                 self.keybinds.reload();
                 CompositorEvent::Pong

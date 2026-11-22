@@ -184,6 +184,8 @@ pub enum CompositorCommand {
     /// Re-read `icons.json` cursor theme/size and reload the DRM seat pointer
     /// (plus `XCURSOR_*` for newly spawned clients).
     ReloadCursors,
+    /// Re-read `accessibility.json` (magnifier, shake-pointer, …) live.
+    ReloadAccessibility,
     /// Re-read `keybinds.json` and apply desktop shortcut bindings live.
     ReloadKeybinds,
     /// While Settings is capturing a new shortcut, suppress global keybind dispatch

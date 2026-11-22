@@ -7,8 +7,39 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## Unreleased
 
+### Added
+
+- **Power overlay** — Battery edge-bar popover adds Power Saver / Balanced /
+  High Performance profiles (`powerprofilesctl`) and a display brightness
+  slider when a backlight is present.
+- **Accessibility** — Edge-bar icon with quick toggles (screen reader, magnifier,
+  invert colors, high contrast) plus Settings → Accessibility (Vision / Hearing /
+  Mobility, mono audio, on-screen keyboard). Preferences in `accessibility.json`.
+  Magnifier is compositor **2× zoom** around the pointer; shake-pointer enlarges
+  the cursor with a **sonar pulse** (no Magnus).
+- **Airplane mode** — Network edge-bar overlay toggle soft-blocks Wi-Fi, WWAN,
+  and Bluetooth (`nmcli radio all` + BlueZ). Bar icon shows airplane while on;
+  Wi-Fi list/refresh stay hidden until airplane is turned off. Same click-arm
+  guard as the Wi-Fi radio switch (HDMI/modeset cannot trip it).
+
 ### Fixed
 
+- **Cyberpunk / Proton flash-exit + bar-inset fullscreen** — X11 Steam/`steam_app_*`
+  games no longer get an immediate output-sized fullscreen configure while still
+  small, no longer restore a shared `steam_app_*` saved size (REDlauncher and the
+  game share one class — that was forcing an 800×600 black box), and only
+  reposition without resizing until the client is near-monitor. Once the buffer
+  *is* monitor-sized (including on first map), Metis flushes to the output origin
+  and promotes true fullscreen so a 1920×1080 float is not left under the edge
+  bar with the bottom clipped. Keep Isolated X11 off.
+- **Settings open freeze** — Home opens without building every page up front;
+  Display/Background no longer call compositor `ListOutputs` on the GTK thread
+  at construct time; theme install no longer runs a burst of `gsettings` on
+  every open. Closing Settings still exits the process by design (not a crash).
+- **Store launchers (REDlauncher, etc.)** — windows that still report a
+  `steam_app_*` class but are titled like a store launcher no longer get Proton
+  auto-fullscreen or “running game” pointer treatment. Fixes the dark grey
+  full-desk cover before Cyberpunk (and similar) actually starts.
 - **File manager / app context menus** — xdg_popup trees that extend past the
   parent window (into a neighbour tile or empty desk) now receive pointer
   events; previously the overflow landed on whatever toplevel was underneath,

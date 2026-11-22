@@ -59,6 +59,27 @@ fn icon_fallbacks(name: &str) -> &'static [&'static str] {
             "network-wireless-offline-symbolic",
             "network-wired-offline-symbolic",
         ],
+        "airplane-mode-symbolic" => &[
+            "airplane-mode",
+            "network-wireless-disabled-symbolic",
+            "network-offline-symbolic",
+        ],
+        "preferences-desktop-accessibility-symbolic" => &[
+            "accessibility-symbolic",
+            "preferences-desktop-accessibility",
+            "emblem-ok-symbolic",
+        ],
+        "power-profile-balanced-symbolic" => &[
+            "power-profile-balanced",
+            "battery-level-100-symbolic",
+            "system-shutdown-symbolic",
+        ],
+        "display-brightness-symbolic" => &[
+            "display-brightness",
+            "weather-clear-symbolic",
+            "brightness-display-symbolic",
+        ],
+        "object-select-symbolic" => &["emblem-ok-symbolic", "object-select"],
         "bluetooth-active-symbolic" => &["bluetooth-symbolic"],
         "bluetooth-disabled-symbolic" => &["bluetooth-symbolic"],
         "notifications-disabled-symbolic" => &[

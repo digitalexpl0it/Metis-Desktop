@@ -137,7 +137,10 @@ fn build(app: &gtk::Application, launch: PageLaunch) {
         window
     });
 
-    let page_stack = build_page_stack(&window, &launch);
+    let page_stack = empty_page_stack();
+    if let Some(page) = launch.page.as_deref() {
+        ensure_page_built(&page_stack, &window, page);
+    }
 
     let sheet_header_title = gtk::Label::new(None);
     sheet_header_title.set_xalign(0.0);
@@ -241,6 +244,7 @@ fn build(app: &gtk::Application, launch: PageLaunch) {
 
     let open_page: Rc<dyn Fn(&str)> = {
         let page_stack = page_stack.clone();
+        let window = window.clone();
         let page_nav = page_nav.clone();
         let page_nav_scroll = page_nav_scroll.clone();
         let sheet_header_title = sheet_header_title.clone();
@@ -256,6 +260,10 @@ fn build(app: &gtk::Application, launch: PageLaunch) {
             if pages.is_empty() {
                 return;
             }
+
+            // Build the page on first visit — eager construction of every page
+            // was the main Settings open stall (icons scan, defaults xdg, IPC…).
+            ensure_page_built(&page_stack, &window, page_id);
 
             let switching_cat = *active_category.borrow() != Some(cat.id);
             *active_category.borrow_mut() = Some(cat.id);
@@ -450,7 +458,7 @@ fn build(app: &gtk::Application, launch: PageLaunch) {
     }
 }
 
-fn build_page_stack(window: &gtk::ApplicationWindow, launch: &PageLaunch) -> gtk::Stack {
+fn empty_page_stack() -> gtk::Stack {
     let stack = gtk::Stack::new();
     stack.set_transition_type(gtk::StackTransitionType::Crossfade);
     stack.set_hhomogeneous(false);
@@ -458,86 +466,64 @@ fn build_page_stack(window: &gtk::ApplicationWindow, launch: &PageLaunch) -> gtk
     stack.set_transition_duration(motion::ms(180));
     stack.set_hexpand(true);
     stack.set_vexpand(true);
-
-    stack.add_titled(
-        &pages::appearance::build(),
-        Some("appearance"),
-        "Appearance",
-    );
-    stack.add_titled(&pages::icons::build(), Some("icons"), "Icons");
-    stack.add_titled(
-        &pages::background::build(),
-        Some("background"),
-        "Background",
-    );
-    stack.add_titled(&pages::edgebar::build(), Some("edgebar"), "Edge bar");
-    stack.add_titled(
-        &pages::desktop_widgets::build(),
-        Some("desktop_widgets"),
-        "Desktop widgets",
-    );
-    stack.add_titled(&pages::windows::build(), Some("windows"), "Windows");
-    stack.add_titled(
-        &pages::titlebars::build(),
-        Some("titlebars"),
-        "App titlebars",
-    );
-    stack.add_titled(&pages::menu::build(), Some("menu"), "Metis Menu");
-    stack.add_titled(&pages::weather::build(), Some("weather"), "Weather");
-    stack.add_titled(
-        &pages::network::build(if launch.page.as_deref() == Some("network") {
-            launch.tab.as_deref()
-        } else {
-            None
-        }),
-        Some("network"),
-        "Network",
-    );
-    stack.add_titled(&pages::calendars::build(), Some("calendars"), "Calendars");
-    stack.add_titled(&pages::mouse::build(), Some("mouse"), "Mouse");
-    stack.add_titled(&pages::touchpad::build(), Some("touchpad"), "Touchpad");
-    stack.add_titled(&pages::keyboard::build(), Some("keyboard"), "Keyboard");
-    stack.add_titled(&pages::shortcuts::build(), Some("shortcuts"), "Shortcuts");
-    stack.add_titled(&pages::bluetooth::build(), Some("bluetooth"), "Bluetooth");
-    stack.add_titled(&pages::printers::build(), Some("printers"), "Printers");
-    stack.add_titled(
-        &pages::screenshot::build(),
-        Some("screenshot"),
-        "Screenshot",
-    );
-    stack.add_titled(
-        &pages::control_center::build(),
-        Some("control_center"),
-        "Control Center",
-    );
-    stack.add_titled(&pages::sound::build(), Some("sound"), "Sound");
-    stack.add_titled(&pages::power::build(), Some("power"), "Power");
-    stack.add_titled(&pages::locale::build(), Some("locale"), "Language & region");
-    stack.add_titled(
-        &pages::defaults::build(),
-        Some("defaults"),
-        "Default applications",
-    );
-    stack.add_titled(&pages::users::build(), Some("users"), "Users");
-    stack.add_titled(&pages::date_time::build(), Some("date_time"), "Date & Time");
-    stack.add_titled(&pages::startup::build(), Some("startup"), "Startup");
-    stack.add_titled(&pages::rudp::build(), Some("rudp"), "Metis Remote");
-    stack.add_titled(
-        &pages::remote::build(window.upcast_ref()),
-        Some("remote"),
-        "Remote access",
-    );
-    stack.add_titled(&pages::gaming::build(), Some("gaming"), "Gaming");
-    stack.add_titled(&pages::updates::build(), Some("updates"), "Updates");
-    stack.add_titled(&pages::search::build(), Some("search"), "File search");
-    stack.add_titled(&pages::reset::build(), Some("reset"), "Reset");
-    stack.add_titled(&pages::about::build(), Some("about"), "About");
-    stack.add_titled(
-        &pages::display::build(window.upcast_ref()),
-        Some("display"),
-        "Display",
-    );
     stack
+}
+
+/// Construct a Settings page the first time it is opened. Keeps Home open fast.
+fn ensure_page_built(stack: &gtk::Stack, window: &gtk::ApplicationWindow, page_id: &str) {
+    if stack.child_by_name(page_id).is_some() {
+        return;
+    }
+    let Some((widget, title)) = page_widget(window, page_id) else {
+        tracing::warn!(page_id, "unknown settings page id");
+        return;
+    };
+    stack.add_titled(&widget, Some(page_id), title);
+}
+
+fn page_widget(
+    window: &gtk::ApplicationWindow,
+    page_id: &str,
+) -> Option<(gtk::Widget, &'static str)> {
+    Some(match page_id {
+        "appearance" => (pages::appearance::build(), "Appearance"),
+        "icons" => (pages::icons::build(), "Icons"),
+        "background" => (pages::background::build(), "Background"),
+        "edgebar" => (pages::edgebar::build(), "Edge bar"),
+        "desktop_widgets" => (pages::desktop_widgets::build(), "Desktop widgets"),
+        "windows" => (pages::windows::build(), "Windows"),
+        "titlebars" => (pages::titlebars::build(), "App titlebars"),
+        "menu" => (pages::menu::build(), "Metis Menu"),
+        "weather" => (pages::weather::build(), "Weather"),
+        // Tab deep-links use `network::request_tab` after navigate.
+        "network" => (pages::network::build(None), "Network"),
+        "calendars" => (pages::calendars::build(), "Calendars"),
+        "mouse" => (pages::mouse::build(), "Mouse"),
+        "touchpad" => (pages::touchpad::build(), "Touchpad"),
+        "keyboard" => (pages::keyboard::build(), "Keyboard"),
+        "shortcuts" => (pages::shortcuts::build(), "Shortcuts"),
+        "bluetooth" => (pages::bluetooth::build(), "Bluetooth"),
+        "printers" => (pages::printers::build(), "Printers"),
+        "screenshot" => (pages::screenshot::build(), "Screenshot"),
+        "control_center" => (pages::control_center::build(), "Control Center"),
+        "sound" => (pages::sound::build(), "Sound"),
+        "accessibility" => (pages::accessibility::build(), "Accessibility"),
+        "power" => (pages::power::build(), "Power"),
+        "locale" => (pages::locale::build(), "Language & region"),
+        "defaults" => (pages::defaults::build(), "Default applications"),
+        "users" => (pages::users::build(), "Users"),
+        "date_time" => (pages::date_time::build(), "Date & Time"),
+        "startup" => (pages::startup::build(), "Startup"),
+        "rudp" => (pages::rudp::build(), "Metis Remote"),
+        "remote" => (pages::remote::build(window.upcast_ref()), "Remote access"),
+        "gaming" => (pages::gaming::build(), "Gaming"),
+        "updates" => (pages::updates::build(), "Updates"),
+        "search" => (pages::search::build(), "File search"),
+        "reset" => (pages::reset::build(), "Reset"),
+        "about" => (pages::about::build(), "About"),
+        "display" => (pages::display::build(window.upcast_ref()), "Display"),
+        _ => return None,
+    })
 }
 
 fn mini_button(icon: &str, tooltip: &str, hue: Option<NavHue>) -> gtk::Button {

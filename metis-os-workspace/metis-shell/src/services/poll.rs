@@ -48,6 +48,18 @@ static WIFI_USER_OFF_ARMED: AtomicBool = AtomicBool::new(false);
 /// [`spawn_nmcli`] so orphan `radio wifi off` invocations cannot slip through.
 static WIFI_OFF_SPAWN_ALLOWED: AtomicBool = AtomicBool::new(false);
 
+/// Explicit airplane-mode latch (Wi-Fi + WWAN + Bluetooth soft-off). Cleared
+/// only by a user toggle off — not by a lone Wi-Fi enable.
+static AIRPLANE_MODE: AtomicBool = AtomicBool::new(false);
+
+/// One-shot arm for turning airplane **on** (radio soft-blocks). Same HDMI /
+/// modeset protection as the Wi-Fi radio switch.
+static AIRPLANE_USER_ON_ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Set by [`airplane_set`] when an armed on is queued; consumed in
+/// [`spawn_nmcli`] for `radio all off`.
+static AIRPLANE_OFF_SPAWN_ALLOWED: AtomicBool = AtomicBool::new(false);
+
 #[derive(Debug)]
 enum NetworkCommand {
     Scan,
@@ -56,6 +68,8 @@ enum NetworkCommand {
         password: Option<String>,
     },
     SetRadio(bool),
+    /// Soft-block (`true`) or restore (`false`) all radios + Bluetooth.
+    SetAirplane(bool),
     VpnUp(String),
     VpnUpWithPassword {
         target: String,
@@ -163,6 +177,8 @@ pub struct BarSnapshot {
     /// Whether any Wi-Fi device exists (hide Wi-Fi chrome when false).
     pub wifi_present: bool,
     pub wifi_enabled: bool,
+    /// Airplane mode latch (Wi-Fi/WWAN/Bluetooth soft-off).
+    pub airplane_mode: bool,
     pub vpn: Vec<VpnStatus>,
     pub vpn_feedback: VpnFeedback,
     pub volume_percent: u8,
@@ -672,6 +688,7 @@ fn refresh_network_cache(cached: &mut BarSnapshot, wifi_scan_grace_until: &mut O
     } else {
         false
     };
+    cached.airplane_mode = AIRPLANE_MODE.load(Ordering::SeqCst);
     if let Some(vpn) = read_vpn_status() {
         if let Ok(mut names) = LAST_VPN_NAMES.lock() {
             *names = vpn
@@ -750,6 +767,9 @@ fn drain_network_commands(
                     vec!["radio".into(), "wifi".into(), state.into()],
                     Duration::from_secs(5),
                 );
+            }
+            NetworkCommand::SetAirplane(on) => {
+                apply_airplane_mode(on);
             }
             NetworkCommand::VpnUp(target) => {
                 begin_vpn_op(target.clone(), true);
@@ -913,6 +933,55 @@ pub fn bluetooth_set_powered(on: bool) {
     });
 }
 
+/// Arm the next airplane-mode **on**. Call from a pointer press on the switch
+/// before GTK emits the state change (same HDMI/modeset guard as Wi-Fi).
+pub fn arm_user_airplane_toggle() {
+    AIRPLANE_USER_ON_ARMED.store(true, Ordering::SeqCst);
+}
+
+/// Soft-block (`on = true`) or restore (`on = false`) Wi-Fi, WWAN, and Bluetooth.
+///
+/// Turning airplane **on** requires a prior [`arm_user_airplane_toggle`].
+/// Returns `false` if an unarmed on was refused.
+pub fn airplane_set(on: bool) -> bool {
+    if on {
+        if !AIRPLANE_USER_ON_ARMED.swap(false, Ordering::SeqCst) {
+            tracing::warn!("airplane_set(true) ignored — not user-armed");
+            return false;
+        }
+        AIRPLANE_OFF_SPAWN_ALLOWED.store(true, Ordering::SeqCst);
+        // `radio all off` also issues wifi off; arm the wifi spawn gate too.
+        WIFI_OFF_SPAWN_ALLOWED.store(true, Ordering::SeqCst);
+        AIRPLANE_MODE.store(true, Ordering::SeqCst);
+    } else {
+        AIRPLANE_USER_ON_ARMED.store(false, Ordering::SeqCst);
+        AIRPLANE_MODE.store(false, Ordering::SeqCst);
+        if let Ok(mut slot) = WIFI_RADIO_SUPPRESS_UNTIL.lock() {
+            *slot = None;
+        }
+    }
+    queue_network(NetworkCommand::SetAirplane(on));
+    true
+}
+
+fn apply_airplane_mode(on: bool) {
+    if on {
+        tracing::info!("airplane: nmcli radio all off + bluetooth off");
+        spawn_nmcli(
+            vec!["radio".into(), "all".into(), "off".into()],
+            Duration::from_secs(5),
+        );
+        bluetooth_set_powered(false);
+    } else {
+        tracing::info!("airplane: nmcli radio all on + bluetooth on");
+        spawn_nmcli(
+            vec!["radio".into(), "all".into(), "on".into()],
+            Duration::from_secs(5),
+        );
+        bluetooth_set_powered(true);
+    }
+}
+
 fn run_wifi_connect(ssid: String, password: Option<String>) {
     let mut args = vec![
         "dev".to_string(),
@@ -937,22 +1006,31 @@ fn run_wifi_connect_owned(args: Vec<String>) {
 
 /// Spawn an `nmcli` invocation on a detached thread, killing it after `timeout`.
 fn spawn_nmcli(args: Vec<String>, timeout: Duration) {
-    // Last-line defense: never run `radio wifi off` unless a user-armed
-    // `wifi_set_radio(false)` already queued it (arm bit already consumed there).
-    // Orphan/stray callers must not kill Wi-Fi during HDMI modeset.
-    if args.len() >= 3
-        && args[0] == "radio"
-        && args[1] == "wifi"
-        && args[2].eq_ignore_ascii_case("off")
-    {
-        // Only SetRadio(false) from wifi_set_radio reaches here after consuming
-        // the arm bit — mark with a side channel so we can still refuse orphans.
-        if !WIFI_OFF_SPAWN_ALLOWED.swap(false, Ordering::SeqCst) {
+    // Last-line defense: never soft-block radios unless a user-armed toggle
+    // already queued it. Orphan/stray callers must not kill Wi-Fi/BT during
+    // HDMI modeset.
+    if args.len() >= 3 && args[0] == "radio" && args[2].eq_ignore_ascii_case("off") {
+        let kind = args[1].as_str();
+        let allowed = match kind {
+            "wifi" | "wwan" => {
+                WIFI_OFF_SPAWN_ALLOWED.swap(false, Ordering::SeqCst)
+                    || AIRPLANE_OFF_SPAWN_ALLOWED.swap(false, Ordering::SeqCst)
+            }
+            "all" => AIRPLANE_OFF_SPAWN_ALLOWED.swap(false, Ordering::SeqCst),
+            _ => false,
+        };
+        if !allowed {
             tracing::error!(
-                "spawn_nmcli blocked orphan `radio wifi off` \
-                 (HDMI/modeset must never disable Wi-Fi)"
+                radio = kind,
+                "spawn_nmcli blocked orphan `radio {kind} off` \
+                 (HDMI/modeset must never disable radios)"
             );
             return;
+        }
+        // `radio all off` may also trip a follow-up wifi-off path — keep wifi
+        // gate armed for the same user action.
+        if kind == "all" {
+            WIFI_OFF_SPAWN_ALLOWED.store(false, Ordering::SeqCst);
         }
     }
     thread::spawn(move || {

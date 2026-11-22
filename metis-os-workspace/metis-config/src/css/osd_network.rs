@@ -288,6 +288,55 @@ pub(crate) fn stylesheet(v: &CssVars) -> String {
         background-color: rgba({accent_rgb}, 0.20);
     }}
 
+    .metis-net-airplane-row {{
+        padding: 6px 4px;
+        border-bottom: 1px solid {border};
+        color: {text};
+    }}
+
+    .metis-power-brightness-row {{
+        padding: 4px 2px 8px 2px;
+        color: {text};
+    }}
+
+    .metis-power-profile-list {{
+        spacing: 2px;
+    }}
+
+    .metis-power-profile-row {{
+        padding: 8px 10px;
+        border-radius: {rs}px;
+        background: transparent;
+        color: {text};
+    }}
+
+    .metis-power-profile-row:hover {{
+        background-color: rgba({accent_rgb}, 0.12);
+    }}
+
+    .metis-power-profile-row.metis-power-profile-active {{
+        background-color: rgba({accent_rgb}, 0.18);
+    }}
+
+    .metis-power-profile-title {{
+        font-weight: 600;
+        color: {text};
+    }}
+
+    .metis-power-profile-sub {{
+        font-size: 0.85em;
+        color: {muted};
+    }}
+
+    .metis-a11y-row {{
+        padding: 4px 2px;
+        color: {text};
+    }}
+
+    .metis-a11y-row label {{
+        color: {text};
+    }}
+
     .metis-net-eth-row {{
         padding: 6px 4px;
         border-bottom: 1px solid {border};

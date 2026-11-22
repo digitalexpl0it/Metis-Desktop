@@ -37,6 +37,8 @@ enum HwCommand {
     VolumeMuteToggle,
     MicMuteToggle,
     BrightnessStep(i32),
+    /// Absolute display brightness 0–100 (edge-bar slider).
+    BrightnessSet(u8),
     KbdBacklightStep(i32),
     KbdBacklightToggle,
     Media(MediaAction),
@@ -176,6 +178,9 @@ async fn handle(buses: &mut Buses, cmd: HwCommand) {
         HwCommand::BrightnessStep(delta) => {
             adjust_backlight(buses, BacklightKind::Display, delta).await;
         }
+        HwCommand::BrightnessSet(pct) => {
+            set_backlight_percent(buses, BacklightKind::Display, pct).await;
+        }
         HwCommand::KbdBacklightStep(delta) => {
             adjust_backlight(buses, BacklightKind::Keyboard, delta).await;
         }
@@ -273,6 +278,65 @@ fn brightness_step(max: u32, delta_pct: i32) -> i32 {
     // negated to `-1`, making brightness-down a no-op on 0–24000 devices.
     let magnitude = ((max as i64 * delta_pct.unsigned_abs() as i64) / 100).max(1) as i32;
     magnitude * delta_pct.signum()
+}
+
+/// Whether a display backlight device is present (laptop panel, etc.).
+pub fn brightness_available() -> bool {
+    backlight_device(BacklightKind::Display).is_some()
+}
+
+/// Current display brightness as 0–100, when a backlight device exists.
+pub fn brightness_percent() -> Option<u8> {
+    let dev = backlight_device(BacklightKind::Display)?;
+    let max = read_sysfs_u32(&dev.join("max_brightness")).unwrap_or(0);
+    let cur = read_sysfs_u32(&dev.join("brightness")).unwrap_or(0);
+    if max == 0 {
+        return None;
+    }
+    Some(((f64::from(cur) / f64::from(max)) * 100.0).round() as u8)
+}
+
+/// Queue an absolute display brightness change (0–100). No-op when unsupported.
+pub fn set_brightness_percent(pct: u8) {
+    init();
+    if let Some(tx) = TX.get()
+        && let Err(err) = tx.send(HwCommand::BrightnessSet(pct.min(100)))
+    {
+        tracing::warn!(%err, "hardware worker channel closed");
+    }
+}
+
+async fn set_backlight_percent(buses: &mut Buses, kind: BacklightKind, pct: u8) {
+    let Some(dev) = backlight_device(kind) else {
+        return;
+    };
+    let max = read_sysfs_u32(&dev.join("max_brightness")).unwrap_or(0);
+    if max == 0 {
+        return;
+    }
+    let floor = match kind {
+        BacklightKind::Display => (max / 100).max(1),
+        BacklightKind::Keyboard => 0,
+    };
+    let raw = ((u64::from(max) * u64::from(pct.min(100))) / 100) as u32;
+    let next = raw.clamp(floor, max);
+    let name = dev
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+    if !set_brightness(buses, kind.subsystem(), &name, &dev, next).await {
+        tracing::warn!(
+            device = %dev.display(),
+            to = next,
+            "brightness set failed (logind, sysfs, and brightnessctl)"
+        );
+        return;
+    }
+    let applied = read_sysfs_u32(&dev.join("brightness")).unwrap_or(next);
+    let applied_pct = (f64::from(applied) / f64::from(max)) * 100.0;
+    let (icon, label) = kind.osd();
+    osd(icon, label, Some(applied_pct), false);
 }
 
 async fn adjust_backlight(buses: &mut Buses, kind: BacklightKind, delta_pct: i32) {

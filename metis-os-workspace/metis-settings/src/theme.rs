@@ -49,9 +49,12 @@ pub fn install() {
 /// Re-read the active theme and reload both providers. Call after the user changes
 /// the theme mode or any colour so the settings window (and its titlebar) update
 /// live — mirroring the shell's own live theme reload.
+///
+/// Does **not** spawn `gsettings` — that blocked the GTK thread for hundreds of
+/// milliseconds on every Settings open (`theme::install` → `reapply`) and on
+/// Accessibility theme refreshes. Appearance already calls
+/// `apply_session_appearance_gsettings` when the user changes light/dark.
 pub fn reapply() {
-    // Keep session gsettings / portal FileChooser in sync with on-disk Appearance.
-    metis_config::sync_session_appearance_from_config();
     if let Some(theme) = metis_config::load_icons_config()
         .theme
         .as_deref()

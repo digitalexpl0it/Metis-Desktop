@@ -1345,13 +1345,32 @@ impl MetisState {
             .elements()
             .any(|w| self.windows.id_for_window(w) == Some(id));
         let loc = Point::from((rect.x, rect.y));
-        let width = rect.width.max(1);
-        let height = rect.height.max(1);
-        let size = Size::from((width, height));
+        // Proton/Wine X11: never force a compositor-chosen size through
+        // `configure` — RED Engine (Cyberpunk) exits when we resize its first
+        // map (including restoring a shared steam_app_* 800×600). Position only;
+        // the borderless grow path still fullscreens once the client enlarges.
+        let size = if record.x11().is_some()
+            && crate::xwayland::x11_defer_game_rule_fullscreen(record.app_id.as_deref())
+        {
+            let client = record.window.geometry().size;
+            if client.w > 0 && client.h > 0 {
+                client
+            } else {
+                Size::from((rect.width.max(1), rect.height.max(1)))
+            }
+        } else {
+            Size::from((rect.width.max(1), rect.height.max(1)))
+        };
+        let placed = metis_grid::PixelRect {
+            x: loc.x,
+            y: loc.y,
+            width: size.w,
+            height: size.h,
+        };
         if mapped {
             let prev_loc = self.space.element_location(&record.window);
             let unchanged = prev_loc == Some(loc)
-                && record.target_rect == rect
+                && record.target_rect == placed
                 && (record.window.geometry().size == size
                     || self.floating.contains(&id)
                     || self.is_active_scroll_window(id));
@@ -1366,7 +1385,7 @@ impl MetisState {
                 self.space.relocate_element(&record.window, loc);
             }
             self.send_window_configure(&record, loc, size);
-            self.windows.set_target_rect(id, rect);
+            self.windows.set_target_rect(id, placed);
             self.sync_auto_hide_titlebar(id);
             self.reclamp_auto_hide(id);
             self.schedule_redraw();
@@ -1375,7 +1394,7 @@ impl MetisState {
         // First map — insert without stealing keyboard activation.
         self.space.map_element(record.window.clone(), loc, false);
         self.send_window_configure(&record, loc, size);
-        self.windows.set_target_rect(id, rect);
+        self.windows.set_target_rect(id, placed);
         // An auto-hide (maximized / edge-snapped) window may refuse to shrink to
         // its footprint; re-anchor it so the screen-edge gap survives.
         self.sync_auto_hide_titlebar(id);

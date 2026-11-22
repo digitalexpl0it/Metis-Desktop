@@ -1,3 +1,4 @@
+mod accessibility;
 mod clipboard;
 pub mod clock;
 pub mod files_search;
@@ -25,6 +26,7 @@ use crate::services::BarSnapshot;
 use crate::ui::bar::BarShell;
 
 pub use crate::services::do_not_disturb;
+use accessibility::AccessibilityWidget;
 use clipboard::ClipboardWidget;
 use clock::ClockWidget;
 use files_search::FilesSearchWidget;
@@ -47,6 +49,7 @@ pub struct WidgetRefs {
     tasks: RefCell<Option<TasksWidget>>,
     clock: RefCell<Option<ClockWidget>>,
     battery: RefCell<Option<BatteryWidget>>,
+    accessibility: RefCell<Option<AccessibilityWidget>>,
     bluetooth: RefCell<Option<BluetoothWidget>>,
     network: RefCell<Option<NetworkWidget>>,
     vpn: RefCell<Option<VpnWidget>>,
@@ -79,6 +82,7 @@ impl WidgetRefs {
                 &snapshot.wifi,
                 snapshot.wifi_present,
                 snapshot.wifi_enabled,
+                snapshot.airplane_mode,
             );
         }
         if let Some(w) = self.vpn.borrow().as_ref() {
@@ -160,6 +164,7 @@ pub fn build(
         tasks: RefCell::new(None),
         clock: RefCell::new(None),
         battery: RefCell::new(None),
+        accessibility: RefCell::new(None),
         bluetooth: RefCell::new(None),
         network: RefCell::new(None),
         vpn: RefCell::new(None),
@@ -285,6 +290,18 @@ pub fn build(
                     horizontal,
                 );
                 *refs.battery.borrow_mut() = Some(w);
+            }
+            BarWidgetId::Accessibility => {
+                let w = AccessibilityWidget::new();
+                append_bar_widget(root, w.root(), bar_orientation);
+                status_reorder::register(
+                    w.root().upcast_ref(),
+                    *widget,
+                    &status_peers,
+                    &drop_slot,
+                    horizontal,
+                );
+                *refs.accessibility.borrow_mut() = Some(w);
             }
             BarWidgetId::Network => {
                 let w = NetworkWidget::new();
