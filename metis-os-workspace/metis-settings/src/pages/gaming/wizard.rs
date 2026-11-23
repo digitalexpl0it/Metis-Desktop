@@ -215,7 +215,10 @@ pub(crate) fn show_gaming_setup_dialog(
             let rows = build_dashboard_rows(&check);
             let ready = rows.iter().filter(|r| r.kind == CardKind::Ready).count();
             let total = rows.len().max(1);
-            let attention = rows.iter().filter(|r| r.kind == CardKind::Attention).count();
+            let attention = rows
+                .iter()
+                .filter(|r| r.kind == CardKind::Attention)
+                .count();
             summary_chip.remove_css_class("metis-settings-wizard-summary-ok");
             summary_chip.remove_css_class("metis-settings-wizard-summary-warn");
             if attention == 0 {
@@ -685,11 +688,7 @@ fn build_dashboard_rows(check: &HealthCheck) -> Vec<DashRow> {
             detail: item.detail.clone(),
             icon: "system-software-install-symbolic",
             kind: severity_kind(item.severity),
-            fix_ids: if ready {
-                vec![]
-            } else {
-                vec!["steam".into()]
-            },
+            fix_ids: if ready { vec![] } else { vec!["steam".into()] },
             nvidia_install: false,
             flatpak_confirm: false,
             show_gpu_dropdown: false,
@@ -893,7 +892,9 @@ fn build_dashboard_rows(check: &HealthCheck) -> Vec<DashRow> {
         let detail = match steam {
             SteamInstall::Flatpak => tr("Apply gaming overrides and Metis launcher wrapper."),
             SteamInstall::Native => tr("Native Steam — launcher wrapper optional."),
-            SteamInstall::None => tr("Install Steam first, then apply Flatpak overrides if needed."),
+            SteamInstall::None => {
+                tr("Install Steam first, then apply Flatpak overrides if needed.")
+            }
         };
         let kind = match steam {
             SteamInstall::Flatpak => CardKind::Optional,
