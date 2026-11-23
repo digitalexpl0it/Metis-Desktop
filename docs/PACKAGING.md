@@ -175,7 +175,7 @@ Before a release build, sync (also done automatically by `package-deb.sh`):
 # Alias: ./scripts/sync-versions.sh (same script)
 ```
 
-Current workspace crate version is `0.1.32` (product / GitHub `0.1.0.32`).
+Current workspace crate version is `0.1.33` (product / GitHub `0.1.0.33`).
 
 Shared FHS staging: [`scripts/stage-fhs.sh`](../metis-os-workspace/scripts/stage-fhs.sh)
 (used by deb, Arch PKGBUILD, and aligned with Nix `postInstall`).

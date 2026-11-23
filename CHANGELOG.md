@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## Unreleased
 
+## [0.1.0.33] - 2026-11-22
+
 ### Added
 
 - **Power overlay** — Battery edge-bar popover adds Power Saver / Balanced /
